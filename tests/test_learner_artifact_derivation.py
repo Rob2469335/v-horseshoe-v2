@@ -76,12 +76,12 @@ TRIG_TURN_BUDGET = (
     "needing filesystem + web_search, or a slow LLM)."
 )
 TRIG_NO_EDIT = (
-    "Evaluation task pypa__twine-1066: agent executed 4 steps (filesystem:read, "
-    "filesystem:glob, web_search, web_fetch) with 4/4 successful tool calls, no "
+    "Evaluation task pypa__twine-1066: agent executed 4 steps (filesystem, "
+    "filesystem, web_search, web_fetch) with 4/4 successful tool calls, no "
     "source modification before harness_timeout. Tests remained at 0/3 F2P."
 )
 TRIG_EDIT_FAILED = (
-    "Evaluation task pypa__twine-1066: agent executed 6 steps (filesystem:read, "
+    "Evaluation task pypa__twine-1066: agent executed 6 steps (filesystem, "
     "patch) with 5/6 successful tool calls, attempted source modification before "
     "harness_timeout. Tests remained at 0/3 F2P."
 )
@@ -540,7 +540,7 @@ class TestStaticTriggerShapeScan:
         ("runtime_v2/api/agent_service_v2.py", "repeated an exploration cycle without editing."),
         ("runtime_v2/api/agent_service_v2.py", "agent ran out of turns before completing the goal"),
         ("runtime_v2/api/agent_service_v2.py", '"File not found" in error'),
-        ("runtime_v2/api/evaluation_bridge.py", '"no" if not ef.source_modification_attempted else "attempted"'),
+        ("runtime_v2/api/evaluation_bridge.py", '{True: "attempted", False: "no", None: "unknown"}[ef.mutation_attempted]'),
         ("runtime_v2/api/evaluation_bridge.py", "source modification before "),
     ]
 
@@ -585,13 +585,13 @@ class TestProductionPathChain:
             process_exit_code=-1,
             step_count=9,
             ordered_tool_actions=[
-                "filesystem:read", "filesystem:glob", "web_search", "web_fetch",
-                "web_fetch", "filesystem:read", "filesystem:glob", "web_search", "web_fetch",
+                "filesystem", "filesystem", "web_search", "web_fetch",
+                "web_fetch", "filesystem", "filesystem", "web_search", "web_fetch",
             ],
             successful_tool_calls=8,
             failed_tool_calls=1,
-            source_modification_attempted=False,
-            source_modification_succeeded=False,
+            mutation_attempted=False,
+            mutation_succeeded=False,
             baseline_f2p_passed=0,
             baseline_f2p_failed=3,
             post_f2p_passed=0,

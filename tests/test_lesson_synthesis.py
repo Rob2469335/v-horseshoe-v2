@@ -64,11 +64,9 @@ def ev(**over) -> FailureEvidence:
         step_count=9,
         successful_tool_calls=7,
         failed_tool_calls=2,
-        ordered_tool_actions=(
-            "filesystem:read", "filesystem:glob", "filesystem:patch", "sandbox_repl",
-        ),
-        source_modification_attempted=True,
-        source_modification_succeeded=False,
+        ordered_tool_actions=("filesystem", "web_search", "sandbox_repl"),
+        mutation_attempted=True,
+        mutation_succeeded=False,
         source_changed=True,
         baseline_f2p_failed=1,
         post_f2p_passed=0,
@@ -100,13 +98,15 @@ class TestStageADiagnosis:
         assert why == "ok"
         assert d is not None
         assert d.causal_confidence == "supported"
-        assert "edit_without_effect" in d.feature_codes
+        # ev() has source_changed=True, so the precise mechanism is B (source
+        # changed, tests still fail), not A (no-op edit).
+        assert "edit_ineffective" in d.feature_codes
 
     def test_diagnosis_explains_why_the_action_failed(self):
         d, _ = diagnose(ev())
         # The mechanism must be a causal account, not a restatement.
         assert d.mechanism
-        assert "did not affect the observed behaviour" in d.mechanism
+        assert "incorrect or incomplete" in d.mechanism
 
     def test_features_carry_provenance_paths(self):
         d, _ = diagnose(ev())
@@ -116,9 +116,9 @@ class TestStageADiagnosis:
 
     def test_investigation_without_edit_is_detected(self):
         d, why = diagnose(ev(
-            source_modification_attempted=False,
+            mutation_attempted=False,
             source_changed=False,
-            ordered_tool_actions=("filesystem:read", "filesystem:glob", "sandbox_repl"),
+            ordered_tool_actions=("web_search", "sandbox_repl"),
         ))
         assert why == "ok"
         assert "investigation_without_edit" in d.feature_codes
@@ -137,7 +137,7 @@ class TestStageADiagnosis:
 
     def test_repeated_identical_action_is_detected(self):
         d, _ = diagnose(ev(
-            ordered_tool_actions=("filesystem:read", "filesystem:read", "filesystem:read"),
+            ordered_tool_actions=("filesystem", "filesystem", "filesystem"),
         ))
         assert "repeated_identical_action" in d.feature_codes
 
@@ -181,14 +181,14 @@ class TestStageAFailsClosed:
     def test_insufficient_evidence_fails_closed(self):
         """A trajectory with no diagnostic shape yields no mechanism."""
         d, why = diagnose(ev(
-            source_modification_attempted=True,
-            source_modification_succeeded=True,
+            mutation_attempted=True,
+            mutation_succeeded=True,
             post_f2p_failed=0,
             post_f2p_passed=1,
             step_count=1,
             successful_tool_calls=1,
             termination_reason="agent_completed",
-            ordered_tool_actions=("filesystem:patch",),
+            ordered_tool_actions=("filesystem",),
         ))
         assert d is None and why in (
             "insufficient_evidence_for_mechanism", "no_declared_test_measurement"
@@ -210,7 +210,7 @@ class TestStageBAbstraction:
         p, why = abstract(d, distiller_returning(GOOD_PRINCIPLE))
         assert why == "ok" and p is not None
         assert p.text == GOOD_PRINCIPLE
-        assert "edit_without_effect" in p.grounded_in
+        assert "edit_ineffective" in p.grounded_in
 
     def test_absent_distiller_fails_closed(self):
         """No local fallback: a catalogue lookup must not pose as learning."""
@@ -469,7 +469,7 @@ class TestStageDIndependentValidation:
     def test_l2_fails_when_evidence_yields_no_mechanism(self):
         """L2 is a real check: evidence with no derivable feature fails it."""
         e = ev(
-            source_modification_attempted=False,
+            mutation_attempted=False,
             source_changed=False,
             ordered_tool_actions=(),
             step_count=0,
@@ -611,8 +611,8 @@ class TestStageFaultsFailClosed:
             "evaluator_reason": "f2p: 0/1 passed", "classification": "BEHAVIORAL",
             "termination_reason": "agent_completed", "step_count": 9,
             "successful_tool_calls": 7,
-            "ordered_tool_actions": ("filesystem:patch",),
-            "source_modification_attempted": True, "source_changed": True,
+            "ordered_tool_actions": ("filesystem",),
+            "mutation_attempted": True, "source_changed": True,
             "post_f2p_passed": 0, "post_f2p_failed": 1,
         }), distiller_returning(GOOD_PRINCIPLE))
         assert att is None
@@ -646,8 +646,8 @@ class TestRegressionProtections:
         ef = EvaluationFailure(
             task_id="t", rollout_id="r", termination_reason="agent_completed",
             step_count=9, successful_tool_calls=9,
-            ordered_tool_actions=["filesystem:patch"],
-            source_modification_attempted=True, source_modification_succeeded=True,
+            ordered_tool_actions=["filesystem"],
+            mutation_attempted=True, mutation_succeeded=True,
             source_changed=True,
             post_f2p_passed=1, post_f2p_failed=0,
             evaluator_passed=True, evaluator_reason="passed",
@@ -660,8 +660,8 @@ class TestRegressionProtections:
         ef = EvaluationFailure(
             task_id="t", rollout_id="r", termination_reason="agent_completed",
             step_count=9, successful_tool_calls=7,
-            ordered_tool_actions=["filesystem:patch"],
-            source_modification_attempted=True,
+            ordered_tool_actions=["filesystem"],
+            mutation_attempted=True,
             post_f2p_passed=0, post_f2p_failed=1,
             evaluator_passed=False, evaluator_reason="f2p: 0/1 passed",
         )
@@ -673,7 +673,7 @@ class TestRegressionProtections:
         ef = EvaluationFailure(
             task_id="t", rollout_id="r", termination_reason="agent_completed",
             step_count=9, successful_tool_calls=7,
-            ordered_tool_actions=["filesystem:patch"],
+            ordered_tool_actions=["filesystem"],
             post_f2p_passed=0, post_f2p_failed=1,
         )
         assert classify_evaluation_failure(ef) == "UNKNOWN"

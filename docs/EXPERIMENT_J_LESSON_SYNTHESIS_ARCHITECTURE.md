@@ -146,8 +146,10 @@ inspection: `abstract()` returns `(None, "no_distiller_available")` when
 
 All frozen dataclasses in `lesson_synthesis.py`: `FailureEvidence`,
 `EvidenceFeature`, `Diagnosis`, `Principle`, `ScrubReport`, `QualityVerdict`,
-`SynthesisAttestation`. `FailureEvidence` is closed by construction, so there is
-no path for free-form task text to reach abstraction unmediated.
+`SynthesisAttestation`. `FailureEvidence` is closed by construction, but closure
+is only a real boundary if its fields are *typed*: `ordered_tool_actions` is
+validated to contain **bare, known tool identifiers** (see §3.4). An
+unconstrained string field would be a free-form channel into the prompt.
 
 ### 3.3 Synthesis schema and provenance (current)
 
@@ -169,20 +171,72 @@ not a contract, so task/rollout identity is carried as fields and bound to the
 candidate by `attach_synthesis`. `_canonical_state` includes the whole
 attestation, so the receipt binds the delivered principle.
 
+### 3.4 Typed measurement boundary (Layer 0)
+
+The information boundary is enforced **before** Stage B, not by inspecting the
+generator's output.
+
+`ordered_tool_actions` is validated at three ingresses to contain only a **bare,
+known tool identifier**:
+
+* grammar `^[a-z][a-z0-9_]*$` — rejects paths, arguments, symbols, URLs, shell
+  syntax, whitespace and control characters;
+* membership in `KNOWN_TOOL_NAMES` (the union of
+  `runtime_v2.prompts.system_prompts._AGENT_TOOLS`) — rejects a bare *solution
+  symbol* such as `resolve_collision_key`, which the grammar alone would accept;
+* enforced in `FailureEvidence.__post_init__` (construction), `from_dict`
+  (persistence) and `evaluation_bridge.submit_evaluation_failure` (ingress,
+  which fails closed with `skipped:malformed_evidence`).
+
+`_tool_name` returns `""` for any non-conforming value, so a stray value can
+never be surfaced into a feature detail. `PROVEN` by unit + canary tests.
+
+**Claim A (`PROVEN`):** Stage B is supplied only with validated behavioural
+measurements, excluding originating-task identifiers and source-task artifacts.
+**Claim C (`NOT ESTABLISHED`):** that a *generated principle* is semantically
+independent of the solution — no regex can establish semantic non-leakage.
+
+### 3.5 Source-mutation measurement (authoritative execution boundary)
+
+`mutation_attempted` / `mutation_succeeded` are **not** inferred from tool names
+(a bare `filesystem` proves nothing). They are measured at the execution
+boundary and persisted in the ATIF step record
+(`data/trajectories/{run_id}.jsonl`): `tool_calls[].function_name`,
+`tool_calls[].arguments.operation` (the operation the executor received), and
+`observation.results[].extra.ok` (dispatch success).
+`runtime_v2/api/execution_measurement.py::measure_mutation` converts that into
+two coarse **tri-state** booleans (`True`/`False`/`None=UNKNOWN`); only those
+booleans cross into evidence — never a path, argument, command or content.
+
+* `mutation_attempted` — True = a source-mutating filesystem op was dispatched;
+  False = calls happened but all were recognized non-mutating; None = UNKNOWN
+  (an indirect `sandbox_repl`/`mcp`/`git` tool, or an unrecognized call).
+* `mutation_succeeded` — True = such an op returned `ok=True`; False = all
+  failed; None = unknown.
+* `source_changed` — a **separate**, independent git-diff measurement; never
+  derived from the above.
+
+`derive_features` keeps the outcomes distinct: `edit_without_effect` (attempted,
+no source change, tests still failing) and `edit_ineffective` (source changed,
+tests still failing). `PROVEN` by unit + bridge tests.
+
 ---
 
 ## 4. Provenance boundaries
 
 | Boundary | Rule |
 |---|---|
-| evidence → diagnosis | measurements only; no task content |
-| diagnosis → principle | mechanism + feature codes; task content excluded by construction |
+| raw evidence → `FailureEvidence` | Layer 0: `ordered_tool_actions` are bare, known tool identifiers (§3.4) |
+| evidence → diagnosis | typed measurements; `task_id`/`rollout_id`/`evaluator_reason` are not measurements used by Stage B |
+| diagnosis → principle | Stage B receives only `mechanism` (fixed vocabulary) + feature codes/details; `task_id`, `rollout_id` and `evaluator_reason` are never placed in the prompt (`PROVEN` by value-flow + canary test) |
 | principle → worker-facing | must survive Layer 1 **and** Layer 2 |
 | provenance storage | `SynthesisAttestation` holds `evidence_ref`, `feature_codes`, `mechanism` — **never** delivered to the worker (L7) |
 | delivered text | `_derive_learner_artifact` returns `attestation.principle_text` only |
 
 `mechanism` and `evidence_ref` are retained as provenance on the candidate for
-audit, and are excluded from the delivered string.
+audit, and are excluded from the delivered string. The membrane lexicon is built
+from `task_id` + `evaluator_reason`; `ordered_tool_actions` is instead excluded
+at Layer 0 (it is never a free-form value by the time it is evidence).
 
 ---
 
@@ -365,6 +419,16 @@ There is no degraded-success path. `PROVEN` by inspection of `synthesize`.
    create an off-host escape, but it is retained as an open policy question and
    was not silently changed.
 8. **Model-identity default mismatch (`GOVERNANCE GAP`).** See §11.3.
+9. **Semantic independence of the generated principle is `NOT ESTABLISHED`.**
+   Layer 0 (§3.4) proves Stage B's *input* excludes task/solution artifacts
+   (Claim A). It does **not** prove a generated principle cannot semantically
+   reproduce solution knowledge (Claim C). No lexical membrane can; this is a
+   scientific limitation, not an engineering one.
+10. **Producer/consumer mismatch in edit detection — FIXED.** The bridge
+   previously inferred `source_modification_attempted` from bare `tool_order`
+   (always `False` on real data). It now consumes the typed tri-state
+   measurement from the execution boundary (§3.5); absent evidence yields
+   UNKNOWN, never a guessed False, and `source_changed` remains independent.
 
 ---
 
@@ -384,7 +448,9 @@ passes `evidence=<dict>` to `process_failure`, which persists it on the matching
 reconstruction from failure prose. Only observed fields are copied; the gold
 patch and test patch are never present in `EvaluationFailure`. `FailureEvidence`
 gained lossless `to_dict`/`from_dict`; `from_dict` fails closed on malformed
-input and preserves the three-valued `evaluator_passed`.
+input and preserves the three-valued `evaluator_passed`. The mutation
+measurement is the typed tri-state of §3.5 (measured at the execution boundary,
+not inferred from tool names), and is independent of `source_changed`.
 
 ### 11.2 Run vs candidate granularity (`PROVEN`)
 

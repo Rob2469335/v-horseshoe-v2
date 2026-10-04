@@ -78,6 +78,7 @@ __all__ = [
     "validate",
     "synthesize",
     "synthesize_candidate",
+    "is_valid_tool_action_name",
     "SYNTHESIS_VERSION",
 ]
 
@@ -96,6 +97,49 @@ _INVESTIGATION_TOOLS = ("read", "glob", "grep", "list", "search", "sandbox_repl"
 #: this module stays importable without the bridge (no import cycle, and the
 #: bridge remains the authority for classification itself).
 _NON_CAPABILITY_REASONS = ("env_error", "regression")
+
+#: The ONLY accepted grammar for an ordered tool action: a BARE tool identifier
+#: (lowercase, starts with a letter, `[a-z0-9_]`). This is the real producer's
+#: format — `run_curriculum.parse_tools_used` captures `[a-z_][a-z0-9_]*` via
+#: `_TOOL_RE`. It deliberately excludes paths, arguments, symbols, URLs, shell
+#: syntax, whitespace and control characters, so a solution-bearing value cannot
+#: enter the pipeline through this channel. Enforced at construction
+#: (`FailureEvidence.__post_init__`), on persistence (`from_dict`) and at the
+#: bridge ingress.
+_TOOL_ACTION_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+#: The agent tool surface — the union of ``runtime_v2.prompts.system_prompts.
+#: _AGENT_TOOLS``. A tool action must be one of these. The bare-identifier regex
+#: alone is NOT sufficient: a solution symbol (``resolve_collision_key``) is also
+#: a bare identifier and would pass it. Allowlist membership is what makes a
+#: solution symbol fail. Kept in sync by
+#: ``tests/test_w5_integration.py::TestToolAllowlist::test_covers_agent_tool_surface``.
+KNOWN_TOOL_NAMES = frozenset({
+    "delegate", "ask_user", "remember", "deprecate_memory", "final",
+    "filesystem", "semantic_search", "web_search", "web_fetch",
+    "github_research", "system", "screen", "sandbox_repl", "lsp", "mcp",
+    "email", "playwright", "todo", "git", "mcp_register",
+})
+
+
+def _tristate(value: object) -> bool | None:
+    """Coerce a persisted value to True / False / None(UNKNOWN); never guess."""
+    return value if value in (True, False) else None
+
+
+def is_valid_tool_action_name(value: object) -> bool:
+    """True iff ``value`` is a bare, KNOWN tool identifier.
+
+    Rejects anything that is not a bare identifier (paths, arguments, symbols,
+    URLs, shell syntax, whitespace, control characters) AND anything that is a
+    bare identifier but not on the agent tool surface (e.g. a solution symbol).
+    """
+    return (
+        isinstance(value, str)
+        and bool(_TOOL_ACTION_NAME_RE.match(value))
+        and value in KNOWN_TOOL_NAMES
+    )
+
 
 #: Structural pattern of a SWE-bench-style instance id, e.g.
 #: ``databricks__dbt-databricks-935`` -> org ``databricks``, repo
@@ -178,14 +222,29 @@ class FailureEvidence:
     successful_tool_calls: int = 0
     failed_tool_calls: int = 0
     ordered_tool_actions: tuple[str, ...] = ()
-    source_modification_attempted: bool = False
-    source_modification_succeeded: bool = False
+    # Tri-state (True/False/None=UNKNOWN) source-mutation measurement from the
+    # execution boundary. DISTINCT from ``source_changed`` (independent git
+    # measurement) and from the evaluator verdict — never collapsed.
+    mutation_attempted: bool | None = None
+    mutation_succeeded: bool | None = None
     source_changed: bool = False
     baseline_f2p_failed: int = 0
     post_f2p_passed: int = 0
     post_f2p_failed: int = 0
     backend_reachable: bool = True
     model_endpoint_reachable: bool = True
+
+    def __post_init__(self) -> None:
+        # TYPED BOUNDARY. Reject any tool action that is not a bare tool name, so
+        # a path / argument / symbol / free-form observation cannot be carried
+        # into Stage A (and thence into the Stage-B prompt). Fail closed: an
+        # invalid record cannot be constructed at all.
+        for action in self.ordered_tool_actions:
+            if not is_valid_tool_action_name(action):
+                raise ValueError(
+                    "ordered_tool_actions entry is not a bare tool name: "
+                    f"{action!r}"
+                )
 
     @property
     def f2p_total(self) -> int:
@@ -204,8 +263,8 @@ class FailureEvidence:
             "successful_tool_calls": self.successful_tool_calls,
             "failed_tool_calls": self.failed_tool_calls,
             "ordered_tool_actions": list(self.ordered_tool_actions),
-            "source_modification_attempted": self.source_modification_attempted,
-            "source_modification_succeeded": self.source_modification_succeeded,
+            "mutation_attempted": self.mutation_attempted,
+            "mutation_succeeded": self.mutation_succeeded,
             "source_changed": self.source_changed,
             "baseline_f2p_failed": self.baseline_f2p_failed,
             "post_f2p_passed": self.post_f2p_passed,
@@ -237,8 +296,8 @@ class FailureEvidence:
                 ordered_tool_actions=tuple(
                     str(a) for a in (d.get("ordered_tool_actions") or ())
                 ),
-                source_modification_attempted=bool(d.get("source_modification_attempted")),
-                source_modification_succeeded=bool(d.get("source_modification_succeeded")),
+                mutation_attempted=_tristate(d.get("mutation_attempted")),
+                mutation_succeeded=_tristate(d.get("mutation_succeeded")),
                 source_changed=bool(d.get("source_changed")),
                 baseline_f2p_failed=int(d.get("baseline_f2p_failed") or 0),
                 post_f2p_passed=int(d.get("post_f2p_passed") or 0),
@@ -388,9 +447,15 @@ _MECHANISMS: dict[str, tuple[str, str]] = {
         "source modification, so no candidate change could reach the evaluator."
     ),
     "edit_without_effect": (
-        "The agent dispatched at least one edit-type action, yet the evaluator "
-        "still reports the declared tests failing, so the attempted modification "
-        "did not affect the observed behaviour."
+        "The agent dispatched at least one edit-type action, yet the independent "
+        "post-run repository measurement detected no source change and the "
+        "evaluator still reports the declared tests failing, so the edit was a "
+        "no-op."
+    ),
+    "edit_ineffective": (
+        "The source was modified (the independent post-run repository "
+        "measurement detected a change), yet the evaluator still reports the "
+        "declared tests failing, so the modification was incorrect or incomplete."
     ),
     "repeated_identical_action": (
         "The agent repeated an identical action consecutively, so additional "
@@ -420,18 +485,23 @@ def _actions(ev: FailureEvidence) -> list[str]:
 
 
 def _tool_name(action: str) -> str:
-    """``filesystem:patch`` / ``sandbox_repl`` -> trailing tool token."""
-    tail = action.split(":")[-1].strip().lower()
-    return tail or action.strip().lower()
+    """Return the bare tool name, or ``""`` for anything non-conforming.
+
+    Never turns an arbitrary string (path, argument, symbol) into a trusted
+    identifier: the value is used in feature details that reach Stage B, so a
+    non-conforming entry yields ``""`` and is ignored rather than surfaced.
+    """
+    a = str(action).strip().lower()
+    return a if _TOOL_ACTION_NAME_RE.match(a) else ""
 
 
 def _has_consecutive_repeat(actions: Sequence[str], times: int = 3) -> tuple[bool, str]:
     if len(actions) < times:
         return False, ""
     for i in range(len(actions) - times + 1):
-        window = actions[i : i + times]
-        if len(set(_tool_name(a) for a in window)) == 1:
-            return True, _tool_name(window[0])
+        window = [_tool_name(a) for a in actions[i : i + times]]
+        if window[0] and len(set(window)) == 1:
+            return True, window[0]
     return False, ""
 
 
@@ -444,7 +514,7 @@ def derive_features(ev: FailureEvidence) -> tuple[EvidenceFeature, ...]:
         any(tok in _tool_name(a) for tok in _INVESTIGATION_TOOLS) for a in actions
     )
 
-    if not ev.source_modification_attempted and investigated and ev.step_count >= 2:
+    if ev.mutation_attempted is False and investigated and ev.step_count >= 2:
         feats.append(
             EvidenceFeature(
                 code="investigation_without_edit",
@@ -453,26 +523,41 @@ def derive_features(ev: FailureEvidence) -> tuple[EvidenceFeature, ...]:
                     f"{sum(1 for a in actions if any(t in _tool_name(a) for t in _INVESTIGATION_TOOLS))} "
                     "investigation-type actions, 0 edit-type actions"
                 ),
-                paths=("step_count", "ordered_tool_actions", "source_modification_attempted"),
+                paths=("step_count", "ordered_tool_actions", "mutation_attempted"),
             )
         )
 
-    if ev.source_modification_attempted and ev.post_f2p_failed > 0:
-        succeeded = "1" if ev.source_modification_succeeded else "0"
+    # A: an edit was dispatched, the source did NOT change, tests still fail.
+    if ev.mutation_attempted is True and not ev.source_changed and ev.post_f2p_failed > 0:
+        succeeded = {True: "1", False: "0", None: "unknown"}[ev.mutation_succeeded]
         feats.append(
             EvidenceFeature(
                 code="edit_without_effect",
                 detail=(
-                    f"edit attempted; source_changed={ev.source_changed}; "
-                    f"post-edit edit actions succeeded={succeeded}; "
+                    f"edit attempted; independent source-change check=false; "
+                    f"mutation_succeeded={succeeded}; "
                     f"{ev.post_f2p_failed} declared test(s) still failing"
                 ),
                 paths=(
-                    "source_modification_attempted",
-                    "source_modification_succeeded",
+                    "mutation_attempted",
+                    "mutation_succeeded",
                     "source_changed",
                     "post_f2p_failed",
                 ),
+            )
+        )
+
+    # B: the source DID change (independent git measurement) but tests still fail.
+    if ev.source_changed and ev.post_f2p_failed > 0:
+        feats.append(
+            EvidenceFeature(
+                code="edit_ineffective",
+                detail=(
+                    f"source changed (independent git measurement); "
+                    f"mutation_attempted={ev.mutation_attempted}; "
+                    f"{ev.post_f2p_failed} declared test(s) still failing"
+                ),
+                paths=("source_changed", "mutation_attempted", "post_f2p_failed"),
             )
         )
 
@@ -1095,8 +1180,8 @@ def synthesize_candidate(
         successful_tool_calls=base.successful_tool_calls,
         failed_tool_calls=base.failed_tool_calls,
         ordered_tool_actions=base.ordered_tool_actions,
-        source_modification_attempted=base.source_modification_attempted,
-        source_modification_succeeded=base.source_modification_succeeded,
+        mutation_attempted=base.mutation_attempted,
+        mutation_succeeded=base.mutation_succeeded,
         source_changed=base.source_changed,
         baseline_f2p_failed=base.baseline_f2p_failed,
         post_f2p_passed=base.post_f2p_passed,

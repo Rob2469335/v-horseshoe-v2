@@ -11,7 +11,10 @@ import logging
 from typing import TYPE_CHECKING
 
 from runtime_v2.api.evaluation_types import EvaluationFailure
-from swarm_os.services.lesson_synthesis import FailureEvidence
+from swarm_os.services.lesson_synthesis import (
+    FailureEvidence,
+    is_valid_tool_action_name,
+)
 
 if TYPE_CHECKING:
     pass
@@ -112,7 +115,7 @@ def _build_failure_reason(ef: EvaluationFailure) -> str:
     been admitted.
     """
     tools = ", ".join(ef.ordered_tool_actions[:20])
-    mod = "no" if not ef.source_modification_attempted else "attempted"
+    mod = {True: "attempted", False: "no", None: "unknown"}[ef.mutation_attempted]
     verdict = {
         True: "SOLVED",
         False: "UNRESOLVED",
@@ -130,7 +133,7 @@ def _build_failure_reason(ef: EvaluationFailure) -> str:
 
 def _build_hypothesized_action(ef: EvaluationFailure) -> str:
     """Construct generic behavioral guidance. Never includes file/line/patch."""
-    if ef.source_modification_attempted:
+    if ef.mutation_attempted is True:
         return (
             "The agent attempted a source modification but it did not resolve the "
             "failing tests. Review the test failures and the agent's approach to "
@@ -156,6 +159,19 @@ async def submit_evaluation_failure(
     failure_reason = _build_failure_reason(ef)
     hypothesized_action = _build_hypothesized_action(ef)
 
+    # TYPED INGRESS: an ordered tool action must be a BARE tool name. A value
+    # carrying a path/argument/symbol must never become evidence — it would
+    # otherwise reach the Stage-B prompt through a feature detail. Fail closed:
+    # skip, create no candidate, synthesize nothing.
+    if not all(
+        is_valid_tool_action_name(a) for a in (ef.ordered_tool_actions or ())
+    ):
+        _log.warning(
+            "submit_evaluation_failure task=%s rejected: non-bare tool action",
+            ef.task_id,
+        )
+        return "skipped:malformed_evidence"
+
     # W5: persist the STRUCTURED evidence Stage A needs, so synthesis never has
     # to reconstruct it from lossy prose. Only fields actually observed on the
     # EvaluationFailure are copied; nothing is invented. The gold patch and test
@@ -171,8 +187,8 @@ async def submit_evaluation_failure(
         successful_tool_calls=ef.successful_tool_calls,
         failed_tool_calls=ef.failed_tool_calls,
         ordered_tool_actions=tuple(ef.ordered_tool_actions or ()),
-        source_modification_attempted=ef.source_modification_attempted,
-        source_modification_succeeded=ef.source_modification_succeeded,
+        mutation_attempted=ef.mutation_attempted,
+        mutation_succeeded=ef.mutation_succeeded,
         source_changed=ef.source_changed,
         baseline_f2p_failed=ef.baseline_f2p_failed,
         post_f2p_passed=ef.post_f2p_passed,
@@ -245,13 +261,18 @@ async def build_and_submit_evaluation_failure(
     # Normalize run_ids: None -> empty list. Do NOT guess or fabricate.
     normalized_run_ids = run_ids if run_ids is not None else []
 
-    # Source modification detection from git diff
+    # Independent post-run repository measurement — never derived from tool
+    # names (a bare ``filesystem`` is not proof of an edit).
     source_changed = bool(diff_stat.strip())
-    source_mod_attempted = any(
-        t in (res.get("tool_order") or [])
-        for t in ("write", "write_file", "create", "patch", "edit")
-    )
-    source_mod_succeeded = source_mod_attempted and source_changed
+    # Typed mutation measurement from the execution boundary (ATIF telemetry),
+    # supplied by the harness in ``res``. Absent => UNKNOWN, never a guessed
+    # False: a bare tool name cannot prove an edit did or did not happen.
+    mutation_attempted = res.get("mutation_attempted")
+    mutation_succeeded = res.get("mutation_succeeded")
+    if mutation_attempted not in (True, False, None):
+        mutation_attempted = None
+    if mutation_succeeded not in (True, False, None):
+        mutation_succeeded = None
 
     # Termination reason from evaluator result
     if res.get("timed_out"):
@@ -276,8 +297,8 @@ async def build_and_submit_evaluation_failure(
             len(res.get("tool_order") or [])
             - len(res.get("tools_succeeded") or []),
         ),
-        source_modification_attempted=source_mod_attempted,
-        source_modification_succeeded=source_mod_succeeded,
+        mutation_attempted=mutation_attempted,
+        mutation_succeeded=mutation_succeeded,
         baseline_f2p_passed=f2p_p,
         baseline_f2p_failed=f2p_f,
         post_f2p_passed=f2p_p2,

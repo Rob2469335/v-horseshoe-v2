@@ -940,8 +940,16 @@ def main() -> int:
                             continue
                         _d = json.loads(_line)
                         if _d.get("record_type") == "step":
+                            # Carry the observation's success flag onto each tool
+                            # call so the mutation measurement can pair a
+                            # dispatched operation with its outcome.
+                            _results = (_d.get("observation") or {}).get("results") or []
+                            _obs_ok = None
+                            if _results and isinstance(_results[0], dict):
+                                _obs_ok = (_results[0].get("extra") or {}).get("ok")
                             for _tc in _d.get("tool_calls", []):
                                 _tc.setdefault("extra", {})["step_id"] = _d.get("step_id", 0)
+                                _tc["extra"]["observation_ok"] = _obs_ok
                                 _atif_steps.append(_tc)
 
     # Build raw observation from CLI result
@@ -1004,6 +1012,16 @@ def main() -> int:
         cwd=str(repo), capture_output=True, text=True
     ).stdout.strip()
     res["diff_stat"] = diff
+
+    # Typed mutation measurement from the execution boundary (ATIF telemetry:
+    # filesystem ``arguments.operation`` + observation ``ok``). Bounded booleans
+    # only — no path, argument or content leaves this function. ``None`` means
+    # UNKNOWN (e.g. an indirect sandbox_repl/mcp edit), never a guessed False.
+    from runtime_v2.api.execution_measurement import measure_mutation
+
+    _mut_attempted, _mut_succeeded = measure_mutation(_atif_steps)
+    res["mutation_attempted"] = _mut_attempted
+    res["mutation_succeeded"] = _mut_succeeded
 
     # Learning bridge
     try:

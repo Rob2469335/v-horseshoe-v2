@@ -32,11 +32,20 @@ class EvaluationFailure:
 
     # --- Trajectory ---
     step_count: int = 0                       # total tool-call steps across all attempts
-    ordered_tool_actions: List[str] = field(default_factory=list)  # ["filesystem:read", "web_search", ...]
+    ordered_tool_actions: List[str] = field(default_factory=list)  # bare tool names: ["filesystem", "web_search", ...]
     successful_tool_calls: int = 0
     failed_tool_calls: int = 0
-    source_modification_attempted: bool = False  # any filesystem.patch/write dispatched?
-    source_modification_succeeded: bool = False  # any write/patch returned ok=True?
+    # --- Source-mutation measurement (tri-state; from the execution boundary) ---
+    # ``mutation_attempted``: True = a source-mutating filesystem operation was
+    # dispatched; False = tool calls happened but no source-mutating operation
+    # and no indirect-mutation-capable tool; None = UNKNOWN (an indirect tool
+    # such as sandbox_repl/mcp could have edited). ``mutation_succeeded``:
+    # True = a dispatched source-mutating operation returned ok=True; False =
+    # all such dispatches failed; None = UNKNOWN. Both are DISTINCT from
+    # ``source_changed`` (an independent git-diff measurement) and from the
+    # evaluator verdict.
+    mutation_attempted: bool | None = None
+    mutation_succeeded: bool | None = None
 
     # --- Evaluation ---
     baseline_f2p_passed: int = 0

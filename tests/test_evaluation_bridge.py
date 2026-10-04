@@ -34,13 +34,13 @@ def _n1_failure(**overrides) -> EvaluationFailure:
         process_exit_code=-1,
         step_count=9,
         ordered_tool_actions=[
-            "filesystem:read", "filesystem:glob", "web_search", "web_fetch", "web_fetch",
-            "filesystem:read", "filesystem:glob", "web_search", "web_fetch",
+            "filesystem", "filesystem", "web_search", "web_fetch", "web_fetch",
+            "filesystem", "filesystem", "web_search", "web_fetch",
         ],
         successful_tool_calls=8,
         failed_tool_calls=1,
-        source_modification_attempted=False,
-        source_modification_succeeded=False,
+        mutation_attempted=False,
+        mutation_succeeded=False,
         baseline_f2p_passed=0,
         baseline_f2p_failed=3,
         post_f2p_passed=0,
@@ -150,21 +150,21 @@ class TestBuildFailureReason:
         assert ".py" not in reason.lower() or "twine" in reason  # task name OK, file path not
 
     def test_modification_attempted_reflected(self):
-        ef = _n1_failure(source_modification_attempted=True)
+        ef = _n1_failure(mutation_attempted=True)
         reason = _build_failure_reason(ef)
         assert "attempted" in reason
 
 
 class TestBuildHypothesizedAction:
     def test_no_modification_guidance(self):
-        ef = _n1_failure(source_modification_attempted=False)
+        ef = _n1_failure(mutation_attempted=False)
         action = _build_hypothesized_action(ef)
         assert "filesystem patch" in action
         assert "filesystem write" in action
         assert "investigation" in action
 
     def test_modification_attempted_guidance(self):
-        ef = _n1_failure(source_modification_attempted=True)
+        ef = _n1_failure(mutation_attempted=True)
         action = _build_hypothesized_action(ef)
         assert "attempted" in action
         assert "correct location" in action
@@ -343,11 +343,11 @@ class TestBuildAndSubmit:
             timeout_seconds=1200,
             process_exit_code=-1,
             step_count=2,
-            ordered_tool_actions=["filesystem:read", "web_search"],
+            ordered_tool_actions=["filesystem", "web_search"],
             successful_tool_calls=1,
             failed_tool_calls=1,
-            source_modification_attempted=False,
-            source_modification_succeeded=False,
+            mutation_attempted=False,
+            mutation_succeeded=False,
             baseline_f2p_passed=0,
             baseline_f2p_failed=3,
             post_f2p_passed=0,
@@ -369,8 +369,8 @@ class TestBuildAndSubmit:
         res = {
             "timed_out": True,
             "cli_ok": False,
-            "tool_order": ["filesystem:read", "filesystem:glob", "web_search", "web_fetch"],
-            "tools_succeeded": ["filesystem:read", "filesystem:glob", "web_search", "web_fetch"],
+            "tool_order": ["filesystem", "filesystem", "web_search", "web_fetch"],
+            "tools_succeeded": ["filesystem", "filesystem", "web_search", "web_fetch"],
             "ts": "2026-09-23T01:00:00Z",
             "backend_reachable_at_timeout": True,
             "model_reachable_at_timeout": True,
@@ -481,9 +481,9 @@ class TestGoldPatchIsolation:
             task_id="pypa__twine-1066",
             rollout_id="r1",
             step_count=9,
-            ordered_tool_actions=["filesystem:read", "web_search"],
+            ordered_tool_actions=["filesystem", "web_search"],
             successful_tool_calls=8,
-            source_modification_attempted=False,
+            mutation_attempted=False,
             termination_reason="harness_timeout",
             post_f2p_passed=0,
             baseline_f2p_passed=0,
@@ -551,8 +551,8 @@ def _solved_run(**overrides) -> EvaluationFailure:
         termination_reason="agent_completed",
         step_count=7,
         successful_tool_calls=7,
-        source_modification_attempted=True,
-        source_modification_succeeded=True,
+        mutation_attempted=True,
+        mutation_succeeded=True,
         source_changed=True,
         post_f2p_passed=1,
         post_f2p_failed=0,
@@ -651,8 +651,8 @@ class TestVerdictGates:
         res = {
             "timed_out": False,
             "cli_ok": True,
-            "tool_order": ["filesystem:read", "filesystem:patch"],
-            "tools_succeeded": ["filesystem:read", "filesystem:patch"],
+            "tool_order": ["filesystem", "filesystem"],
+            "tools_succeeded": ["filesystem", "filesystem"],
             "ts": "2026-10-03T00:00:00Z",
             "backend_reachable_at_timeout": True,
             "model_reachable_at_timeout": True,
@@ -681,8 +681,8 @@ return_value=isolated_repairer):
         res = {
             "timed_out": False,
             "cli_ok": True,
-            "tool_order": ["filesystem:read", "filesystem:patch"],
-            "tools_succeeded": ["filesystem:read", "filesystem:patch"],
+            "tool_order": ["filesystem", "filesystem"],
+            "tools_succeeded": ["filesystem", "filesystem"],
             "ts": "2026-10-03T00:00:00Z",
             "backend_reachable_at_timeout": True,
             "model_reachable_at_timeout": True,
