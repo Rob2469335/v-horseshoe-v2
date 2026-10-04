@@ -396,6 +396,10 @@ class SynthesisAttestation:
     # be attached to a candidate about a different task.
     task_id: str = ""
     rollout_id: str = ""
+    # R5: the full distiller reproducibility block (weights digest, prompt
+    # digest, frozen sampling config, code version). ``provider:model`` alone
+    # cannot answer "which transformation produced this rule".
+    distiller_reproducibility: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -1212,6 +1216,26 @@ def synthesize_candidate(
         f"{verdict.rationale}; shared_mechanism={sorted(shared)}; "
         f"runs={len(diags)}; distiller={principle.distiller_id}"
     )
+    # R5: the FULL reproducibility block, not just ``provider:model``. Two runs
+    # naming the same model can differ by weights, prompt template or sampling
+    # parameters, so only the complete record answers "which transformation
+    # produced this rule". Captured from the distiller identity when it exposes
+    # one; a bare callable records its qualified absence rather than pretending.
+    _ident = getattr(distiller, "identity", None)
+    _repro: dict = {}
+    _repro_fn = getattr(_ident, "reproducibility_record", None)
+    if callable(_repro_fn):
+        try:
+            _repro = dict(_repro_fn())
+        except Exception:  # noqa: BLE001 - provenance best-effort, never fatal
+            _repro = {}
+    if _repro:
+        rationale += (
+            f"; weights_digest={_repro.get('weights_digest') or 'unrecorded'}"
+            f"; prompt_digest={_repro.get('prompt_digest') or 'unrecorded'}"
+            f"; temperature={_repro.get('temperature')}"
+            f"; code_version={_repro.get('code_version')}"
+        )
     return (
         SynthesisAttestation(
             synthesis_version=SYNTHESIS_VERSION,
@@ -1225,6 +1249,7 @@ def synthesize_candidate(
             rationale=rationale,
             task_id=str(base.task_id or ""),
             rollout_id=str(base.rollout_id or ""),
+            distiller_reproducibility=_repro,
         ),
         "ok",
     )

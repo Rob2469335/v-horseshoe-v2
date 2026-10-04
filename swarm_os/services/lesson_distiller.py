@@ -74,15 +74,134 @@ class LocalOnlyError(RuntimeError):
     """Raised when a non-local distiller is requested or the local call fails."""
 
 
+#: Sampling configuration frozen for every distillation call. Recorded on the
+#: identity so a persisted attestation can prove the exact transformation inputs,
+#: not merely which model was named. ``temperature`` is 0.0 deliberately: the
+#: distiller turns ONE failure into ONE rule, and a stochastic distiller would
+#: make the promoted lesson irreproducible while contributing no benefit.
+DISTILLER_TEMPERATURE = 0.0
+DISTILLER_MAX_TOKENS = 200
+DISTILLER_TOP_P = 1.0
+DISTILLER_SEED: int | None = None
+
+
+def distiller_prompt_digest() -> str:
+    """SHA-256 over the frozen Stage-B system+user template pair.
+
+    The template IS part of the transformation: a different system prompt
+    produces a different lesson from identical evidence. Hashing it means an
+    attestation can prove which template was in force, so a template edit cannot
+    silently change what "the distiller" means between two learning events.
+    """
+    import hashlib
+
+    from swarm_os.services import lesson_synthesis as _ls
+
+    payload = json.dumps(
+        {
+            "system": _SYSTEM,
+            "user_template": _ls._B_USER,
+            "system_prompt": _ls._B_SYSTEM,
+            "temperature": DISTILLER_TEMPERATURE,
+            "max_tokens": DISTILLER_MAX_TOKENS,
+            "top_p": DISTILLER_TOP_P,
+            "seed": DISTILLER_SEED,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass(frozen=True)
 class DistillerIdentity:
+    """Everything needed to reproduce one distillation, or fail closed.
+
+    R5. ``provider``/``model_id`` alone were insufficient: two runs naming the
+    same model can differ by weights checkpoint, prompt template, or sampling
+    parameters, and none of that was recorded. Each added field is REQUIRED for
+    an experimental identity (``require_reproducible=True``, the default used by
+    ``default_local_identity``) so an incomplete identity is refused rather than
+    persisted as if it were reproducible.
+    """
+
     provider: str
     model_id: str
     base_url: str = ""
+    weights_digest: str = ""
+    prompt_digest: str = ""
+    temperature: float = DISTILLER_TEMPERATURE
+    max_tokens: int = DISTILLER_MAX_TOKENS
+    top_p: float = DISTILLER_TOP_P
+    seed: int | None = DISTILLER_SEED
+    code_version: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.prompt_digest:
+            object.__setattr__(self, "prompt_digest", distiller_prompt_digest())
+        if not self.code_version:
+            object.__setattr__(self, "code_version", _code_version())
 
     @property
     def qualified_id(self) -> str:
         return f"{self.provider}:{self.model_id}"
+
+    def reproducibility_record(self) -> dict:
+        """The provenance block written into a persisted attestation."""
+        return {
+            "provider": self.provider,
+            "model_id": self.model_id,
+            "qualified_id": self.qualified_id,
+            "base_url": self.base_url,
+            "weights_digest": self.weights_digest,
+            "prompt_digest": self.prompt_digest,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "top_p": self.top_p,
+            "seed": self.seed,
+            "code_version": self.code_version,
+        }
+
+    def assert_reproducible(self) -> None:
+        """Fail closed unless the identity can reproduce the transformation.
+
+        ``weights_digest`` may legitimately be empty for a provider that does not
+        expose one, but then the operator must say so explicitly via
+        ``SWARM_DISTILLER_WEIGHTS_DIGEST_UNAVAILABLE=1`` - silence is not consent.
+        """
+        if self.temperature != DISTILLER_TEMPERATURE:
+            raise LocalOnlyError(
+                f"distiller temperature must be frozen at "
+                f"{DISTILLER_TEMPERATURE}, got {self.temperature!r}"
+            )
+        if not self.model_id.strip():
+            raise LocalOnlyError("distiller model_id is empty")
+        if not self.weights_digest:
+            import os
+
+            if os.environ.get(
+                "SWARM_DISTILLER_WEIGHTS_DIGEST_UNAVAILABLE", ""
+            ).strip() != "1":
+                raise LocalOnlyError(
+                    "distiller weights digest is not established: set "
+                    "SWARM_DISTILLER_WEIGHTS_DIGEST, or set "
+                    "SWARM_DISTILLER_WEIGHTS_DIGEST_UNAVAILABLE=1 to record "
+                    "explicitly that the provider exposes none. Failing closed "
+                    "rather than persisting an unreproducible identity."
+                )
+
+
+def _code_version() -> str:
+    """Identity of the transformation code, for the attestation record."""
+    try:
+        from swarm_os.services.lesson_distiller import __file__ as _f
+
+        import hashlib
+
+        with open(_f, "rb") as fh:
+            return "lesson_distiller:" + hashlib.sha256(fh.read()).hexdigest()[:16]
+    except Exception:  # noqa: BLE001 - provenance best-effort, never fatal
+        return "lesson_distiller:unknown"
 
 
 class LocalDistiller:
@@ -163,8 +282,12 @@ def _http_openai_complete(
                     {"role": "system", "content": _SYSTEM},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.0,
-                "max_tokens": 200,
+                # Frozen sampling config comes FROM the identity, so the recorded
+                # provenance and the executed request cannot diverge.
+                "temperature": identity.temperature,
+                "max_tokens": identity.max_tokens,
+                "top_p": identity.top_p,
+                **({"seed": identity.seed} if identity.seed is not None else {}),
             }
         ).encode("utf-8")
         req = urllib.request.Request(
@@ -199,9 +322,17 @@ def make_local_distiller(
     *,
     complete: Callable[[str], str] | None = None,
     timeout: float = 60.0,
+    require_reproducible: bool = True,
 ) -> LocalDistiller:
-    """Build the REAL LOCAL experimental distiller. Rejects non-local identities."""
+    """Build the REAL LOCAL experimental distiller. Rejects non-local identities.
+
+    ``require_reproducible`` (default) additionally refuses an identity that
+    cannot reproduce its own transformation, so an experimental distiller can
+    never be constructed from a bare ``provider:model`` pair.
+    """
     _assert_local(identity)
+    if require_reproducible:
+        identity.assert_reproducible()
     return LocalDistiller(identity, complete or _http_openai_complete(identity, timeout))
 
 
@@ -216,7 +347,7 @@ def make_fake_distiller(
 
 
 def default_local_identity() -> DistillerIdentity:
-    """The experimental identity (provider=local, EXPLICIT model).
+    """The experimental identity (provider=local, EXPLICIT model + provenance).
 
     No silent model default: the declared identity must match the served
     artifact, and which model that is (``robs4b`` vs ``qwen3.5-4b``) is an
@@ -224,6 +355,9 @@ def default_local_identity() -> DistillerIdentity:
     (``GOVERNANCE GAP`` / ``REQUIRES AUTHORIZATION``). A missing identity is
     refused (fail closed) rather than guessed, so ``get_prompt_repairer``
     disables synthesis instead of running under an unknown model identity.
+
+    R5: the weights digest must also be declared, because naming a model does not
+    pin its weights.
     """
     import os
 
@@ -232,8 +366,11 @@ def default_local_identity() -> DistillerIdentity:
         raise LocalOnlyError(
             "distiller model identity is not established: set SWARM_DISTILLER_MODEL"
         )
-    return DistillerIdentity(
+    identity = DistillerIdentity(
         provider=LOCAL_PROVIDER,
         model_id=model_id,
         base_url=os.environ.get("SWARM_DISTILLER_BASE_URL", DEFAULT_LOCAL_BASE_URL),
+        weights_digest=os.environ.get("SWARM_DISTILLER_WEIGHTS_DIGEST", "").strip(),
     )
+    identity.assert_reproducible()
+    return identity

@@ -170,6 +170,7 @@ def run_f2_arm(
     readiness: TaskReadiness | Mapping[str, Any] | None = None,
     readiness_evidence: ReadinessEvidence | Mapping[str, Any] | None = None,
     base_commit: str = "",
+    workspace_root: Path | str | None = None,
 ) -> ArmResult:
     """Run a single F2 arm in a fresh child process.
 
@@ -178,9 +179,28 @@ def run_f2_arm(
 
     A READINESS GATE runs first (R1-R8). F2 cannot render, freeze, or spawn an
     arm unless the task is mechanically READY; see ``_enforce_readiness``.
+
+    R12: when ``execute`` is set the isolated task workspace is resolved HERE,
+    fail-closed, and written explicitly into the child environment, rather than
+    being left to ambient environment inheritance. The worker independently
+    re-validates it (``resolve_required_workspace_root``), so the two checks are
+    independent rather than duplicated trust.
     """
     if arm not in ("T", "X", "C0"):
         raise ValueError(f"invalid arm: {arm!r}")
+
+    if execute:
+        # Fail closed BEFORE any freeze/spawn work if the workspace is not
+        # explicitly declared. No fallback to ``repo_root`` (the code root is a
+        # git repository and would be reset as if it were the task workspace).
+        from qwen_train.arm_workspace import resolve_required_workspace_root
+
+        # An explicit argument wins; otherwise the ambient declaration is used.
+        # Either way it goes through the SAME fail-closed validation, so there is
+        # no path where an unvalidated value reaches the child environment.
+        if workspace_root is not None:
+            os.environ["SWARM_WORKSPACE_ROOT"] = str(workspace_root)
+        resolved_workspace_root = resolve_required_workspace_root(code_root=repo_root)
 
     # -- 0. READINESS GATE (fail closed) -----------------------------------
     readiness_decl, readiness_verdict = _enforce_readiness(
@@ -268,6 +288,12 @@ def run_f2_arm(
     env["SWARM_F2_REPO_ROOT"] = str(repo_root)
     env["SWARM_F2_ROLLOUT_ID"] = ro
     env["SWARM_F2_TRAJECTORY_RUN_ID"] = traj
+    if execute:
+        # R12: the child receives the validated workspace EXPLICITLY, not by
+        # ambient inheritance. The worker re-validates it independently, so a
+        # mismatch between the two is a fail-closed error rather than a silent
+        # divergence.
+        env["SWARM_WORKSPACE_ROOT"] = str(resolved_workspace_root)
 
     cmd = [sys.executable, "-u", str(worker_script), "--manifest", str(manifest_path), "--arm", arm]
     if system_prompt:
