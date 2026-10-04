@@ -68,6 +68,19 @@ def _make_task(tmp_path: Path) -> tuple[Path, Path, str]:
     return inst, repo, base
 
 
+def _add_future_history(repo: Path) -> str:
+    """Simulate a full clone: a future commit (the 'gold fix') on another branch
+    plus a tag, reachable from refs that are not ancestors of base_commit."""
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "future")
+    (repo / "target.txt").write_text("GOLD-FIX\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "gold fix")
+    future = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "tag", "gold-fix")
+    _git(repo, "checkout", "-q", branch)
+    return future
+
+
 def _dirty(repo: Path) -> None:
     (repo / "src.txt").write_text("DIRTY-MUTATION\n", encoding="utf-8")
     (repo / "untracked.txt").write_text("junk\n", encoding="utf-8")
@@ -136,6 +149,37 @@ class TestPrepareArmWorkspace:
         inside.write_text(_TEST_PATCH, encoding="utf-8")
         with pytest.raises(FreshArmWorkspaceError):
             prepare_fresh_arm_workspace(repo, base, inside)
+
+
+class TestHistoryContaminationPrevention:
+    """A full clone carries the task's future history (gold fix); the arm must
+    not be able to read it (SWE-Bench Pro Verified anti-leak)."""
+
+    def test_future_commit_is_unrecoverable_after_prepare(self, tmp_path):
+        inst, repo, base = _make_task(tmp_path)
+        future = _add_future_history(repo)
+        assert future in _git(repo, "rev-list", "--all").split()  # reachable BEFORE
+        prepare_arm_workspace(inst, base)
+        assert _git(repo, "rev-parse", "HEAD") == base
+        # the future (gold) commit object is gone
+        probe = subprocess.run(
+            ["git", "cat-file", "-e", future], cwd=str(repo),
+            capture_output=True, text=True, check=False,
+        )
+        assert probe.returncode != 0
+        # no unreachable commit objects survive gc
+        fsck = _git(repo, "fsck", "--unreachable", "--no-reflogs")
+        assert "unreachable commit" not in fsck
+
+    def test_future_branch_and_tag_removed(self, tmp_path):
+        inst, repo, base = _make_task(tmp_path)
+        _add_future_history(repo)
+        prepare_arm_workspace(inst, base)
+        refs = set(_git(repo, "for-each-ref", "--format=%(refname)").split())
+        assert "refs/heads/future" not in refs
+        assert "refs/tags/gold-fix" not in refs
+        # base tree still intact (patch applied) after stripping
+        assert (repo / "target.txt").read_text(encoding="utf-8") == "patched\n"
 
 
 class TestResolveLayout:

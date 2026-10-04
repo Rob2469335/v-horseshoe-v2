@@ -292,6 +292,43 @@ def resolve_task_test_patch(repo: Path) -> Path:
     )
 
 
+def _strip_future_history(repo: Path, base_commit: str) -> None:
+    """Reduce the workspace git history to EXACTLY ``base_commit``.
+
+    A full clone carries future commits -- including the task's gold fix --
+    reachable from other branches, remote-tracking refs, tags or the reflog, and
+    recoverable from unreachable objects via ``git fsck``/``cat-file``. That is
+    an evaluation-time answer-leak channel (SWE-Bench Pro Verified, arXiv
+    2609.08149; "reconstruct the repository as a fresh single-commit"). Remove
+    every ref except HEAD at ``base_commit``, expire reflogs, prune unreachable
+    objects, then fail closed if any commit remains reachable beyond base or any
+    unreachable commit object survives.
+    """
+    base = repo_commit_id(base_commit, repo)
+    _require(
+        _run(["git", "checkout", "--detach", base], repo).returncode == 0,
+        "could not detach HEAD at base_commit",
+    )
+    # Drop the remote so remote-tracking refs cannot be used to recover the fix.
+    _run(["git", "remote", "remove", "origin"], repo)
+    refs = _run(["git", "for-each-ref", "--format=%(refname)"], repo).stdout.split()
+    for ref in refs:
+        ref = ref.strip()
+        if ref and ref != "HEAD":
+            _run(["git", "update-ref", "-d", ref], repo)
+    _run(["git", "reflog", "expire", "--expire=now", "--all"], repo)
+    gc = _run(["git", "gc", "--prune=now", "--quiet"], repo)
+    _require(gc.returncode == 0, f"git gc failed: {gc.stderr.strip()}")
+    # Fail closed: nothing reachable beyond base, and no unreachable commits.
+    reachable = _run(
+        ["git", "rev-list", "HEAD", "--not", base, "--count"], repo
+    ).stdout.strip()
+    _require(reachable == "0", f"future history still reachable: {reachable} commit(s)")
+    fsck = _run(["git", "fsck", "--unreachable", "--no-reflogs"], repo).stdout
+    leaked = [ln for ln in fsck.splitlines() if "unreachable commit" in ln]
+    _require(not leaked, f"unreachable future commit objects remain: {leaked[:3]}")
+
+
 def prepare_arm_workspace(workspace_root: Path | str, base_commit: str) -> Path:
     """Establish per-arm isolation for an F2 arm, reusing the F1 machinery.
 
@@ -304,6 +341,10 @@ def prepare_arm_workspace(workspace_root: Path | str, base_commit: str) -> Path:
     repo = resolve_task_repo(workspace_root)
     patch = resolve_task_test_patch(repo)
     prepare_fresh_arm_workspace(repo, base_commit, patch)
+    # Contamination prevention: the reset above restores the base tree but a full
+    # clone still carries the task's future history (gold fix) reachable from
+    # other refs/objects. Strip it so the arm cannot read the answer.
+    _strip_future_history(repo, base_commit)
     return repo
 
 
