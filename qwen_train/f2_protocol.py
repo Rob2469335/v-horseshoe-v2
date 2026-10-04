@@ -966,6 +966,11 @@ def _put_artifact(store: TrustedArtifactStore, name: str, data: bytes, role: str
     return ArtifactRef(name=name, digest=_sha256(data), size_bytes=len(data), role=role)
 
 
+def _is_hex64(value: Any) -> bool:
+    s = str(value or "")
+    return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+
+
 def assemble_f2_bundle(
     *,
     store: TrustedArtifactStore,
@@ -975,14 +980,12 @@ def assemble_f2_bundle(
     base_commit: str,
     relevant_file_set: Sequence[str],
     horizon_k: int,
-    delivered_text: str,
+    seam_delivery: Mapping[str, Any],
     behavioral_records: Sequence[Mapping[str, Any]],
     task_outcome_report: Mapping[str, Any],
     evaluator: EvaluatorAuthorization,
     implementation_bytes: bytes,
     lesson_block_text: str | None = None,
-    final_prompt_hash: str = "",
-    delivery_timestamp: str = "",
     declared_endpoint: bool = False,
     declared_first_edit_step: int | None = None,
     declared_task_success: bool = False,
@@ -992,19 +995,24 @@ def assemble_f2_bundle(
 ) -> F2Bundle:
     """Assemble the governed :class:`F2Bundle` from a live execution.
 
-    This is the production->bundle step the live worker was missing. The
-    TREATMENT artifact is the AUTHORITATIVE delivered seam text
-    (``f2_replay.get_delivery_artifact()``), stored in canonical form
-    (:func:`canonical_text_bytes`). The verifier's treatment-hash check therefore
-    becomes a REAL delivered-byte binding: the retained treatment bytes ARE the
-    bytes the model-facing seam produced, hashed in one canonical domain.
+    The delivery fields are taken from the ``seam_delivery`` record supplied by
+    the caller, which is expected to be the record the P2 delivery seam produced
+    (``runtime_v2.services.f2_replay.record_f2_delivery_evidence``). This function:
 
-    Every artifact is written into the trusted store and referenced by digest, so
-    the independent regrader can reconstruct the primary endpoint from retained
-    raw evidence without trusting any producer declaration.
+    * verifies **internal consistency** between the delivered bytes and the
+      supplied seam hash: it recomputes ``sha256`` over the exact delivered bytes
+      and **REJECTS** if it differs from ``seam_delivery["lesson_block_hash"]``, so
+      a mutation between the seam and assembly fails closed;
+    * stores the treatment artifact as the **exact UTF-8 delivered bytes** (no
+      NFC, no CRLF->LF, no BOM stripping) — the stored copy IS the delivered copy;
+    * takes ``treatment_artifact_hash``, ``final_prompt_hash`` and
+      ``delivery_timestamp`` FROM the supplied seam record, never from the bytes
+      it stored.
 
-    Digest equality remains NECESSARY, NOT SUFFICIENT: it proves the retained
-    bytes are unchanged, not that the execution was faithful.
+    This function does **NOT** independently verify that the supplied
+    ``seam_delivery`` record actually originated from the authorized P2 process:
+    the record is an input, and its provenance/authenticity is not established
+    here. Digest equality remains NECESSARY, NOT SUFFICIENT.
     """
     from runtime_v2.services.task_readiness import compute_relevant_file_set_hash
 
@@ -1016,22 +1024,61 @@ def assemble_f2_bundle(
     elif lesson_block_text:
         raise ValueError(f"arm {arm} must NOT carry a lesson block")
 
+    if not isinstance(seam_delivery, Mapping):
+        raise ValueError("seam_delivery must be the seam-produced delivery record")
+    # The seam record's arm must match the arm being assembled (fail closed).
+    if "arm" not in seam_delivery:
+        raise ValueError("seam delivery record must carry 'arm'")
+    if str(seam_delivery.get("arm")) != arm:
+        raise ValueError(
+            f"seam delivery arm {seam_delivery.get('arm')!r} does not match the "
+            f"assembly arm {arm!r}"
+        )
+    delivered_block = seam_delivery.get("delivered_block")
+    if not isinstance(delivered_block, str):
+        raise ValueError("seam delivery record must carry 'delivered_block' text")
+    # NOTE: the seam field named "lesson_block_hash" is actually
+    # sha256(rendered_artifact) -- the WHOLE delivered treatment artifact, not the
+    # lesson-block substring. Never compare it against sha256(lesson_block_text).
+    seam_hash = str(seam_delivery.get("lesson_block_hash") or "")
+    if not _is_hex64(seam_hash):
+        raise ValueError(
+            "seam delivery record must carry a 64-hex delivered-artifact hash"
+        )
+    seam_prompt_hash = str(seam_delivery.get("final_prompt_hash") or "")
+    if not _is_hex64(seam_prompt_hash):
+        raise ValueError("seam delivery record must carry a 64-hex final_prompt_hash")
+    seam_ts = seam_delivery.get("delivery_timestamp")
+    if seam_ts is None or str(seam_ts).strip() == "":
+        raise ValueError("seam delivery record must carry a delivery_timestamp")
+
+    # EXACT delivered bytes, NO canonicalisation, for the delivery identity.
+    delivered_bytes = delivered_block.encode("utf-8")
+    recomputed = _sha256(delivered_bytes)
+    if recomputed != seam_hash:
+        raise ValueError(
+            "delivered bytes do not match the seam-established hash: recomputed "
+            f"{recomputed[:12]}… != seam {seam_hash[:12]}…; the delivered artifact "
+            "cannot be bound"
+        )
+
     treatment = _put_artifact(
-        store, f"{slug}treatment.txt", canonical_text_bytes(delivered_text), ROLE_TEST_OUTPUT
+        store, f"{slug}treatment.txt", delivered_bytes, ROLE_TEST_OUTPUT
     )
     lesson_hash = ""
     lesson_art: ArtifactRef | None = None
     if arm == F2_TREATMENT_ARM:
-        lb = canonical_text_bytes(lesson_block_text or "")
+        lb = (lesson_block_text or "").encode("utf-8")
         lesson_hash = _sha256(lb)
         lesson_art = _put_artifact(store, f"{slug}lesson_block.txt", lb, ROLE_LESSON_BLOCK)
 
     delivery = F2DeliveryEvidence(
         arm=arm,
         lesson_block_hash=lesson_hash,
-        final_prompt_hash=final_prompt_hash,
-        delivery_timestamp=delivery_timestamp,
-        treatment_artifact_hash=treatment.digest,
+        final_prompt_hash=seam_prompt_hash,
+        delivery_timestamp=str(seam_ts),
+        # FROM THE SEAM, never from the bytes this function just stored.
+        treatment_artifact_hash=seam_hash,
     )
     delivery_art = _put_artifact(
         store,

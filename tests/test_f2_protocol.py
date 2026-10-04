@@ -935,10 +935,21 @@ class TestTimestampDomain:
 # BLOCKER B/C - production -> governed bundle assembly, delivered-byte binding
 # --------------------------------------------------------------------------
 class TestBundleAssembly:
+    def _seam(self, delivered, arm=F2_TREATMENT_ARM, ts=DELIVERY_TS, fph="f" * 64):
+        """The seam-produced delivery record (as record_f2_delivery_evidence emits)."""
+        return {
+            "delivered_block": delivered,
+            "lesson_block_hash": hashlib.sha256(delivered.encode("utf-8")).hexdigest(),
+            "final_prompt_hash": fph,
+            "delivery_timestamp": ts,
+            "arm": arm,
+        }
+
     def _assemble(self, arm=F2_TREATMENT_ARM, **over):
         from qwen_train.f2_protocol import assemble_f2_bundle
 
         delivered = over.pop("delivered_text", f"# treatment artifact\n{LESSON}tail\n")
+        seam = over.pop("seam_delivery", None) or self._seam(delivered, arm=arm)
         kw = dict(
             store=_store(),
             arm=arm,
@@ -947,14 +958,12 @@ class TestBundleAssembly:
             base_commit=BASE,
             relevant_file_set=RFS,
             horizon_k=12,
-            delivered_text=delivered,
+            seam_delivery=seam,
             behavioral_records=[_PRE, _POST],
             task_outcome_report={"fail_to_pass": {"tests/t.py::a": "passed"}},
             evaluator=_AUTH,
             implementation_bytes=_IMPL_BYTES,
             lesson_block_text=(LESSON if arm == F2_TREATMENT_ARM else None),
-            final_prompt_hash="f" * 64,
-            delivery_timestamp=DELIVERY_TS,
             declared_endpoint=True,
             declared_first_edit_step=4,
             declared_task_success=True,
@@ -963,18 +972,18 @@ class TestBundleAssembly:
         kw.update(over)
         return assemble_f2_bundle(**kw)
 
+
     def test_assembled_bundle_regrades_verified(self):
         v = _regrade(self._assemble())
         assert v.state == STATE_VERIFIED, v.detail
 
-    def test_treatment_artifact_is_the_canonical_delivered_bytes(self):
-        from qwen_train.f2_protocol import canonical_text_bytes
-
-        b = self._assemble()
+    def test_treatment_artifact_is_the_exact_delivered_bytes(self):
+        # The stored treatment IS the delivered bytes: exact UTF-8, no tidying.
+        delivered = f"# treatment artifact\n{LESSON}tail\n"
+        b = self._assemble(delivered_text=delivered)
         retained, why = _store().read_bytes(b.treatment_artifact.name)
         assert retained is not None, why
-        assert retained == canonical_text_bytes(f"# treatment artifact\n{LESSON}tail\n")
-        # Real delivered-byte binding: the retained bytes ARE what the seam emitted.
+        assert retained == delivered.encode("utf-8")
         assert hashlib.sha256(retained).hexdigest() == b.delivery.treatment_artifact_hash
 
     def test_delivered_text_change_changes_the_treatment_digest(self):
@@ -1034,3 +1043,165 @@ class TestBundleAssembly:
         assert ROLE_DELIVERY_EVIDENCE in roles and ROLE_LESSON_BLOCK in roles
         assert ROLE_EVALUATOR_IMPLEMENTATION in roles
         assert ROLE_TEST_OUTPUT in roles and ROLE_RUN_LOG in roles
+
+
+# --------------------------------------------------------------------------
+# STEP 1 - assembler verifies against SEAM-established delivery evidence
+# --------------------------------------------------------------------------
+class TestSeamBoundDelivery:
+    def _seam(self, delivered, arm=F2_TREATMENT_ARM, ts=DELIVERY_TS, fph="f" * 64):
+        return {
+            "delivered_block": delivered,
+            "lesson_block_hash": hashlib.sha256(delivered.encode("utf-8")).hexdigest(),
+            "final_prompt_hash": fph,
+            "delivery_timestamp": ts,
+            "arm": arm,
+        }
+
+    def _assemble(self, arm=F2_TREATMENT_ARM, **over):
+        from qwen_train.f2_protocol import assemble_f2_bundle
+
+        delivered = over.pop("delivered_text", f"# treatment artifact\n{LESSON}tail\n")
+        seam = over.pop("seam_delivery", None) or self._seam(delivered, arm=arm)
+        kw = dict(
+            store=_store(), arm=arm, instance_id=TASK, repository=REPO,
+            base_commit=BASE, relevant_file_set=RFS, horizon_k=12,
+            seam_delivery=seam, behavioral_records=[_PRE, _POST],
+            task_outcome_report={"fail_to_pass": {"tests/t.py::a": "passed"}},
+            evaluator=_AUTH, implementation_bytes=_IMPL_BYTES,
+            lesson_block_text=(LESSON if arm == F2_TREATMENT_ARM else None),
+            declared_endpoint=True, declared_first_edit_step=4,
+            declared_task_success=True, slug=f"seam{arm}_",
+        )
+        kw.update(over)
+        return assemble_f2_bundle(**kw)
+
+    def test_b7_seam_hash_disagreeing_with_delivered_bytes_is_rejected(self):
+        # Seam record claims a hash that is NOT sha256(delivered_block).
+        bad = self._seam("REAL delivered text\n")
+        bad["lesson_block_hash"] = "a" * 64
+        with pytest.raises(ValueError, match="do not match the seam-established hash"):
+            self._assemble(seam_delivery=bad)
+
+    def test_b8_tampering_delivered_bytes_after_seam_is_rejected(self):
+        # Seam record is honest; the delivered bytes are then swapped.
+        seam = self._seam("original delivered\n")
+        tampered = dict(seam, delivered_block="TAMPERED delivered\n")
+        with pytest.raises(ValueError, match="do not match the seam-established hash"):
+            self._assemble(seam_delivery=tampered)
+
+    def test_b8b_seam_record_required_fields(self):
+        for missing in ("delivered_block", "lesson_block_hash", "final_prompt_hash",
+                        "delivery_timestamp"):
+            seam = self._seam("x\n")
+            seam.pop(missing)
+            with pytest.raises(ValueError):
+                self._assemble(seam_delivery=seam)
+
+    def test_b2_treatment_hash_comes_from_the_seam_not_the_stored_bytes(self):
+        b = self._assemble()
+        # The delivery record's hash equals the seam's hash, and the seam hash
+        # equals sha256(exact delivered bytes) -- the two agree BY VERIFICATION,
+        # not by construction from the stored artifact.
+        retained, _ = _store().read_bytes(b.treatment_artifact.name)
+        assert b.delivery.treatment_artifact_hash == hashlib.sha256(retained).hexdigest()
+
+    def test_b10_raw_crlf_bytes_are_preserved(self):
+        delivered = "a\r\nb\r\n"
+        b = self._assemble(delivered_text=delivered)
+        retained, _ = _store().read_bytes(b.treatment_artifact.name)
+        assert retained == b"a\r\nb\r\n"  # NO CRLF->LF tidying
+        assert b.delivery.treatment_artifact_hash == hashlib.sha256(b"a\r\nb\r\n").hexdigest()
+        assert b.delivery.treatment_artifact_hash != hashlib.sha256(b"a\nb\n").hexdigest()
+
+    def test_b10_bom_bytes_are_preserved(self):
+        delivered = "\ufeffa\nb\n"
+        b = self._assemble(delivered_text=delivered)
+        retained, _ = _store().read_bytes(b.treatment_artifact.name)
+        assert retained == "\ufeffa\nb\n".encode("utf-8")  # BOM NOT stripped
+        assert retained[0:3] == b"\xef\xbb\xbf"
+
+    def test_b10_decomposed_unicode_is_preserved(self):
+        delivered = "e\u0301\n"  # decomposed
+        b = self._assemble(delivered_text=delivered)
+        retained, _ = _store().read_bytes(b.treatment_artifact.name)
+        assert retained == "e\u0301\n".encode("utf-8")  # NOT NFC-normalised
+        assert retained != "\u00e9\n".encode("utf-8")
+
+    def test_b11_each_slot_is_filled_exactly_once(self):
+        """Real rule: every bundle slot is filled once and no two slots share an
+        artifact. Roles are NOT compared as a set (that would hide duplicates)."""
+        b = self._assemble()
+        slots = {
+            "behavioral": b.behavioral_artifact,
+            "task_outcome": b.task_outcome_artifact,
+            "treatment": b.treatment_artifact,
+            "delivery": b.delivery_artifact,
+            "implementation": b.implementation_artifact,
+            "lesson_block": b.lesson_block_artifact,
+        }
+        assert all(ref is not None and ref.name and ref.digest for ref in slots.values())
+        names = [ref.name for ref in slots.values()]
+        assert len(names) == len(set(names)), f"two slots share an artifact: {names}"
+
+    def test_b12_assembled_bundle_still_regrades_verified(self):
+        assert _regrade(self._assemble()).state == STATE_VERIFIED
+
+
+# --------------------------------------------------------------------------
+# STEP 1b - seam tightening: arm match + timestamp behaviour documented
+# --------------------------------------------------------------------------
+class TestSeamTightening:
+    def _seam(self, delivered, arm=F2_TREATMENT_ARM, ts=DELIVERY_TS, fph="f" * 64):
+        return {
+            "delivered_block": delivered,
+            "lesson_block_hash": hashlib.sha256(delivered.encode("utf-8")).hexdigest(),
+            "final_prompt_hash": fph,
+            "delivery_timestamp": ts,
+            "arm": arm,
+        }
+
+    def _assemble(self, arm=F2_TREATMENT_ARM, **over):
+        from qwen_train.f2_protocol import assemble_f2_bundle
+
+        delivered = over.pop("delivered_text", f"# treatment artifact\n{LESSON}tail\n")
+        seam = over.pop("seam_delivery", None) or self._seam(delivered, arm=arm)
+        kw = dict(
+            store=_store(), arm=arm, instance_id=TASK, repository=REPO,
+            base_commit=BASE, relevant_file_set=RFS, horizon_k=12,
+            seam_delivery=seam, behavioral_records=[_PRE, _POST],
+            task_outcome_report={"fail_to_pass": {"tests/t.py::a": "passed"}},
+            evaluator=_AUTH, implementation_bytes=_IMPL_BYTES,
+            lesson_block_text=(LESSON if arm == F2_TREATMENT_ARM else None),
+            declared_endpoint=True, declared_first_edit_step=4,
+            declared_task_success=True, slug=f"tight{arm}_",
+        )
+        kw.update(over)
+        return assemble_f2_bundle(**kw)
+
+    def test_seam_arm_X_passed_with_assembly_arm_T_is_rejected(self):
+        seam = self._seam("x\n", arm=F2_CONTROL_ARM)
+        with pytest.raises(ValueError, match="does not match the assembly arm"):
+            self._assemble(arm=F2_TREATMENT_ARM, seam_delivery=seam)
+
+    def test_missing_seam_arm_is_rejected(self):
+        seam = self._seam("x\n")
+        seam.pop("arm")
+        with pytest.raises(ValueError, match="must carry 'arm'"):
+            self._assemble(seam_delivery=seam)
+
+    def test_matching_seam_arm_is_accepted(self):
+        assert self._assemble().arm == F2_TREATMENT_ARM
+
+    def test_float_seam_timestamp_accepted_by_assembly_preserved_as_text(self):
+        # Documents CURRENT behaviour: the assembler does not validate the format.
+        seam = self._seam("x\n", ts=1759536000.123)
+        b = self._assemble(seam_delivery=seam)
+        assert b.delivery.delivery_timestamp == "1759536000.123"
+
+    def test_float_seam_timestamp_is_rejected_by_regrade(self):
+        # Documents CURRENT behaviour: the F2 verifier requires RFC 3339, so a
+        # Unix float (what the P2 seam actually emits) cannot be regraded.
+        seam = self._seam("x\n", ts=1759536000.123)
+        b = self._assemble(seam_delivery=seam)
+        assert _regrade(b).state == STATE_SCIENTIFICALLY_INSUFFICIENT
