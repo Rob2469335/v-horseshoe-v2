@@ -541,6 +541,77 @@ adversarial case whose gold artifacts *are* the patch text.
 
 ---
 
+## 4d. F2 evidence governance layer (closes the S8 governance gaps)
+
+**Module:** `qwen_train/f2_governance.py` · **Tests:** `tests/test_f2_governance.py` (49)
+**S8 remains frozen** — `qwen_train/f2_evidence.py` is byte-identical
+(`F095D051…`); this layer composes the S8 verifier and emits results through the
+existing S8 private-proof mechanism.
+
+The S8 mechanism answers *"is this record internally consistent and do the
+declared results satisfy the base/gold property?"* It deliberately trusts the
+**declared** `execution_result` and a **caller-supplied** evaluator allowlist.
+This layer adds the governance that makes those trustworthy.
+
+| Layer | What it establishes |
+|---|---|
+| **1 Execution producer** | An immutable `ExecutionBundle` + raw artifacts. A declared result is an **input to verification, never a substitute for it**. |
+| **2 Trusted artifact store** | One explicit namespace the layer will verify: canonical resolution, containment (`..`, absolute, drive, UNC, symlink escape rejected), role binding, digest+size verification, explicit retention metadata. |
+| **3 Authorized evaluator registry** | An evaluator is authorized only when **id + version + implementation digest + procedure id + protocol version** all match. An empty registry authorizes nothing. |
+| **4 Immutable execution identity** | Canonical digest over instance/repo/base/state/evaluator identity+version+implementation digest/procedure/protocol/environment/command/artifact identities. **Timestamps are audit metadata, not identity.** |
+| **5 Independent verifier** | Loads the bundle, checks schema, authorizes the evaluator, verifies artifacts, **derives the result from retained artifacts**, rejects any declaration that disagrees, and emits the proof through S8. |
+
+**JSON saying `"execution_result": "pass"` is never sufficient.** The verifier
+derives the result from the retained test-output artifact via a *registered*
+result-derivation protocol (`json_test_report_v1` is a reference implementation).
+If the artifact cannot establish the result, or the bundle names an unregistered
+protocol, verification fails with `SCIENTIFICALLY_INSUFFICIENT` — the declaration
+is never upgraded.
+
+### Trust boundary — the three questions stay separate
+
+* **INTEGRITY** — the bytes match their cryptographic identities.
+* **PROVENANCE** — the bytes belong to an *authorized* procedure and the *trusted*
+  artifact namespace, for a specific immutable execution identity.
+* **SCIENTIFIC VALIDITY** — the retained evidence actually establishes the
+  base/gold property.
+
+A SHA-256 proves integrity only. This layer closes the provenance gap as far as
+retained evidence permits and states plainly what it still cannot establish.
+
+### Evidence classification
+
+**PROVEN** (implementation + tests): evaluator authorization fails closed on
+every component; evaluator implementation digest is bound and mutation-sensitive;
+execution identity is deterministic and mutation-sensitive while timestamps are
+excluded; trusted root containment and artifact integrity; role binding;
+independent derivation rejects a false declaration; forged JSON verification
+fields are ignored; direct construction of a verification result is refused;
+schema fails closed; gold material does not enter the identity; no network or
+execution in the verification path.
+
+**SUPPORTED** (architecture, depends on controlled deployment): that a real
+executor emits conforming bundles; that a real artifact store is operated
+immutably.
+
+**INFERRED:** the composition S8 + governance is sufficient for admission once an
+authorized protocol exists.
+
+**NOT ESTABLISHED:** that any *real* execution occurred — no evidence exists;
+`S8` passes 0/14. `RECONSTRUCTABLE_IDENTITY` holds; `VERIFIABLE_ARTIFACTS` holds;
+`DERIVABLE_RESULT` holds only for a registered protocol; full `REEXECUTION` is
+intentionally not performed.
+
+**GOVERNANCE GAP:** the authorized evaluator identity and implementation digest;
+the real result-derivation protocol and its format; the trusted store location and
+OS-level immutability; retention duration and deletion detection; curator and
+independent-verifier authority.
+
+**REQUIRES AUTHORIZATION:** naming the authorized evaluator/procedure and
+protocol, provisioning the trusted store, and generating any real evidence.
+
+---
+
 ## 5. Clean room (R4) — what is now proven, and what is not
 
 **Closed and proven.** The untrusted-subprocess environment builder previously
