@@ -44,6 +44,8 @@ from qwen_train.f2_endpoint import (
     qualifying_first_edit,
 )
 from qwen_train.f2_evidence import (
+    ROLE_RUN_LOG,
+    ROLE_TEST_OUTPUT,
     STATE_ARTIFACT_MISSING,
     STATE_IDENTITY_MISMATCH,
     STATE_MALFORMED,
@@ -57,6 +59,7 @@ from qwen_train.f2_evidence import (
     _VERIFICATION_PROOF,  # noqa: PLC2701 - the frozen S8 proof mechanism
 )
 from qwen_train.f2_governance import (
+    ROLE_EVALUATOR_IMPLEMENTATION,
     EvaluatorAuthorization,
     EvaluatorRegistry,
     TrustedArtifactStore,
@@ -81,6 +84,8 @@ __all__ = [
     "ROLE_DELIVERY_EVIDENCE",
     "EXECUTION_STATE_BY_ARM",
     "parse_canonical_timestamp",
+    "canonical_text_bytes",
+    "assemble_f2_bundle",
 ]
 
 #: The single authorized F2 result protocol. Do NOT reuse the generic
@@ -163,6 +168,25 @@ def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
+
+
+def canonical_text_bytes(text: str) -> bytes:
+    """Canonical byte form for delivered/treatment text (SOTA prompt binding).
+
+    Hash equality is only meaningful when both sides hash the SAME canonical
+    bytes. Following the current prompt-attestation standard, the canonical form
+    is UTF-8 with **no BOM**, Unicode **NFC**-normalised, and **LF** line endings.
+    A whitespace, encoding, normalisation or line-ending change therefore yields a
+    different digest, which is the intended tamper-evidence property.
+    """
+    import unicodedata
+
+    s = str(text)
+    if s.startswith("\ufeff"):
+        s = s[1:]
+    s = unicodedata.normalize("NFC", s)
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return s.encode("utf-8")
 
 
 def _fail(state: str, detail: str) -> EvidenceVerification:
@@ -930,3 +954,126 @@ def regrade_f2_pair(
     return _ok(
         f"paired T/X regraded: T endpoint={t_res.endpoint} X endpoint={x_res.endpoint}"
     ), results
+
+# ===========================================================================
+# Production -> governed bundle assembly (BLOCKER B/C)
+# ===========================================================================
+def _put_artifact(store: TrustedArtifactStore, name: str, data: bytes, role: str) -> ArtifactRef:
+    from pathlib import Path as _Path
+
+    p = _Path(store.root) / name
+    p.write_bytes(data)
+    return ArtifactRef(name=name, digest=_sha256(data), size_bytes=len(data), role=role)
+
+
+def assemble_f2_bundle(
+    *,
+    store: TrustedArtifactStore,
+    arm: str,
+    instance_id: str,
+    repository: str,
+    base_commit: str,
+    relevant_file_set: Sequence[str],
+    horizon_k: int,
+    delivered_text: str,
+    behavioral_records: Sequence[Mapping[str, Any]],
+    task_outcome_report: Mapping[str, Any],
+    evaluator: EvaluatorAuthorization,
+    implementation_bytes: bytes,
+    lesson_block_text: str | None = None,
+    final_prompt_hash: str = "",
+    delivery_timestamp: str = "",
+    declared_endpoint: bool = False,
+    declared_first_edit_step: int | None = None,
+    declared_task_success: bool = False,
+    slug: str = "f2_",
+    started_at: str = "",
+    finished_at: str = "",
+) -> F2Bundle:
+    """Assemble the governed :class:`F2Bundle` from a live execution.
+
+    This is the production->bundle step the live worker was missing. The
+    TREATMENT artifact is the AUTHORITATIVE delivered seam text
+    (``f2_replay.get_delivery_artifact()``), stored in canonical form
+    (:func:`canonical_text_bytes`). The verifier's treatment-hash check therefore
+    becomes a REAL delivered-byte binding: the retained treatment bytes ARE the
+    bytes the model-facing seam produced, hashed in one canonical domain.
+
+    Every artifact is written into the trusted store and referenced by digest, so
+    the independent regrader can reconstruct the primary endpoint from retained
+    raw evidence without trusting any producer declaration.
+
+    Digest equality remains NECESSARY, NOT SUFFICIENT: it proves the retained
+    bytes are unchanged, not that the execution was faithful.
+    """
+    from runtime_v2.services.task_readiness import compute_relevant_file_set_hash
+
+    if arm not in F2_ARMS:
+        raise ValueError(f"arm must be one of {F2_ARMS}, got {arm!r}")
+    if arm == F2_TREATMENT_ARM:
+        if not lesson_block_text:
+            raise ValueError("arm T requires the lesson block text")
+    elif lesson_block_text:
+        raise ValueError(f"arm {arm} must NOT carry a lesson block")
+
+    treatment = _put_artifact(
+        store, f"{slug}treatment.txt", canonical_text_bytes(delivered_text), ROLE_TEST_OUTPUT
+    )
+    lesson_hash = ""
+    lesson_art: ArtifactRef | None = None
+    if arm == F2_TREATMENT_ARM:
+        lb = canonical_text_bytes(lesson_block_text or "")
+        lesson_hash = _sha256(lb)
+        lesson_art = _put_artifact(store, f"{slug}lesson_block.txt", lb, ROLE_LESSON_BLOCK)
+
+    delivery = F2DeliveryEvidence(
+        arm=arm,
+        lesson_block_hash=lesson_hash,
+        final_prompt_hash=final_prompt_hash,
+        delivery_timestamp=delivery_timestamp,
+        treatment_artifact_hash=treatment.digest,
+    )
+    delivery_art = _put_artifact(
+        store,
+        f"{slug}delivery.json",
+        _canonical_bytes(delivery.canonical_payload()),
+        ROLE_DELIVERY_EVIDENCE,
+    )
+    behavioral = _put_artifact(
+        store,
+        f"{slug}behavior.json",
+        json.dumps(list(behavioral_records), sort_keys=True, separators=(",", ":")).encode("utf-8"),
+        ROLE_TEST_OUTPUT,
+    )
+    report = _put_artifact(
+        store,
+        f"{slug}report.json",
+        _canonical_bytes(task_outcome_report),
+        ROLE_RUN_LOG,
+    )
+    implementation = _put_artifact(
+        store, f"{slug}impl.py", implementation_bytes, ROLE_EVALUATOR_IMPLEMENTATION
+    )
+
+    return F2Bundle(
+        instance_id=instance_id,
+        repository=repository,
+        base_commit=base_commit,
+        relevant_file_set_hash=compute_relevant_file_set_hash(tuple(relevant_file_set)),
+        horizon_k=horizon_k,
+        qualifying_operations=tuple(sorted(QUALIFYING_OPERATIONS)),
+        delivery=delivery,
+        behavioral_artifact=behavioral,
+        task_outcome_artifact=report,
+        treatment_artifact=treatment,
+        delivery_artifact=delivery_art,
+        evaluator=evaluator,
+        implementation_artifact=implementation,
+        declared_endpoint=declared_endpoint,
+        declared_first_edit_step=declared_first_edit_step,
+        declared_task_success=declared_task_success,
+        started_at=started_at,
+        finished_at=finished_at,
+        lesson_block_artifact=lesson_art,
+        protocol_id=F2_PROTOCOL_ID,
+    )

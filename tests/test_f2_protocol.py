@@ -929,3 +929,108 @@ class TestTimestampDomain:
         for bad in (None, 1234, "", "   "):
             dt, why = parse_canonical_timestamp(bad)
             assert dt is None and why
+
+
+# --------------------------------------------------------------------------
+# BLOCKER B/C - production -> governed bundle assembly, delivered-byte binding
+# --------------------------------------------------------------------------
+class TestBundleAssembly:
+    def _assemble(self, arm=F2_TREATMENT_ARM, **over):
+        from qwen_train.f2_protocol import assemble_f2_bundle
+
+        delivered = over.pop("delivered_text", f"# treatment artifact\n{LESSON}tail\n")
+        kw = dict(
+            store=_store(),
+            arm=arm,
+            instance_id=TASK,
+            repository=REPO,
+            base_commit=BASE,
+            relevant_file_set=RFS,
+            horizon_k=12,
+            delivered_text=delivered,
+            behavioral_records=[_PRE, _POST],
+            task_outcome_report={"fail_to_pass": {"tests/t.py::a": "passed"}},
+            evaluator=_AUTH,
+            implementation_bytes=_IMPL_BYTES,
+            lesson_block_text=(LESSON if arm == F2_TREATMENT_ARM else None),
+            final_prompt_hash="f" * 64,
+            delivery_timestamp=DELIVERY_TS,
+            declared_endpoint=True,
+            declared_first_edit_step=4,
+            declared_task_success=True,
+            slug=f"asm{arm}_",
+        )
+        kw.update(over)
+        return assemble_f2_bundle(**kw)
+
+    def test_assembled_bundle_regrades_verified(self):
+        v = _regrade(self._assemble())
+        assert v.state == STATE_VERIFIED, v.detail
+
+    def test_treatment_artifact_is_the_canonical_delivered_bytes(self):
+        from qwen_train.f2_protocol import canonical_text_bytes
+
+        b = self._assemble()
+        retained, why = _store().read_bytes(b.treatment_artifact.name)
+        assert retained is not None, why
+        assert retained == canonical_text_bytes(f"# treatment artifact\n{LESSON}tail\n")
+        # Real delivered-byte binding: the retained bytes ARE what the seam emitted.
+        assert hashlib.sha256(retained).hexdigest() == b.delivery.treatment_artifact_hash
+
+    def test_delivered_text_change_changes_the_treatment_digest(self):
+        a = self._assemble(delivered_text="AAA\n")
+        b = self._assemble(delivered_text="BBB\n")
+        assert a.treatment_artifact.digest != b.treatment_artifact.digest
+
+    def test_treatment_arm_requires_a_lesson_block(self):
+        with pytest.raises(ValueError, match="requires the lesson block"):
+            self._assemble(lesson_block_text=None)
+
+    def test_control_arm_must_not_carry_a_lesson_block(self):
+        with pytest.raises(ValueError, match="must NOT carry a lesson block"):
+            self._assemble(arm=F2_CONTROL_ARM, lesson_block_text=LESSON)
+
+    def test_assembled_pair_passes_clean_room(self):
+        t = self._assemble()
+        x = self._assemble(
+            arm=F2_CONTROL_ARM,
+            delivered_text="# treatment artifact\ntail\n",
+            declared_endpoint=True,
+        )
+        ok, why = verify_f2_clean_room(t, x, store=_store())
+        assert ok, why
+
+    def test_canonical_text_normalisation(self):
+        from qwen_train.f2_protocol import canonical_text_bytes
+
+        base = canonical_text_bytes("a\nb\n")
+        assert canonical_text_bytes("a\r\nb\r\n") == base   # CRLF -> LF
+        assert canonical_text_bytes("a\rb\r") == base        # CR -> LF
+        assert canonical_text_bytes("\ufeffa\nb\n") == base  # BOM stripped
+        assert canonical_text_bytes("a\nb\n") == base
+        # NFC normalisation: composed vs decomposed
+        assert canonical_text_bytes("e\u0301") == canonical_text_bytes("\u00e9")
+
+    def test_canonical_delivered_bytes_are_deterministic(self):
+        a = self._assemble()
+        b = self._assemble()
+        assert a.treatment_artifact.digest == b.treatment_artifact.digest
+
+    def test_assembly_uses_one_artifact_per_role(self):
+        b = self._assemble()
+        roles = {
+            b.behavioral_artifact.role,
+            b.task_outcome_artifact.role,
+            b.treatment_artifact.role,
+            b.delivery_artifact.role,
+            b.implementation_artifact.role,
+            b.lesson_block_artifact.role,
+        }
+        from qwen_train.f2_protocol import ROLE_DELIVERY_EVIDENCE, ROLE_LESSON_BLOCK
+
+        from qwen_train.f2_evidence import ROLE_RUN_LOG, ROLE_TEST_OUTPUT
+        from qwen_train.f2_governance import ROLE_EVALUATOR_IMPLEMENTATION
+
+        assert ROLE_DELIVERY_EVIDENCE in roles and ROLE_LESSON_BLOCK in roles
+        assert ROLE_EVALUATOR_IMPLEMENTATION in roles
+        assert ROLE_TEST_OUTPUT in roles and ROLE_RUN_LOG in roles

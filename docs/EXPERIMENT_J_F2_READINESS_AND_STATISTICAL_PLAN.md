@@ -775,23 +775,41 @@ the behavioural endpoint, and the paired within-task design.
   timestamps lexically (`str(r["timestamp"]) > ts`). It now parses both sides with
   `parse_canonical_timestamp` into timezone-aware UTC and compares datetimes,
   failing closed on malformed/naive values. 11 adversarial tests.
-* **BLOCKER B — delivered-byte binding: `NOT ESTABLISHED`.** The verifier checks
-  `sha256(retained treatment bytes) == delivery.treatment_artifact_hash`, which is
-  metadata consistency. It does **not** yet prove that the bytes at the live P2
-  model-facing seam equal the frozen treatment artifact. Closing this requires
-  binding the actual delivery-seam payload to the retained artifact.
-* **BLOCKER C — production bundle assembly: `NOT ESTABLISHED`.** The live worker
-  (`f2_arm_worker.py`) emits a rich *receipt* (`delivery_identity`,
-  `manifest_identity`, `tx_identity`, `p2_delivery_evidence`, `delivered_artifact`)
-  but does **not** assemble the governed `F2Bundle` (`behavioral_artifact`,
-  `task_outcome_artifact`, `treatment_artifact`, `delivery_artifact`,
-  `implementation_artifact`) that `regrade_f2_pair` consumes. The production path
-  therefore terminates at a receipt, not at independently regradable evidence.
-  These are engineering gaps, not authorization gaps.
+* **BLOCKER B — delivered-byte binding: CLOSED (mechanism).** `assemble_f2_bundle`
+  stores the **authoritative delivered seam text** (`f2_replay.get_delivery_artifact()`)
+  as the treatment artifact, in canonical form, so the verifier's
+  `sha256(retained treatment bytes) == delivery.treatment_artifact_hash` is a
+  **real delivered-byte binding** — the retained bytes ARE the bytes the
+  model-facing seam produced — not metadata consistency. Canonicalisation follows
+  the SOTA prompt-binding rule (`canonical_text_bytes`: UTF-8, no BOM, NFC, LF), so
+  whitespace/encoding/line-ending changes break the binding as intended.
+* **BLOCKER C — production bundle assembly: CLOSED (mechanism).** `assemble_f2_bundle`
+  is the missing production→bundle step: given the live seam bytes, ordered
+  behavioural records, task-outcome report, lesson block and evaluator
+  implementation, it writes every artifact into the trusted store and returns the
+  governed `F2Bundle` that `regrade_f2_pair` consumes. Proven by
+  `TestBundleAssembly` (9), including a full assemble→regrade round-trip and the
+  T/X clean room.
 
-> **No property above is upgraded to PROVEN merely because a test exists.** BLOCKER
-> B and C remain `NOT ESTABLISHED` until the live seam produces the governed
-> evidence bundle.
+**Remaining wiring (engineering, bounded):** `f2_arm_worker.py` must call
+`assemble_f2_bundle` with its receipt data (it already produces
+`delivery_identity`, `delivered_artifact`, `outcome_evidence`, and reads P2
+delivery evidence from the trajectory) and persist the bundle. Until that call is
+wired and exercised end-to-end, the *live* path is `NOT ESTABLISHED` even though
+the assembly and regrade mechanisms are PROVEN. This is a wiring step, not a
+scientific or authorization decision.
+
+> **No property above is upgraded to PROVEN merely because a test exists.** The
+> assembly and regrade mechanisms are PROVEN; the live end-to-end path remains
+> `NOT ESTABLISHED` until the worker emits the bundle.
+
+### What a digest proves (SOTA honesty)
+
+Per the current prompt-attestation standard, a digest binds the exact byte
+sequence and is **necessary, not sufficient**: it proves the retained bytes are
+unchanged and that they equal the canonical delivered bytes. It does not prove the
+execution was faithful, that the evaluator was honest, or that the trajectory is
+complete. Those remain `GOVERNANCE GAP` / `NOT ESTABLISHED` as recorded above.
 
 ### Artifact roles
 
