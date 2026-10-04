@@ -74,12 +74,18 @@ __all__ = [
     "register_result_protocol",
     "registered_result_protocols",
     "derive_result",
+    "evaluator_bytes_proven",
+    "ROLE_EVALUATOR_IMPLEMENTATION",
     "verify_execution_bundle",
     "verify_governed_pair",
     "GOVERNANCE_LIMITATIONS",
 ]
 
 BUNDLE_SCHEMA_VERSION = "f2_execution_bundle_v1"
+
+#: Artifact role for the evaluator implementation itself. Deliberately defined
+#: HERE, not in the frozen S8 module, so S8's role set is untouched.
+ROLE_EVALUATOR_IMPLEMENTATION = "evaluator_implementation"
 
 VALID_RESULTS = ("pass", "fail", "error")
 VALID_STATES = ("base", "gold")
@@ -327,14 +333,22 @@ class TrustedArtifactStore:
         except OSError as exc:
             return None, f"artifact unreadable: {name!r}: {exc}"
 
-    def verify_ref(self, ref: ArtifactRef) -> tuple[bool, str]:
+    def verify_ref(
+        self,
+        ref: ArtifactRef,
+        *,
+        allowed_roles: tuple[str, ...] = (ROLE_TEST_OUTPUT, ROLE_RUN_LOG),
+    ) -> tuple[bool, str]:
         """Containment + role + digest + size for one artifact reference."""
         if not ref.name:
             return False, "artifact reference has no name"
         if not _is_sha256(ref.digest):
             return False, f"artifact {ref.name!r} digest is not a SHA-256 hex string"
-        if ref.role not in (ROLE_TEST_OUTPUT, ROLE_RUN_LOG):
-            return False, f"artifact {ref.name!r} has an invalid role {ref.role!r}"
+        if ref.role not in allowed_roles:
+            return False, (
+                f"artifact {ref.name!r} has role {ref.role!r}, not one of "
+                f"{allowed_roles}"
+            )
         resolved, why = self.resolve(ref.name)
         if resolved is None:
             return False, why
@@ -458,13 +472,20 @@ class ExecutionBundle:
     run_log: ArtifactRef
     started_at: str
     finished_at: str
+    #: OPTIONAL. When supplied, the evaluator implementation BYTES are present in
+    #: the trusted store and are independently hashed and compared against
+    #: ``identity.evaluator_implementation_digest``. Without it, evaluator-byte
+    #: provenance is NOT ESTABLISHED (the registry check only proves that a
+    #: declared identity matches an authorized entry -- not that those bytes were
+    #: the ones that ran).
+    implementation_artifact: ArtifactRef | None = None
     schema_version: str = BUNDLE_SCHEMA_VERSION
 
     def artifact_refs(self) -> tuple[ArtifactRef, ArtifactRef]:
         return (self.test_output, self.run_log)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "schema_version": self.schema_version,
             "identity": self.identity.canonical_payload(),
             "declared_result": self.declared_result,
@@ -474,6 +495,9 @@ class ExecutionBundle:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
         }
+        if self.implementation_artifact is not None:
+            d["implementation_artifact"] = self.implementation_artifact.to_dict()
+        return d
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "ExecutionBundle":
@@ -482,6 +506,7 @@ class ExecutionBundle:
                 (d.get("identity") or {}).get("artifact_identities") or ()
             )}
         )
+        impl = d.get("implementation_artifact")
         return cls(
             identity=ident,
             declared_result=str(d.get("declared_result") or ""),
@@ -490,8 +515,22 @@ class ExecutionBundle:
             run_log=ArtifactRef.from_dict(d.get("run_log") or {}),
             started_at=str(d.get("started_at") or ""),
             finished_at=str(d.get("finished_at") or ""),
+            implementation_artifact=(
+                ArtifactRef.from_dict(impl) if impl is not None else None
+            ),
             schema_version=str(d.get("schema_version") or ""),
         )
+
+
+def _artifact_identity(ref: ArtifactRef) -> str:
+    """Canonical descriptor for ONE artifact, bound into the execution identity.
+
+    Binds the artifact's CRYPTOGRAPHIC identity (role, name, digest, size), not
+    merely its pathname: mutating artifact bytes without changing the name MUST
+    change the execution identity digest.
+    """
+    size = "" if ref.size_bytes is None else str(int(ref.size_bytes))
+    return f"{ref.role}|{ref.name}|{ref.digest}|{size}"
 
 
 def build_execution_identity(
@@ -507,12 +546,15 @@ def build_execution_identity(
     test_output: ArtifactRef,
     run_log: ArtifactRef,
 ) -> ExecutionIdentity:
-    """Derive the immutable identity from the execution facts and its artifacts."""
+    """Derive the immutable identity from the execution facts and its artifacts.
+
+    ``artifact_identities`` binds role + name + digest + size for every artifact,
+    deterministically ordered. Identity binds *what artifacts were intended*;
+    :meth:`TrustedArtifactStore.verify_ref` proves *what bytes were actually
+    retained*. The two are complementary, not redundant.
+    """
     identities = tuple(
-        sorted(
-            f"{ref.role}:{ref.name}"
-            for ref in (test_output, run_log)
-        )
+        sorted(_artifact_identity(ref) for ref in (test_output, run_log))
     )
     return ExecutionIdentity(
         instance_id=instance_id,
@@ -642,6 +684,25 @@ def _to_s8_record(bundle: ExecutionBundle, derived_result: str):
     )
 
 
+def evaluator_bytes_proven(
+    bundle: ExecutionBundle, store: TrustedArtifactStore
+) -> bool:
+    """True only when the evaluator implementation BYTES are independently proven.
+
+    This is a strictly separate claim from registry authorization. Registry
+    authorization proves *a declared identity matches an authorized entry*; it
+    does NOT prove that those bytes were the ones that ran. Byte provenance
+    requires the implementation artifact to be present in the trusted store and
+    to hash to the authorized implementation digest. When it is absent, the
+    answer is ``False`` -- NOT ESTABLISHED, never assumed.
+    """
+    if bundle is None or bundle.implementation_artifact is None:
+        return False
+    impl = bundle.implementation_artifact
+    ok, _ = store.verify_ref(impl, allowed_roles=(ROLE_EVALUATOR_IMPLEMENTATION,))
+    return bool(ok and impl.digest == bundle.identity.evaluator_implementation_digest)
+
+
 def verify_execution_bundle(
     bundle: ExecutionBundle | Mapping[str, Any] | None,
     *,
@@ -686,6 +747,25 @@ def verify_execution_bundle(
         ok, why = store.verify_ref(ref)
         if not ok:
             return _gov_fail(_artifact_state(why), why)
+
+    # Layer 3b: evaluator implementation BYTES, when the producer supplies them.
+    # Absence is NOT an error -- it means byte provenance is NOT ESTABLISHED
+    # (see evaluator_bytes_proven); the registry check above still stands.
+    if bundle.implementation_artifact is not None:
+        impl = bundle.implementation_artifact
+        ok, why = store.verify_ref(
+            impl, allowed_roles=(ROLE_EVALUATOR_IMPLEMENTATION,)
+        )
+        if not ok:
+            return _gov_fail(
+                _artifact_state(why), f"evaluator implementation artifact: {why}"
+            )
+        if impl.digest != bundle.identity.evaluator_implementation_digest:
+            return _gov_fail(
+                STATE_UNAUTHORIZED_PROCEDURE,
+                "the retained evaluator implementation bytes do not match the "
+                "authorized implementation digest in the execution identity",
+            )
 
     # Layer 5: DERIVE the result from retained evidence. Never trust the JSON.
     derived, why = derive_result(bundle, store)

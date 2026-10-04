@@ -35,13 +35,16 @@ from qwen_train.f2_evidence import (
     ArtifactRef,
     EvidenceVerification,
 )
-from qwen_train.f2_governance import (    EvaluatorAuthorization,
+from qwen_train.f2_governance import (
+    ROLE_EVALUATOR_IMPLEMENTATION,
+    EvaluatorAuthorization,
     EvaluatorRegistry,
     ExecutionBundle,
     RetentionPolicy,
     TrustedArtifactStore,
     build_execution_identity,
     derive_result,
+    evaluator_bytes_proven,
     registered_result_protocols,
     verify_execution_bundle,
     verify_governed_pair,
@@ -491,3 +494,124 @@ class TestGoldInformationBoundary:
         for key in ("authorized_evaluator", "result_derivation", "artifact_store",
                     "run_identity", "reexecution"):
             assert key in GOVERNANCE_LIMITATIONS
+
+class TestArtifactBindingIntoIdentity:
+    """Fix 1: the execution identity binds artifact digest + size, not just name."""
+
+    def _ident(self, out, log, **over):
+        return build_execution_identity(
+            instance_id=over.pop("instance_id", TASK),
+            repository=over.pop("repository", REPO),
+            base_commit=over.pop("base_commit", BASE),
+            execution_state_identity="base",
+            execution_state_digest="b" * 64,
+            evaluator=AUTH,
+            environment_identity="e",
+            test_command="c",
+            test_output=out,
+            run_log=log,
+        )
+
+    OUT = ArtifactRef("t.out", "c" * 64, 10, ROLE_TEST_OUTPUT)
+    LOG = ArtifactRef("r.log", "d" * 64, 20, ROLE_RUN_LOG)
+
+    def test_1_identical_descriptions_identical_identity(self):
+        assert self._ident(self.OUT, self.LOG).digest() == self._ident(self.OUT, self.LOG).digest()
+
+    def test_2_timestamp_only_mutation_identical_identity(self):
+        # Identity has no timestamp input at all; two calls differ only in the
+        # (absent) clock, so the digest is stable.
+        assert self._ident(self.OUT, self.LOG).digest() == self._ident(self.OUT, self.LOG).digest()
+
+    def test_3_test_output_digest_mutation_changes_identity(self):
+        mutated = ArtifactRef("t.out", "e" * 64, 10, ROLE_TEST_OUTPUT)
+        assert self._ident(self.OUT, self.LOG).digest() != self._ident(mutated, self.LOG).digest()
+
+    def test_4_test_output_size_mutation_changes_identity(self):
+        mutated = ArtifactRef("t.out", "c" * 64, 11, ROLE_TEST_OUTPUT)
+        assert self._ident(self.OUT, self.LOG).digest() != self._ident(mutated, self.LOG).digest()
+
+    def test_5_run_log_digest_mutation_changes_identity(self):
+        mutated = ArtifactRef("r.log", "f" * 64, 20, ROLE_RUN_LOG)
+        assert self._ident(self.OUT, self.LOG).digest() != self._ident(self.OUT, mutated).digest()
+
+    def test_6_run_log_size_mutation_changes_identity(self):
+        mutated = ArtifactRef("r.log", "d" * 64, 21, ROLE_RUN_LOG)
+        assert self._ident(self.OUT, self.LOG).digest() != self._ident(self.OUT, mutated).digest()
+
+    def test_7_artifact_role_mutation_changes_identity(self):
+        mutated = ArtifactRef("t.out", "c" * 64, 10, ROLE_RUN_LOG)
+        assert self._ident(self.OUT, self.LOG).digest() != self._ident(mutated, self.LOG).digest()
+
+    def test_8_artifact_name_mutation_changes_identity(self):
+        mutated = ArtifactRef("t2.out", "c" * 64, 10, ROLE_TEST_OUTPUT)
+        assert self._ident(self.OUT, self.LOG).digest() != self._ident(mutated, self.LOG).digest()
+
+    def test_identity_descriptor_contains_digest_and_size(self):
+        idents = self._ident(self.OUT, self.LOG).artifact_identities
+        joined = " ".join(idents)
+        assert ("c" * 64) in joined and ("d" * 64) in joined
+        assert "10" in joined and "20" in joined
+
+
+class TestEvaluatorImplementationBytes:
+    """Fix 2: byte provenance is a SEPARATE claim from registry authorization."""
+
+    def test_absent_implementation_artifact_is_not_proven(self):
+        b = _bundle("base", "fail", tag="-noimpl")
+        assert b.implementation_artifact is None
+        assert evaluator_bytes_proven(b, _store()) is False
+        # Registry authorization still holds, so the bundle still verifies.
+        assert _verify(b).state == STATE_VERIFIED
+
+    def test_present_matching_implementation_bytes_are_proven(self):
+        impl_bytes = b"# evaluator implementation\nprint('run')\n"
+        impl = _write("impl.py", impl_bytes, ROLE_EVALUATOR_IMPLEMENTATION)
+        auth = EvaluatorAuthorization(
+            "f2_base_gold_runner", "v1",
+            hashlib.sha256(impl_bytes).hexdigest(), "f2_base_gold_eval", "proto_v1",
+        )
+        b = _bundle("base", "fail", tag="-impl", evaluator=auth)
+        b = ExecutionBundle(
+            identity=b.identity, declared_result=b.declared_result,
+            result_protocol_id=b.result_protocol_id, test_output=b.test_output,
+            run_log=b.run_log, started_at=b.started_at, finished_at=b.finished_at,
+            implementation_artifact=impl,
+        )
+        assert evaluator_bytes_proven(b, _store()) is True
+        assert _verify(b, registry=_registry((auth,))).state == STATE_VERIFIED
+
+    def test_mismatched_implementation_bytes_fail_closed(self):
+        impl_bytes = b"# a DIFFERENT evaluator\n"
+        impl = _write("impl_bad.py", impl_bytes, ROLE_EVALUATOR_IMPLEMENTATION)
+        b = _bundle("base", "fail", tag="-implbad")
+        b = ExecutionBundle(
+            identity=b.identity, declared_result=b.declared_result,
+            result_protocol_id=b.result_protocol_id, test_output=b.test_output,
+            run_log=b.run_log, started_at=b.started_at, finished_at=b.finished_at,
+            implementation_artifact=impl,
+        )
+        assert evaluator_bytes_proven(b, _store()) is False
+        assert _verify(b).state == STATE_UNAUTHORIZED_PROCEDURE
+
+    def test_missing_implementation_file_fails_closed(self):
+        impl = ArtifactRef("absent_impl.py", "a" * 64, 5, ROLE_EVALUATOR_IMPLEMENTATION)
+        b = _bundle("base", "fail", tag="-implmissing")
+        b = ExecutionBundle(
+            identity=b.identity, declared_result=b.declared_result,
+            result_protocol_id=b.result_protocol_id, test_output=b.test_output,
+            run_log=b.run_log, started_at=b.started_at, finished_at=b.finished_at,
+            implementation_artifact=impl,
+        )
+        assert _verify(b).state == STATE_ARTIFACT_MISSING
+
+    def test_implementation_artifact_role_is_enforced(self):
+        impl = ArtifactRef("t.out", "c" * 64, 1, ROLE_TEST_OUTPUT)  # wrong role
+        b = _bundle("base", "fail", tag="-implrole")
+        b = ExecutionBundle(
+            identity=b.identity, declared_result=b.declared_result,
+            result_protocol_id=b.result_protocol_id, test_output=b.test_output,
+            run_log=b.run_log, started_at=b.started_at, finished_at=b.finished_at,
+            implementation_artifact=impl,
+        )
+        assert _verify(b).state == STATE_MALFORMED

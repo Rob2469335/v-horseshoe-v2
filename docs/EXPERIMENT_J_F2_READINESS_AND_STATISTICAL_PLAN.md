@@ -582,25 +582,32 @@ retained evidence permits and states plainly what it still cannot establish.
 ### Evidence classification
 
 **PROVEN** (implementation + tests): evaluator authorization fails closed on
-every component; evaluator implementation digest is bound and mutation-sensitive;
+every component; the evaluator implementation digest **format** is validated;
 execution identity is deterministic and mutation-sensitive while timestamps are
-excluded; trusted root containment and artifact integrity; role binding;
-independent derivation rejects a false declaration; forged JSON verification
-fields are ignored; direct construction of a verification result is refused;
-schema fails closed; gold material does not enter the identity; no network or
-execution in the verification path.
+excluded; **the execution identity binds each artifact's role, name, digest AND
+size**, so mutating artifact bytes without changing the name changes the identity;
+trusted-root containment and artifact integrity; role binding; independent
+derivation rejects a false declaration; forged JSON verification fields are
+ignored; direct construction of a verification result is refused; schema fails
+closed; gold material does not enter the identity; no network or execution in the
+verification path.
 
 **SUPPORTED** (architecture, depends on controlled deployment): that a real
 executor emits conforming bundles; that a real artifact store is operated
 immutably.
 
-**INFERRED:** the composition S8 + governance is sufficient for admission once an
-authorized protocol exists.
-
 **NOT ESTABLISHED:** that any *real* execution occurred — no evidence exists;
-`S8` passes 0/14. `RECONSTRUCTABLE_IDENTITY` holds; `VERIFIABLE_ARTIFACTS` holds;
-`DERIVABLE_RESULT` holds only for a registered protocol; full `REEXECUTION` is
-intentionally not performed.
+`S8` passes 0/14. **Evaluator-byte provenance is NOT ESTABLISHED unless the
+implementation artifact is supplied and independently hashed**: the registry
+check proves only that a *declared* identity matches an authorized entry, not
+that those bytes were the ones that ran. The bundle accepts an optional
+`implementation_artifact`; when present it is verified in the trusted store and
+its digest must equal the authorized implementation digest
+(`evaluator_bytes_proven`). When absent, the claim is `False` — never assumed.
+Filesystem immutability of the store is likewise `NOT ESTABLISHED` (requires
+OS/operator-level controls). `RECONSTRUCTABLE_IDENTITY` holds;
+`VERIFIABLE_ARTIFACTS` holds; `DERIVABLE_RESULT` holds only for a registered
+protocol; full `REEXECUTION` is intentionally not performed.
 
 **GOVERNANCE GAP:** the authorized evaluator identity and implementation digest;
 the real result-derivation protocol and its format; the trusted store location and
@@ -609,6 +616,10 @@ independent-verifier authority.
 
 **REQUIRES AUTHORIZATION:** naming the authorized evaluator/procedure and
 protocol, provisioning the trusted store, and generating any real evidence.
+
+> A SHA-256-shaped `implementation_digest` string does **not** prove evaluator
+> implementation provenance. That would be a false scientific claim; it is
+> recorded as `NOT ESTABLISHED` above, not as `PROVEN`.
 
 ---
 
