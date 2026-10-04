@@ -7,7 +7,9 @@ it must never return anything but booleans (no path/argument/content).
 """
 from __future__ import annotations
 
-from runtime_v2.api.execution_measurement import measure_mutation
+import pytest
+
+from runtime_v2.api.execution_measurement import measure_mutation, pair_observation_ok
 
 
 def _call(name: str, op: str | None = None, ok: bool | None = None) -> dict:
@@ -75,6 +77,74 @@ class TestIndirectAndUnknown:
     def test_known_non_mutating_tools_are_false(self):
         calls = [_call("web_search"), _call("lsp"), _call("filesystem", "read", True)]
         assert measure_mutation(calls) == (False, False)
+
+
+class TestOperationAliases:
+    """The alias sets must track the executor, not a sample (SOTA: fail closed
+    on ambiguous resolution, but recognize the operations the runtime accepts)."""
+
+    @pytest.mark.parametrize("op", [
+        "write", "write_file", "create", "create_file", "save", "put",
+        "patch", "edit", "edit_file", "update", "modify", "modify_file",
+        "replace", "replace_file_content",
+    ])
+    def test_mutation_alias_detected(self, op):
+        assert measure_mutation([_call("filesystem", op, True)]) == (True, True)
+
+    @pytest.mark.parametrize("op", [
+        "read", "read_file", "read_graph", "view", "cat", "get", "glob",
+        "list", "ls", "tree", "walk", "grep", "search", "find", "stat",
+    ])
+    def test_read_alias_is_not_a_mutation(self, op):
+        assert measure_mutation([_call("filesystem", op, True)]) == (False, False)
+
+
+class TestObservationPairing:
+    """tool_call_id <-> source_call_id correlation (ATSC/AER-style identity)."""
+
+    def test_pairs_each_call_to_its_own_result(self):
+        step = {
+            "step_id": 7,
+            "tool_calls": [
+                {"tool_call_id": "r:1", "function_name": "filesystem",
+                 "arguments": {"operation": "write"}},
+                {"tool_call_id": "r:2", "function_name": "filesystem",
+                 "arguments": {"operation": "read"}},
+            ],
+            "observation": {"results": [
+                {"source_call_id": "r:1", "extra": {"ok": True}},
+                {"source_call_id": "r:2", "extra": {"ok": False}},
+            ]},
+        }
+        paired = pair_observation_ok(step)
+        assert paired[0]["extra"]["observation_ok"] is True
+        assert paired[1]["extra"]["observation_ok"] is False
+        assert paired[0]["extra"]["step_id"] == 7
+
+    def test_multi_call_cannot_mispair(self):
+        step = {
+            "step_id": 1,
+            "tool_calls": [{"tool_call_id": "r:1", "function_name": "filesystem",
+                            "arguments": {"operation": "write"}}],
+            "observation": {"results": [{"source_call_id": "r:2", "extra": {"ok": True}}]},
+        }
+        paired = pair_observation_ok(step)
+        assert paired[0]["extra"]["observation_ok"] is None  # unmatched -> UNKNOWN
+        assert measure_mutation(paired) == (True, None)
+
+    def test_unkeyed_single_result_applies(self):
+        step = {
+            "step_id": 1,
+            "tool_calls": [{"function_name": "filesystem", "arguments": {"operation": "patch"}}],
+            "observation": {"results": [{"extra": {"ok": True}}]},
+        }
+        assert measure_mutation(pair_observation_ok(step)) == (True, True)
+
+    def test_missing_observation_is_unknown(self):
+        step = {"step_id": 1, "tool_calls": [
+            {"tool_call_id": "r:1", "function_name": "filesystem",
+             "arguments": {"operation": "write"}}]}
+        assert measure_mutation(pair_observation_ok(step)) == (True, None)
 
 
 class TestMeasurementCarriesNoPayload:

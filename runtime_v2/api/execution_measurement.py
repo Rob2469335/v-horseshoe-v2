@@ -33,12 +33,25 @@ from __future__ import annotations
 
 from typing import Iterable
 
-#: filesystem operations that mutate the source tree.
-_SOURCE_MUTATION_OPS = frozenset({"write", "create", "patch", "edit", "modify", "replace"})
+#: filesystem operations that mutate the source tree. These are the aliases the
+#: execution boundary actually accepts (``swarm_os/lib/mcp/filesystem.py:34-45``,
+#: ``runtime_v2/services/tool_executor.py:597``). An alias omitted here would be
+#: misread as UNKNOWN; the set must track the executor, not a sample.
+_SOURCE_MUTATION_OPS = frozenset({
+    "write", "write_file", "create", "create_file", "save", "put",
+    "patch", "edit", "edit_file", "update", "modify", "modify_file",
+    "replace", "replace_file_content",
+})
 
-#: filesystem operations that cannot mutate the source tree.
+#: filesystem operations that cannot mutate the source tree (read aliases the
+#: executor accepts; ``filesystem.py:27-67``).
 _READ_ONLY_OPS = frozenset({
-    "read", "read_all", "glob", "list", "grep", "search", "exists", "stat", "ls", "find",
+    "read", "read_all", "read_file", "read_graph", "view", "view_file", "cat",
+    "get", "get_file", "glob", "wildcard", "match", "pattern",
+    "list", "list_files", "list_dir", "ls", "dir", "directory",
+    "list_directory", "scandir", "scan_dir", "walk", "tree",
+    "directory_tree", "tree_view",
+    "search", "grep", "find", "grep_search", "search_files", "exists", "stat", "info",
 })
 
 #: tools that can mutate source INDIRECTLY (opaque shell / MCP / git). When one
@@ -56,6 +69,41 @@ _NON_MUTATING_TOOLS = frozenset({
 
 #: The tool whose ``arguments.operation`` carries structured operation semantics.
 _STRUCTURED_MUTATION_TOOL = "filesystem"
+
+
+def pair_observation_ok(step: dict) -> list[dict]:
+    """Return a step's tool calls, each paired with ITS OWN observation success.
+
+    Pairing is by ``tool_call_id`` <-> ``source_call_id`` (ATSC/AER-style
+    identity correlation), so a multi-call step cannot mispair operation A with
+    result B. A call with no matching result — or a result with no ``extra.ok`` —
+    gets ``observation_ok=None`` (UNKNOWN), never a guessed success. A single
+    un-keyed result is applied to the call (legacy records).
+    """
+    if not isinstance(step, dict):
+        return []
+    results = ((step.get("observation") or {}).get("results")) or []
+    ok_by_call: dict[str, object] = {}
+    unkeyed_ok = None
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        ok = (r.get("extra") or {}).get("ok")
+        sid = str(r.get("source_call_id") or "")
+        if sid:
+            ok_by_call[sid] = ok
+        elif unkeyed_ok is None:
+            unkeyed_ok = ok
+    paired: list[dict] = []
+    for tc in step.get("tool_calls", []):
+        if not isinstance(tc, dict):
+            continue
+        cid = str(tc.get("tool_call_id") or "")
+        extra = dict(tc.get("extra") or {})
+        extra["step_id"] = step.get("step_id", 0)
+        extra["observation_ok"] = ok_by_call.get(cid, unkeyed_ok)
+        paired.append({**tc, "extra": extra})
+    return paired
 
 
 def measure_mutation(

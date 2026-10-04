@@ -169,6 +169,17 @@ class TestBuildHypothesizedAction:
         assert "attempted" in action
         assert "correct location" in action
 
+    def test_unknown_is_not_rendered_as_no_edit(self):
+        """UNKNOWN must not be asserted as a factual 'no edit' (tri-state honest)."""
+        unknown = _build_hypothesized_action(_n1_failure(mutation_attempted=None))
+        no_edit = _build_hypothesized_action(_n1_failure(mutation_attempted=False))
+        attempted = _build_hypothesized_action(_n1_failure(mutation_attempted=True))
+        assert unknown != no_edit
+        assert unknown != attempted
+        assert "did not establish" in unknown
+        assert "filesystem patch" not in unknown  # not the no-edit branch
+        assert "correct location" not in unknown  # not the edit-failed branch
+
     def test_no_gold_patch_content(self):
         ef = _n1_failure()
         action = _build_hypothesized_action(ef)

@@ -926,6 +926,11 @@ def main() -> int:
     # The trajectory file is named by run_id and contains the real ATIF
     # step records needed for endpoint detection.  res["tools_used"] only
     # carries string tool names and is insufficient for endpoint scanning.
+    from runtime_v2.api.execution_measurement import (
+        measure_mutation,
+        pair_observation_ok,
+    )
+
     _atif_steps = []
     _run_ids = res.get("run_ids") or []
     if _run_ids:
@@ -940,17 +945,12 @@ def main() -> int:
                             continue
                         _d = json.loads(_line)
                         if _d.get("record_type") == "step":
-                            # Carry the observation's success flag onto each tool
-                            # call so the mutation measurement can pair a
-                            # dispatched operation with its outcome.
-                            _results = (_d.get("observation") or {}).get("results") or []
-                            _obs_ok = None
-                            if _results and isinstance(_results[0], dict):
-                                _obs_ok = (_results[0].get("extra") or {}).get("ok")
-                            for _tc in _d.get("tool_calls", []):
-                                _tc.setdefault("extra", {})["step_id"] = _d.get("step_id", 0)
-                                _tc["extra"]["observation_ok"] = _obs_ok
-                                _atif_steps.append(_tc)
+                            # Pair each tool call with ITS OWN observation result
+                            # by tool_call_id <-> source_call_id (see
+                            # execution_measurement.pair_observation_ok), so a
+                            # multi-call step cannot mispair operation A with
+                            # result B. Unmatched -> observation_ok=None (UNKNOWN).
+                            _atif_steps.extend(pair_observation_ok(_d))
 
     # Build raw observation from CLI result
     _raw_obs = f1i.RawObservation(
@@ -1017,8 +1017,6 @@ def main() -> int:
     # filesystem ``arguments.operation`` + observation ``ok``). Bounded booleans
     # only — no path, argument or content leaves this function. ``None`` means
     # UNKNOWN (e.g. an indirect sandbox_repl/mcp edit), never a guessed False.
-    from runtime_v2.api.execution_measurement import measure_mutation
-
     _mut_attempted, _mut_succeeded = measure_mutation(_atif_steps)
     res["mutation_attempted"] = _mut_attempted
     res["mutation_succeeded"] = _mut_succeeded

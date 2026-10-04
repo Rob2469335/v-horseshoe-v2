@@ -51,7 +51,8 @@ failure (verified)
   │     verdict fields present since 5f703869 but consulted FIRST
   │
   ├─ _build_failure_reason()      :66-86   provenance prose  (trigger)
-  ├─ _build_hypothesized_action() :89-91   2 canned strings (action)
+  ├─ _build_hypothesized_action()           3 tri-state strings (action):
+  │     attempted / no-edit / UNKNOWN (distinct; never conflated)
   │
   └─ process_failure()            prompt_repairer.py:1196-1294
         guards: model_variability, is_safe_lesson, task_id non-empty,
@@ -215,6 +216,21 @@ booleans cross into evidence — never a path, argument, command or content.
   failed; None = unknown.
 * `source_changed` — a **separate**, independent git-diff measurement; never
   derived from the above.
+
+**Operation coverage.** `_SOURCE_MUTATION_OPS` / `_READ_ONLY_OPS` track the
+aliases the executor actually accepts (`write_file`, `save`, `put`, `edit_file`,
+`update`, `replace_file_content`, `read_file`, `read_graph`, `tree`, …), so a
+legitimate mutation is not misread as UNKNOWN; an operation in neither set is
+UNKNOWN (fail closed).
+
+**Observation pairing.** Each tool call is paired with its own observation result
+by `tool_call_id` ↔ `source_call_id`
+(`execution_measurement.pair_observation_ok`), so a multi-call step cannot
+mispair operation A with result B; an unmatched call is UNKNOWN.
+
+**Downstream honesty.** `_build_hypothesized_action` renders the tri-state
+faithfully: UNKNOWN gets a distinct hypothesis asserting neither "edit attempted"
+nor "no edit".
 
 `derive_features` keeps the outcomes distinct: `edit_without_effect` (attempted,
 no source change, tests still failing) and `edit_ineffective` (source changed,

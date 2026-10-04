@@ -132,17 +132,29 @@ def _build_failure_reason(ef: EvaluationFailure) -> str:
 
 
 def _build_hypothesized_action(ef: EvaluationFailure) -> str:
-    """Construct generic behavioral guidance. Never includes file/line/patch."""
+    """Construct generic behavioral guidance. Never includes file/line/patch.
+
+    Tri-state honest: a ``None`` (UNKNOWN) measurement must NOT be rendered as
+    "no edit" — that would turn an indeterminate observation into a factual
+    claim. UNKNOWN gets a distinct hypothesis that asserts neither branch.
+    """
     if ef.mutation_attempted is True:
         return (
             "The agent attempted a source modification but it did not resolve the "
             "failing tests. Review the test failures and the agent's approach to "
             "determine whether the modification targeted the correct location."
         )
+    if ef.mutation_attempted is False:
+        return (
+            "After researching the problem and gathering sufficient information, "
+            "apply the fix with filesystem patch or filesystem write. Do not spend "
+            "all turns on investigation without transitioning to code modification."
+        )
     return (
-        "After researching the problem and gathering sufficient information, "
-        "apply the fix with filesystem patch or filesystem write. Do not spend "
-        "all turns on investigation without transitioning to code modification."
+        "The run ended with the declared tests still failing, but the execution "
+        "telemetry did not establish whether a source modification was attempted. "
+        "Verify the actual repository change and the failing tests before drawing "
+        "any conclusion about whether an edit was attempted."
     )
 
 
