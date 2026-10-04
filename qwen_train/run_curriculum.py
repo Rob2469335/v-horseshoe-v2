@@ -30,6 +30,7 @@ import argparse
 import ast
 import json
 import math
+import os
 import random
 import re
 import subprocess
@@ -39,6 +40,37 @@ from pathlib import Path
 from typing import Callable
 
 _HERE = Path(__file__).resolve().parent
+
+
+def _p3_process_binding() -> tuple[str, dict | None]:
+    """(cwd, env) for the P3 task CLI so it operates on the authoritative task
+    workspace rather than the main repository.
+
+    The task workspace is ``SWARM_WORKSPACE_ROOT`` (the same authoritative root
+    ``swarm_os.lib.paths.agent_workspace_root`` gives the filesystem/sandbox
+    tools). When it is set, the P3 CLI runs with ``cwd == that workspace`` so a
+    RELATIVE filesystem operation resolves inside the isolated arm workspace,
+    never the main checkout. The console package is kept importable by adding
+    the code root to ``PYTHONPATH`` (code root != task root; F2 design §5).
+
+    Fail closed: a set-but-invalid ``SWARM_WORKSPACE_ROOT`` (relative or absent)
+    raises rather than silently falling back to the main repository. When unset
+    (no isolated task), behaviour is unchanged: cwd = code root, env inherited.
+    """
+    code_root = _HERE.parent
+    env_root = os.environ.get("SWARM_WORKSPACE_ROOT")
+    if not env_root:
+        return str(code_root), None
+    ws = Path(env_root)
+    if not ws.is_absolute() or not ws.is_dir():
+        raise ValueError(
+            "SWARM_WORKSPACE_ROOT must be an absolute existing directory; "
+            f"got {env_root!r}"
+        )
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = str(code_root) + (os.pathsep + existing if existing else "")
+    return str(ws), env
 CURRICULUM = _HERE / "curriculum" / "tool_curriculum.jsonl"
 GENERATED = _HERE / "curriculum" / "generated.jsonl"
 HOLDOUT = _HERE / "curriculum" / "holdout.jsonl"  # frozen eval split (never trained on)
@@ -278,14 +310,19 @@ def _attempt_once(item: dict, timeout: int, allow_approval: bool, record: bool) 
     # so a hung run left no trail at all. The documented Popen pattern below
     # (kill, then re-communicate) DOES return the buffered output, which is what
     # makes a timeout diagnosable instead of a blank mystery.
+    # Bind the P3 task process to the authoritative workspace (cwd) so relative
+    # filesystem operations resolve inside the isolated arm workspace, not the
+    # main repository. Fail closed if the declared workspace is invalid.
+    _cwd, _env = _p3_process_binding()
     proc = subprocess.Popen(
         [sys.executable, "-m", "organism_console", "--json", prompt],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
-        cwd=str(_HERE.parent),
-)
+        cwd=_cwd,
+        env=_env,
+    )
     
     # Health check state at timeout (initialized to True; only overwritten on timeout)
     backend_at_timeout = True
