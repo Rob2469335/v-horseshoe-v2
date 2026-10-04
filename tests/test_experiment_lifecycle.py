@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from swarm_os.services.prompt_repairer import CandidateState, PromptRepairer
+from swarm_os.services.lesson_synthesis import SynthesisAttestation
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +38,41 @@ def _create_eligible_candidate(repairer, task_id="taskA", trigger="fix", action=
     cand = repairer._candidates[cid]
     cand["status"] = CandidateState.CANDIDATE.value
     return cid
+
+
+def _attach_matching_synthesis(repairer, cid: str) -> None:
+    """Attach the validated synthesis now required by ``promote()``.
+
+    Test-only: mirrors the matching-provenance attestation pattern used by
+    ``tests/test_learner_artifact_derivation.py`` and ``tests/test_prompt_repairer.py``.
+    The production ``no_validated_synthesis`` gate is untouched; this simply
+    supplies the prerequisite the tests' promotion path now needs.
+    """
+    cand = repairer._candidates[cid]
+    tasks = [str(t) for t in cand.get("evidence_tasks", []) if t]
+    rollouts = [
+        str(e.get("rollout_id") or e.get("run_id") or "")
+        for e in cand.get("evidence_runs", [])
+        if isinstance(e, dict)
+    ]
+    rollouts = [r for r in rollouts if r]
+    att = SynthesisAttestation(
+        synthesis_version="ej-lesson-synthesis/2",
+        principle_text=(
+            "Before modifying a dependency-facing call, verify the currently "
+            "supported argument contract and update every caller to match the "
+            "observed behaviour."
+        ),
+        feature_codes=("edit_without_effect",),
+        mechanism="test-seeded mechanism",
+        evidence_ref=f"rollout:{rollouts[0] if rollouts else ''};task:{tasks[0] if tasks else ''}",
+        validator_id="ej-independent-lesson-validator/1",
+        validator_passed=True,
+        task_id=tasks[0] if tasks else "",
+        rollout_id=rollouts[0] if rollouts else "",
+    )
+    out = repairer.attach_synthesis(cid, att)
+    assert out == "synthesis_attached", out
 
 
 class TestLifecycleIsolation:
@@ -130,6 +166,7 @@ class TestEvidenceIdentityCount:
                                  rollout_id="rollC")
         cid = list(repairer._candidates.keys())[0]
         assert repairer._candidates[cid]["status"] == CandidateState.CANDIDATE.value
+        _attach_matching_synthesis(repairer, cid)
 
         async def pass_eval(c):
             return {"pass": True}
@@ -148,6 +185,7 @@ class TestEvidenceIdentityCount:
         repairer.process_failure("run3", "coder", "t", self.vi, task_id="t3")
         cid = list(repairer._candidates.keys())[0]
         assert repairer._candidates[cid]["status"] == CandidateState.CANDIDATE.value
+        _attach_matching_synthesis(repairer, cid)
 
         async def pass_eval(c):
             return {"pass": True}

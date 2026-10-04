@@ -25,16 +25,39 @@ VALID_PRINCIPLE = (
 )
 
 
-def valid_synthesis(text: str = VALID_PRINCIPLE) -> dict:
+def valid_synthesis(
+    text: str = VALID_PRINCIPLE,
+    *,
+    task_id: str = "taskA",
+    rollout_id: str = "run1",
+) -> dict:
     return SynthesisAttestation(
-        synthesis_version="ej-lesson-synthesis/1",
+        synthesis_version="ej-lesson-synthesis/2",
         principle_text=text,
         feature_codes=("edit_without_effect",),
         mechanism="test-seeded mechanism",
-        evidence_ref="rollout:test;task:test",
+        evidence_ref=f"rollout:{rollout_id};task:{task_id}",
         validator_id="ej-independent-lesson-validator/1",
         validator_passed=True,
+        task_id=task_id,
+        rollout_id=rollout_id,
     ).to_dict()
+
+
+def _attestation_for_candidate(repairer, cid: str) -> SynthesisAttestation | None:
+    """A valid attestation whose provenance matches the candidate's own."""
+    cand = repairer._candidates[cid]
+    tasks = [str(t) for t in cand.get("evidence_tasks", []) if t]
+    rollouts = [
+        str(e.get("rollout_id") or e.get("run_id") or "")
+        for e in cand.get("evidence_runs", [])
+        if isinstance(e, dict)
+    ]
+    rollouts = [r for r in rollouts if r]
+    return SynthesisAttestation.from_dict(valid_synthesis(
+        task_id=tasks[0] if tasks else "",
+        rollout_id=rollouts[0] if rollouts else "",
+    ))
 
 
 def attach_valid_synthesis(repairer, cid: str | None = None) -> str:
@@ -42,9 +65,9 @@ def attach_valid_synthesis(repairer, cid: str | None = None) -> str:
         cands = list(repairer._candidates.values())
         assert cands, "no candidate to attach synthesis to"
         cid = cands[0]["id"]
-    out = repairer.attach_synthesis(
-        cid, SynthesisAttestation.from_dict(valid_synthesis())
-    )
+    att = _attestation_for_candidate(repairer, cid)
+    assert att is not None
+    out = repairer.attach_synthesis(cid, att)
     assert out == "synthesis_attached", out
     return cid
 
@@ -60,9 +83,10 @@ def set_synthesis_direct(repairer, cid: str, text: str = VALID_PRINCIPLE) -> Non
 
     Tests that construct a candidate already in PROMOTABLE state are simulating a
     hand-edited candidates.json. `attach_synthesis` correctly refuses that
-    ("already_evaluated"), because re-attesting after evaluation would decouple
-    the evaluated text from the promoted text -- so these tests set the field
-    directly, which is exactly what an attacker or a stale file would contain.
+    (``not_attachable_in_state``), because re-attesting after evaluation would
+    decouple the evaluated text from the promoted text -- so these tests set the
+    field directly, which is exactly what an attacker or a stale file would
+    contain.
     The promotion gates must still reject them on their own merits.
     """
     repairer._candidates[cid]["synthesis"] = valid_synthesis(text)
@@ -277,7 +301,8 @@ async def test_300_token_limit_enforcement(repairer):
     The budget is enforced at attach time as well, so the gate is proven as
     defence in depth: the oversized principle is forced onto the candidate here,
     bypassing `attach_synthesis`, and `promote` must still reject it. See
-    `test_attach_synthesis.py::test_oversized_principle_refused_at_attach` for the
+    `test_learner_artifact_derivation.py::TestActionOverflowGate::
+    test_oversized_action_returned_unchanged_and_gate_rejects` for the
     attach-side bound.
     """
     long_action = "word " * 1000
@@ -541,6 +566,82 @@ async def test_mutation_after_evaluation(repairer_fixture):
     assert "forged_or_mutated_evaluation" in res
     assert r._candidates["cand_2"]["status"] == CandidateState.REJECTED.value
 
+
+@pytest.mark.parametrize("state", [
+    CandidateState.EVALUATING,
+    CandidateState.PROMOTABLE,
+    CandidateState.ACTIVE,
+    CandidateState.REJECTED,
+])
+def test_attach_synthesis_only_before_evaluation(repairer, state):
+    """Synthesis may be attached only while the candidate is pre-evaluation.
+
+    Attaching at or after EVALUATING would decouple the delivered artifact
+    (captured at evaluation start) from the promoted text.
+    """
+    cid = _setup_candidate(repairer)
+    repairer._candidates[cid]["status"] = state.value
+    out = repairer.attach_synthesis(
+        cid, SynthesisAttestation.from_dict(valid_synthesis())
+    )
+    assert out == f"rejected: not_attachable_in_state:{state.value}"
+    assert "synthesis" not in repairer._candidates[cid]
+
+
+def test_attach_synthesis_rejects_missing_task_provenance(repairer):
+    """An attestation with no task identity cannot be bound to a candidate."""
+    cid = _setup_candidate(repairer)
+    att = SynthesisAttestation.from_dict(valid_synthesis(task_id="", rollout_id="run1"))
+    assert repairer.attach_synthesis(cid, att) == "rejected: attestation_missing_task_provenance"
+    assert "synthesis" not in repairer._candidates[cid]
+
+
+def test_attach_synthesis_rejects_foreign_task_provenance(repairer):
+    """A structurally valid attestation from task A must not attach to task B."""
+    cid = _setup_candidate(repairer)  # tasks taskA / taskB
+    att = SynthesisAttestation.from_dict(valid_synthesis(task_id="taskC", rollout_id="run1"))
+    assert repairer.attach_synthesis(cid, att) == "rejected: attestation_task_mismatch"
+    assert "synthesis" not in repairer._candidates[cid]
+
+
+def test_attach_synthesis_rejects_foreign_rollout_provenance(repairer):
+    """A valid task id with an unrelated rollout id is still refused."""
+    cid = _setup_candidate(repairer)  # run ids run1 / run2 / run3
+    att = SynthesisAttestation.from_dict(
+        valid_synthesis(task_id="taskA", rollout_id="some-other-run")
+    )
+    assert repairer.attach_synthesis(cid, att) == "rejected: attestation_provenance_mismatch"
+    assert "synthesis" not in repairer._candidates[cid]
+
+
+@pytest.mark.asyncio
+async def test_mid_evaluation_state_mutation_is_caught_by_receipt(repairer):
+    """The receipt binds the state that produced the DELIVERED artifact.
+
+    A writer that mutates a canonical, delivered-text-bearing field during the
+    evaluator await must be caught at promotion, because the receipt hash was
+    captured before the await. This is the old TOCTOU hole: late re-attach.
+    """
+    cid = _setup_candidate(repairer)
+    attach_valid_synthesis(repairer, cid)
+    assert repairer._candidates[cid]["synthesis"]["principle_text"] == VALID_PRINCIPLE
+
+    async def mutating_eval(_snapshot):
+        # A CONCURRENT writer mutates the LIVE candidate during the await. The
+        # evaluator receives an immutable snapshot, so mutating its argument
+        # would not reach the live state; the writer must target the live dict.
+        repairer._candidates[cid]["synthesis"]["principle_text"] = (
+            "Before doing anything else, verify the contract and check callers."
+        )
+        return {"pass": True}
+
+    repairer.evaluator = mutating_eval
+    await repairer.evaluate_candidate(cid)
+    assert repairer._candidates[cid]["status"] == CandidateState.PROMOTABLE.value
+
+    res = await repairer.promote(cid)
+    assert res == "rejected: forged_or_mutated_evaluation"
+    assert repairer._candidates[cid]["status"] == CandidateState.REJECTED.value
 
 
 @pytest.mark.asyncio

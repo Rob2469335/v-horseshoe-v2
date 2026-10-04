@@ -77,10 +77,11 @@ __all__ = [
     "scrub",
     "validate",
     "synthesize",
+    "synthesize_candidate",
     "SYNTHESIS_VERSION",
 ]
 
-SYNTHESIS_VERSION = "ej-lesson-synthesis/1"
+SYNTHESIS_VERSION = "ej-lesson-synthesis/2"
 SYNTHESIS_SCHEMA = "v-horseshoe-v2/lesson-synthesis/1"
 
 # ---------------------------------------------------------------------------
@@ -190,6 +191,64 @@ class FailureEvidence:
     def f2p_total(self) -> int:
         return self.post_f2p_passed + self.post_f2p_failed
 
+    def to_dict(self) -> dict:
+        """Lossless JSON-ready form. Only observed fields; no invented values."""
+        return {
+            "task_id": self.task_id,
+            "rollout_id": self.rollout_id,
+            "evaluator_passed": self.evaluator_passed,
+            "evaluator_reason": self.evaluator_reason,
+            "classification": self.classification,
+            "termination_reason": self.termination_reason,
+            "step_count": self.step_count,
+            "successful_tool_calls": self.successful_tool_calls,
+            "failed_tool_calls": self.failed_tool_calls,
+            "ordered_tool_actions": list(self.ordered_tool_actions),
+            "source_modification_attempted": self.source_modification_attempted,
+            "source_modification_succeeded": self.source_modification_succeeded,
+            "source_changed": self.source_changed,
+            "baseline_f2p_failed": self.baseline_f2p_failed,
+            "post_f2p_passed": self.post_f2p_passed,
+            "post_f2p_failed": self.post_f2p_failed,
+            "backend_reachable": self.backend_reachable,
+            "model_endpoint_reachable": self.model_endpoint_reachable,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any] | None) -> "FailureEvidence | None":
+        """Rebuild from persisted form. Fail closed (None) on malformed input.
+
+        ``evaluator_passed`` preserves the three-valued semantics: absent/null
+        stays ``None`` (not supplied), which Stage A treats as fail-closed.
+        """
+        if not isinstance(d, Mapping) or not str(d.get("task_id") or "").strip():
+            return None
+        try:
+            return cls(
+                task_id=str(d["task_id"]),
+                rollout_id=str(d.get("rollout_id") or ""),
+                evaluator_passed=d.get("evaluator_passed"),
+                evaluator_reason=str(d.get("evaluator_reason") or ""),
+                classification=str(d.get("classification") or ""),
+                termination_reason=str(d.get("termination_reason") or ""),
+                step_count=int(d.get("step_count") or 0),
+                successful_tool_calls=int(d.get("successful_tool_calls") or 0),
+                failed_tool_calls=int(d.get("failed_tool_calls") or 0),
+                ordered_tool_actions=tuple(
+                    str(a) for a in (d.get("ordered_tool_actions") or ())
+                ),
+                source_modification_attempted=bool(d.get("source_modification_attempted")),
+                source_modification_succeeded=bool(d.get("source_modification_succeeded")),
+                source_changed=bool(d.get("source_changed")),
+                baseline_f2p_failed=int(d.get("baseline_f2p_failed") or 0),
+                post_f2p_passed=int(d.get("post_f2p_passed") or 0),
+                post_f2p_failed=int(d.get("post_f2p_failed") or 0),
+                backend_reachable=bool(d.get("backend_reachable", True)),
+                model_endpoint_reachable=bool(d.get("model_endpoint_reachable", True)),
+            )
+        except Exception:  # noqa: BLE001 - malformed persisted evidence fails closed
+            return None
+
 
 @dataclass(frozen=True)
 class EvidenceFeature:
@@ -271,6 +330,13 @@ class SynthesisAttestation:
     validator_passed: bool
     redactions: tuple[str, ...] = ()
     rationale: str = ""
+    # Structured provenance. ``evidence_ref`` is a human-readable summary and is
+    # NOT a checkable contract, so the task/rollout identity is carried as
+    # fields. ``attach_synthesis`` binds these to the candidate's own
+    # evidence_tasks/evidence_runs, so a valid attestation for one task cannot
+    # be attached to a candidate about a different task.
+    task_id: str = ""
+    rollout_id: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -283,6 +349,8 @@ class SynthesisAttestation:
             "validator_passed": self.validator_passed,
             "redactions": list(self.redactions),
             "rationale": self.rationale,
+            "task_id": self.task_id,
+            "rollout_id": self.rollout_id,
         }
 
     @classmethod
@@ -301,6 +369,8 @@ class SynthesisAttestation:
             validator_passed=bool(d.get("validator_passed")),
             redactions=tuple(str(x) for x in (d.get("redactions") or ())),
             rationale=str(d.get("rationale") or ""),
+            task_id=str(d.get("task_id") or ""),
+            rollout_id=str(d.get("rollout_id") or ""),
         )
 
 
@@ -516,7 +586,11 @@ def diagnose(ev: FailureEvidence) -> tuple[Diagnosis | None, str]:
 # Stage B -- transferable abstraction (injected distiller seam)
 # ---------------------------------------------------------------------------
 
-Distiller = Callable[[Diagnosis], str]
+#: A distiller receives the fully-built Stage-B *prompt string* (mechanism +
+#: feature codes, assembled in ``abstract``) and returns principle text. It is
+#: NOT handed the ``Diagnosis`` object — the string is the deliberate boundary,
+#: so the contract is ``str -> str``.
+Distiller = Callable[[str], str]
 
 _B_SYSTEM = (
     "You convert one software-engineering failure into ONE transferable "
@@ -572,8 +646,18 @@ def abstract(
     if estimate_tokens(text) > max_tokens:
         return None, "distiller_exceeded_token_ceiling"
 
+    # Make the generator's identity explicit and durable: a local-only seam
+    # carries a ``DistillerIdentity`` (provider:model), a bare callable is
+    # recorded as "injected". This is what lets a persisted attestation prove
+    # whether it came from the fake test double or the real local distiller.
+    _identity = getattr(distiller, "identity", None)
+    _distiller_id = getattr(_identity, "qualified_id", "injected")
     return (
-        Principle(text=text, grounded_in=diagnosis.feature_codes, distiller_id="injected"),
+        Principle(
+            text=text,
+            grounded_in=diagnosis.feature_codes,
+            distiller_id=_distiller_id,
+        ),
         "ok",
     )
 
@@ -725,16 +809,20 @@ def scrub(principle_text: str, ev: FailureEvidence) -> ScrubReport:
 
 _VALIDATOR_ID = "ej-independent-lesson-validator/1"
 
-_LEAKAGE_QUESTIONS = (
-    "identifies_ originating_task",
-    "identifies_originating_repository",
-    "reveals_exact_file_to_modify",
-    "reveals_exact_symbol",
-    "reveals_exact_test",
-    "reveals_exact_patch",
-    "prescribes_exact_solution",
-    "materially_easier_source_task",
-    "expresses_transferable_principle",
+#: The nine section-8 leakage questions, in order. Single source of the Q-key
+#: names, so the checks in ``validate`` cannot drift from the contract they
+#: implement. (The tuple previously carried free text and was dead code with a
+#: typo; it now drives the checks.)
+_LEAKAGE_QUESTIONS: tuple[tuple[str, str], ...] = (
+    ("Q1_identifies_task", "does it identify the originating task"),
+    ("Q2_identifies_repository", "does it identify the originating repository"),
+    ("Q3_reveals_file", "does it reveal the exact file to modify"),
+    ("Q4_reveals_symbol", "does it reveal the exact symbol"),
+    ("Q5_reveals_test", "does it reveal the exact test"),
+    ("Q6_reveals_patch", "does it reveal the exact patch"),
+    ("Q7_prescribes_solution", "does it prescribe the exact solution"),
+    ("Q8_materially_easier_source_task", "does it make the source task materially easier"),
+    ("Q9_transferable_principle", "does it express a transferable principle"),
 )
 
 
@@ -759,6 +847,17 @@ def validate(scrubbed_text: str, ev: FailureEvidence, report: ScrubReport | None
     # only encodes "is there content", not a quality score.
     add("L1_grounding", bool(text), "non-empty principle text")
 
+    # L2 / diagnosis -- the evidence must still yield an observable mechanism.
+    # Re-derived deterministically here rather than trusting Stage A, so a caller
+    # that reaches D with evidence yielding no feature cannot pass. This makes
+    # the documented L2 a real check instead of an implicit, unrecorded
+    # precondition.
+    try:
+        _features = derive_features(ev)
+    except Exception:  # noqa: BLE001 - malformed evidence yields no diagnosis
+        _features = ()
+    add("L2_diagnosis", bool(_features), f"{len(_features)} measurable feature(s)")
+
     # L6 / non-tautology -- must not merely restate failure.
     taut = [m for m in _TAUTOLOGY_MARKERS if m in low]
     add("L6_non_tautology", not taut, f"tautology markers: {taut}" if taut else "no restatement markers")
@@ -775,11 +874,29 @@ def validate(scrubbed_text: str, ev: FailureEvidence, report: ScrubReport | None
     residual = sorted({t for t in lex if t and t.lower() in low})
     add("L4_leakage", not residual, f"residual identity terms: {residual}" if residual else "clean")
 
+    # L3 / transferability -- computed before the nine questions because Q9
+    # depends on it. Must assert a general condition or behaviour, not a single
+    # observation, and must not be scoped to a named target.
+    general_markers = (
+        "before ", "when ", "after ", "verify", "confirm", "check", "prefer",
+        "avoid", "instead", "rather", "first", "before modifying", "when changing",
+    )
+    has_general = any(m in low for m in general_markers)
+
     # --- the nine leakage questions (section 8) ---
     q_repo = bool(re.search(r"\b(?:repo|repository|project|package|library|module)\s+[A-Z\w]", text))
     q_file = bool(_PATH_LIKE_RE.search(text) or _TEST_NODE_RE.search(text))
     q_symbol = bool(_SYMBOL_RE.search(text))
-    q_test = bool(re.search(r"\btest[_ ][A-Za-z0-9_]+", text))
+    # A NAMED test leaks identity; the English word "test" does not. The old
+    # pattern ``test[_ ][A-Za-z0-9_]+`` matched ordinary prose ("test fails",
+    # "test to"), falsely rejecting genuine test-related lessons AND masking a
+    # test that only passed because of that over-breadth. Match only a pytest
+    # function name (``test_x``) or a test file (``test_x.py``); node ids and
+    # test-file basenames are already covered by the derived lexicon.
+    q_test = bool(
+        re.search(r"\btest_[A-Za-z0-9_]+\b", text)
+        or re.search(r"\btest[A-Za-z0-9_]*\.py\b", text)
+    )
     q_patch = bool(re.search(r"\b(?:patch|diff|hunk|\+\+\+|---)\b", text, re.I))
     q_prescribe = [m for m in _PRESCRIPTIVE_MARKERS if m in low]
     q_task = bool(ev.task_id and ev.task_id.lower() in low)
@@ -787,36 +904,33 @@ def validate(scrubbed_text: str, ev: FailureEvidence, report: ScrubReport | None
     # judgement, marked INFERRED rather than PROVEN, is recorded as such.
     q_materially = bool(q_prescribe)
 
-    add("Q1_identifies_task", not q_task, "task id absent" if not q_task else "task id present")
-    add("Q2_identifies_repository", not q_repo, "no repository noun+proper-noun" if not q_repo else "repository referenced")
-    add("Q3_reveals_file", not q_file, "no path-like token" if not q_file else "path-like token present")
-    add("Q4_reveals_symbol", not q_symbol, "no symbol declaration" if not q_symbol else "symbol declaration present")
-    add("Q5_reveals_test", not q_test, "no test reference" if not q_test else "test reference present")
-    add("Q6_reveals_patch", not q_patch, "no patch artefact" if not q_patch else "patch artefact present")
-    add("Q7_prescribes_solution", not q_prescribe, f"prescriptive markers: {q_prescribe}" if q_prescribe else "no prescriptive markers")
-    add(
-        "Q8_materially_easier_source_task",
-        not q_materially,
-        "INFERRED: no prescriptive solution text" if not q_materially else "INFERRED: prescriptive solution text present",
-    )
+    _answers: dict[str, tuple[bool, str]] = {
+        "Q1_identifies_task": (not q_task, "task id absent" if not q_task else "task id present"),
+        "Q2_identifies_repository": (not q_repo, "no repository noun+proper-noun" if not q_repo else "repository referenced"),
+        "Q3_reveals_file": (not q_file, "no path-like token" if not q_file else "path-like token present"),
+        "Q4_reveals_symbol": (not q_symbol, "no symbol declaration" if not q_symbol else "symbol declaration present"),
+        "Q5_reveals_test": (not q_test, "no named test reference" if not q_test else "named test reference present"),
+        "Q6_reveals_patch": (not q_patch, "no patch artefact" if not q_patch else "patch artefact present"),
+        "Q7_prescribes_solution": (not q_prescribe, f"prescriptive markers: {q_prescribe}" if q_prescribe else "no prescriptive markers"),
+        "Q8_materially_easier_source_task": (
+            not q_materially,
+            "INFERRED: no prescriptive solution text" if not q_materially else "INFERRED: prescriptive solution text present",
+        ),
+        "Q9_transferable_principle": (
+            has_general and not q_task and not q_file,
+            "general, non-identifying principle" if (has_general and not q_task and not q_file) else "not a transferable principle",
+        ),
+    }
+    # Single source: the key names come from _LEAKAGE_QUESTIONS, so a rename
+    # cannot silently desynchronise the checks from the section-8 contract.
+    for _key, _question in _LEAKAGE_QUESTIONS:
+        _ok, _detail = _answers[_key]
+        add(_key, _ok, _detail)
 
-    # L3 / transferability -- must assert a general condition or behaviour, not
-    # a single observation, and must not be scoped to a named target.
-    general_markers = (
-        "before ", "when ", "after ", "verify", "confirm", "check", "prefer",
-        "avoid", "instead", "rather", "first", "before modifying", "when changing",
-    )
-    has_general = any(m in low for m in general_markers)
     add(
         "L3_transferability",
         has_general,
         "states a general condition" if has_general else "no general condition marker",
-    )
-
-    add(
-        "Q9_transferable_principle",
-        has_general and not q_task and not q_file,
-        "general, non-identifying principle" if (has_general and not q_task and not q_file) else "not a transferable principle",
     )
 
     # L7 / provenance integrity -- a validated synthesis must be traceable. The
@@ -825,9 +939,12 @@ def validate(scrubbed_text: str, ev: FailureEvidence, report: ScrubReport | None
     add("L7_provenance_integrity", not residual and not q_task,
         "provenance held outside worker-facing text")
 
-    # L8 / independent validation -- this verdict IS the independent judgement;
-    # its own id is recorded so the attestation can prove which validator ran.
-    add("L8_independent_validation", True, _VALIDATOR_ID)
+    # L8 / independent validation -- Layer 1 must have been supplied AND passed;
+    # a standalone call with no scrub report is not an independent validation of
+    # a scrubbed artifact. Independence from the generator is structural and is
+    # asserted in `synthesize`; it is not decidable from this function's inputs.
+    _report_ok = report is not None and bool(getattr(report, "passed", False))
+    add("L8_independent_validation", _report_ok, f"validator={_VALIDATOR_ID}; layer1_passed={_report_ok}")
 
     passed = all(c["pass"] for c in checks.values())
     failed = [k for k, v in checks.items() if not v["pass"]]
@@ -854,19 +971,35 @@ def synthesize(
     verdict, a tautology, a provenance hit, or an absent distiller all yield
     ``None``. There is no degraded-success path.
     """
-    diagnosis, why = diagnose(ev)
+    # Every stage call is guarded: a stage fault (not merely a None return) must
+    # fail closed with a namespaced reason, never propagate. ``abstract`` already
+    # catches distiller faults internally; the guard here also covers faults in
+    # the surrounding stage code.
+    try:
+        diagnosis, why = diagnose(ev)
+    except Exception as exc:  # noqa: BLE001 - a stage fault must fail closed
+        return None, f"stage_a:diagnose_error:{type(exc).__name__}"
     if diagnosis is None:
         return None, f"stage_a:{why}"
 
-    principle, why = abstract(diagnosis, distiller)
+    try:
+        principle, why = abstract(diagnosis, distiller)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"stage_b:abstract_error:{type(exc).__name__}"
     if principle is None:
         return None, f"stage_b:{why}"
 
-    report = scrub(principle.text, ev)
+    try:
+        report = scrub(principle.text, ev)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"stage_c:scrub_error:{type(exc).__name__}"
     if not report.passed:
         return None, f"stage_c:{report.reason}"
 
-    verdict = validate(report.text, ev, report)
+    try:
+        verdict = validate(report.text, ev, report)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"stage_d:validator_error:{type(exc).__name__}"
     if not verdict.passed:
         return None, f"stage_d:{verdict.rationale}"
 
@@ -887,6 +1020,126 @@ def synthesize(
             validator_passed=verdict.passed,
             redactions=report.redactions,
             rationale=verdict.rationale,
+            task_id=str(ev.task_id or ""),
+            rollout_id=str(ev.rollout_id or ""),
+        ),
+        "ok",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Candidate-level synthesis (W5) -- multiple independent runs, one principle
+# ---------------------------------------------------------------------------
+
+#: Marker appended to the attestation rationale to make the distiller identity
+#: auditable (e.g. ``fake:test-double`` vs ``local:qwen3.5-4b``). This is how a
+#: persisted attestation records which generator produced it without adding a
+#: new schema field.
+def synthesize_candidate(
+    evidences: Sequence[FailureEvidence],
+    distiller: Distiller | None,
+) -> tuple[SynthesisAttestation | None, str]:
+    """W5 entry point. Synthesize ONE principle from a candidate's run evidence.
+
+    Scientific contract (``PROVEN`` by this function's control flow): a candidate
+    represents >=3 independent runs across >=2 tasks, so the principle must be
+    supported by EVERY run, not by one convenient run. We therefore require a
+    non-empty INTERSECTION of Stage-A feature codes across all runs. If any run
+    is undiagnosable, or the runs share no mechanism, synthesis fails closed.
+
+    The membrane lexicon is built from the UNION of every run's provenance
+    (task id + evaluator reason), so an identifier observed in any contributing
+    run cannot reach worker-facing text.
+    """
+    if distiller is None:
+        return None, "no_distiller_available"
+    if len(evidences) < 2:
+        return None, "insufficient_evidence_runs_for_candidate"
+
+    diags: list[Diagnosis] = []
+    for ev in evidences:
+        d, why = diagnose(ev)
+        if d is None:
+            return None, f"run_undiagnosable:{why}"
+        diags.append(d)
+
+    shared = set(diags[0].feature_codes)
+    for d in diags[1:]:
+        shared &= set(d.feature_codes)
+    if not shared:
+        return None, "no_shared_mechanism_across_runs"
+
+    # Ground the principle in the SHARED mechanism only.
+    primary = diags[0]
+    features = tuple(f for f in primary.features if f.code in shared)
+    ordered = [c for c in _MECHANISMS if c in shared]
+    mechanism = " ".join(_MECHANISMS[c] for c in ordered[:2])
+    diagnosis = Diagnosis(
+        mechanism=mechanism,
+        features=features,
+        evidence_ref="runs:" + ",".join(sorted({d.evidence_ref for d in diags})),
+    )
+
+    # Membrane sees the union of all contributing runs' provenance.
+    base = evidences[0]
+    membrane_ev = FailureEvidence(
+        task_id=base.task_id,
+        rollout_id=base.rollout_id,
+        evaluator_passed=base.evaluator_passed,
+        evaluator_reason=" | ".join(
+            sorted({e.evaluator_reason for e in evidences if e.evaluator_reason})
+        ),
+        classification=base.classification,
+        termination_reason=base.termination_reason,
+        step_count=base.step_count,
+        successful_tool_calls=base.successful_tool_calls,
+        failed_tool_calls=base.failed_tool_calls,
+        ordered_tool_actions=base.ordered_tool_actions,
+        source_modification_attempted=base.source_modification_attempted,
+        source_modification_succeeded=base.source_modification_succeeded,
+        source_changed=base.source_changed,
+        baseline_f2p_failed=base.baseline_f2p_failed,
+        post_f2p_passed=base.post_f2p_passed,
+        post_f2p_failed=base.post_f2p_failed,
+        backend_reachable=base.backend_reachable,
+        model_endpoint_reachable=base.model_endpoint_reachable,
+    )
+
+    principle, why = abstract(diagnosis, distiller)
+    if principle is None:
+        return None, f"stage_b:{why}"
+
+    try:
+        report = scrub(principle.text, membrane_ev)
+    except Exception as exc:  # noqa: BLE001 - a stage fault must fail closed
+        return None, f"stage_c:scrub_error:{type(exc).__name__}"
+    if not report.passed:
+        return None, f"stage_c:{report.reason}"
+
+    try:
+        verdict = validate(report.text, membrane_ev, report)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"stage_d:validator_error:{type(exc).__name__}"
+    if not verdict.passed:
+        return None, f"stage_d:{verdict.rationale}"
+
+    rationale = (
+        f"{verdict.rationale}; shared_mechanism={sorted(shared)}; "
+        f"runs={len(diags)}; distiller={principle.distiller_id}"
+    )
+    return (
+        SynthesisAttestation(
+            synthesis_version=SYNTHESIS_VERSION,
+            principle_text=report.text,
+            feature_codes=tuple(sorted(shared)),
+            mechanism=mechanism,
+            evidence_ref=diagnosis.evidence_ref,
+            validator_id=verdict.validator_id,
+            validator_passed=verdict.passed,
+            redactions=report.redactions,
+            rationale=rationale,
+            task_id=str(base.task_id or ""),
+            rollout_id=str(base.rollout_id or ""),
         ),
         "ok",
     )

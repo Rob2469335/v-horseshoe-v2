@@ -11,6 +11,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from runtime_v2.api.evaluation_types import EvaluationFailure
+from swarm_os.services.lesson_synthesis import FailureEvidence
 
 if TYPE_CHECKING:
     pass
@@ -155,6 +156,31 @@ async def submit_evaluation_failure(
     failure_reason = _build_failure_reason(ef)
     hypothesized_action = _build_hypothesized_action(ef)
 
+    # W5: persist the STRUCTURED evidence Stage A needs, so synthesis never has
+    # to reconstruct it from lossy prose. Only fields actually observed on the
+    # EvaluationFailure are copied; nothing is invented. The gold patch and test
+    # patch are never present in EvaluationFailure, so they cannot enter here.
+    evidence = FailureEvidence(
+        task_id=ef.task_id,
+        rollout_id=ef.rollout_id,
+        evaluator_passed=ef.evaluator_passed,
+        evaluator_reason=str(ef.evaluator_reason or ""),
+        classification=classify_evaluation_failure(ef),
+        termination_reason=ef.termination_reason,
+        step_count=ef.step_count,
+        successful_tool_calls=ef.successful_tool_calls,
+        failed_tool_calls=ef.failed_tool_calls,
+        ordered_tool_actions=tuple(ef.ordered_tool_actions or ()),
+        source_modification_attempted=ef.source_modification_attempted,
+        source_modification_succeeded=ef.source_modification_succeeded,
+        source_changed=ef.source_changed,
+        baseline_f2p_failed=ef.baseline_f2p_failed,
+        post_f2p_passed=ef.post_f2p_passed,
+        post_f2p_failed=ef.post_f2p_failed,
+        backend_reachable=ef.backend_reachable,
+        model_endpoint_reachable=ef.model_endpoint_reachable,
+    )
+
     _log.info(
         "submit_evaluation_failure task=%s rollout=%s classification=pending "
         "steps=%d tools=%d",
@@ -176,6 +202,7 @@ async def submit_evaluation_failure(
         task_id=ef.task_id,
         rollout_id=ef.rollout_id,
         source="evaluation",
+        evidence=evidence.to_dict(),
     )
 
     _log.info(

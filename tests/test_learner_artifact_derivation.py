@@ -41,16 +41,27 @@ VALID_PRINCIPLE = (
 )
 
 
-def valid_synthesis(text: str = VALID_PRINCIPLE) -> dict:
-    """A minimal independently validated synthesis attestation."""
+def valid_synthesis(
+    text: str = VALID_PRINCIPLE,
+    *,
+    task_id: str = "task_twine",
+    rollout_id: str = "roll_1",
+) -> dict:
+    """A minimal independently validated synthesis attestation.
+
+    Carries structured task/rollout provenance so `attach_synthesis` can bind it
+    to the candidate it belongs to.
+    """
     return SynthesisAttestation(
-        synthesis_version="ej-lesson-synthesis/1",
+        synthesis_version="ej-lesson-synthesis/2",
         principle_text=text,
         feature_codes=("edit_without_effect",),
         mechanism="test-seeded mechanism",
-        evidence_ref="rollout:test;task:test",
+        evidence_ref=f"rollout:{rollout_id};task:{task_id}",
         validator_id="ej-independent-lesson-validator/1",
         validator_passed=True,
+        task_id=task_id,
+        rollout_id=rollout_id,
     ).to_dict()
 
 # Real static/bridge trigger shapes (copied from the call sites).
@@ -140,7 +151,12 @@ def _seed_candidate(
     # behaviour it was written for (receipts, rollback, contradiction, token
     # gates) rather than the new prerequisite.
     if synthesis:
-        r.attach_synthesis(cands[0]["id"], SynthesisAttestation.from_dict(valid_synthesis()))
+        r.attach_synthesis(
+            cands[0]["id"],
+            SynthesisAttestation.from_dict(
+                valid_synthesis(task_id="task_twine", rollout_id="roll_1")
+            ),
+        )
     return cands[0]["id"]
 
 
@@ -607,7 +623,10 @@ class TestProductionPathChain:
         # synthesis is attached by the learning pipeline (Stages A-D) before
         # evaluation; `promote` refuses any candidate without one.
         repairer.attach_synthesis(
-            cand["id"], SynthesisAttestation.from_dict(valid_synthesis())
+            cand["id"],
+            SynthesisAttestation.from_dict(
+                valid_synthesis(task_id="pypa__twine-1066", rollout_id="roll-a")
+            ),
         )
 
         # Diagnostic preserved full-fidelity in candidate state. Since 2026-10-03

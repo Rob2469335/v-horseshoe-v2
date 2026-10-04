@@ -20,7 +20,7 @@ import time
 import asyncio
 import os
 from enum import Enum
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from pathlib import Path
 from typing import List, Any
 
@@ -39,7 +39,11 @@ from swarm_os.services.lesson_manager import (
     register_eval_context,
 )
 from swarm_os.lib.atomic_io import atomic_write_text
-from swarm_os.services.lesson_synthesis import SynthesisAttestation
+from swarm_os.services.lesson_synthesis import (
+    FailureEvidence,
+    SynthesisAttestation,
+    synthesize_candidate,
+)
 # Inference topologies (LOCAL = local llama.exe on :8079; RUNPOD = SSH tunnel
 # when the router is pinned). Defined in experiment_model_identity so the
 # preregistered identity and the topology vocabulary live together.
@@ -917,10 +921,15 @@ def _evidence_key(ev) -> str:
 
 
 class PromptRepairer:
-    def __init__(self, diagnostician=None, lesson_manager=None, evaluator=None):
+    def __init__(self, diagnostician=None, lesson_manager=None, evaluator=None, distiller=None):
         self.diagnostician = diagnostician or Diagnostician()
         self.lesson_manager = lesson_manager or get_lesson_manager()
         self.evaluator = evaluator if evaluator is not None else BenchmarkEvaluator()
+        # W5 controlled distiller seam. None means synthesis is unavailable and
+        # the tick fails closed (no synthesis -> no lawful promotion). A real
+        # local distiller is injected by `get_prompt_repairer`; tests inject a
+        # deterministic fake. This class never constructs a cloud provider.
+        self.distiller = distiller
         self._candidates = self._load_json(_CANDIDATES_FILE, default={})
         self._snapshots = self._load_json(_SNAPSHOTS_FILE, default={})
 
@@ -1094,10 +1103,37 @@ class PromptRepairer:
         if not is_safe_lesson(attestation.principle_text):
             return "rejected: principle_failed_safety_membrane"
         cand = self._candidates[candidate_id]
-        if cand.get("status") in (CandidateState.ACTIVE.value, CandidateState.PROMOTABLE.value):
-            # Re-attesting after evaluation would decouple the evaluated text
-            # from the promoted text.
-            return "rejected: already_evaluated"
+        # Attach is permitted ONLY before evaluation begins. Attaching during
+        # EVALUATING (or after) would let the delivered artifact — captured at
+        # evaluation start — diverge from the state the receipt binds. Fail
+        # closed in every other state, including EVALUATING and the terminal
+        # states.
+        _attachable = {
+            CandidateState.EVIDENCE_GATHERING.value,
+            CandidateState.CANDIDATE.value,
+        }
+        if cand.get("status") not in _attachable:
+            return f"rejected: not_attachable_in_state:{cand.get('status')}"
+        # Provenance binding: the attestation must belong to THIS candidate. A
+        # structurally valid attestation produced from task A must never attach
+        # to a candidate about task B (receipt binding covers integrity, not
+        # provenance correspondence). Fail closed on missing or foreign identity.
+        if not attestation.task_id:
+            return "rejected: attestation_missing_task_provenance"
+        cand_tasks = {str(t) for t in cand.get("evidence_tasks", []) if t}
+        if not cand_tasks:
+            return "rejected: candidate_has_no_task_provenance"
+        if attestation.task_id not in cand_tasks:
+            return "rejected: attestation_task_mismatch"
+        if attestation.rollout_id:
+            cand_rollouts = {
+                str(e.get("rollout_id") or e.get("run_id") or "")
+                for e in cand.get("evidence_runs", [])
+                if isinstance(e, dict)
+            }
+            cand_rollouts.discard("")
+            if cand_rollouts and attestation.rollout_id not in cand_rollouts:
+                return "rejected: attestation_provenance_mismatch"
         cand["synthesis"] = attestation.to_dict()
         self._audit("SYNTHESIS_ATTACHED", {
             "candidate_id": candidate_id,
@@ -1106,6 +1142,40 @@ class PromptRepairer:
         })
         self._save_candidates()
         return "synthesis_attached"
+
+    def _synthesize_eligible(self, cand: dict) -> "tuple[SynthesisAttestation | None, str]":
+        """W5: synthesize one principle from a candidate's structured evidence.
+
+        Fail-closed: no distiller, no identity-bearing evidence, or ANY
+        identity-bearing run lacking structured evidence ⇒ no attestation. This
+        prevents a principle from being grounded in only the runs that happen to
+        carry full records.
+        """
+        if self.distiller is None:
+            return None, "no_distiller_configured"
+        identity_runs = [
+            e for e in cand.get("evidence_runs", [])
+            if isinstance(e, dict) and _evidence_key(e)
+        ]
+        if not identity_runs:
+            return None, "no_identity_bearing_evidence"
+        evidences = []
+        for e in identity_runs:
+            ev = FailureEvidence.from_dict(e.get("evidence"))
+            if ev is None:
+                return None, "missing_structured_evidence"
+            evidences.append(ev)
+        att, why = synthesize_candidate(evidences, self.distiller)
+        if att is None:
+            return None, why
+        # Bind run-level provenance even when the representative evidence has no
+        # rollout_id (legacy run_id-only records): use the same evidence identity
+        # the candidate is counted by, so attach_synthesis enforces run binding
+        # instead of silently skipping it on an empty rollout_id.
+        rep_key = _evidence_key(identity_runs[0])
+        if rep_key and not att.rollout_id:
+            att = replace(att, rollout_id=rep_key)
+        return att, why
 
     async def evaluate_and_promote_eligible(self) -> dict:
         """Bounded orchestration seam (the missing 'learning tick').
@@ -1133,6 +1203,17 @@ class PromptRepairer:
             cand["last_eval_attempt"] = now
             self._save_candidates()
             summary["considered"] += 1
+            # W5: attach a validated synthesis BEFORE evaluation, from the
+            # candidate's own structured evidence. Any failure here fails closed
+            # (the candidate may still be evaluated, but promote() will refuse it
+            # because no_validated_synthesis).
+            if not cand.get("synthesis") and self.distiller is not None:
+                att, why = self._synthesize_eligible(cand)
+                if att is not None:
+                    ares = self.attach_synthesis(cid, att)
+                    self._audit("SYNTHESIS_ATTACHED", {"candidate_id": cid, "result": ares})
+                else:
+                    self._audit("SYNTHESIS_SKIPPED", {"candidate_id": cid, "reason": why})
             try:
                 res = await self.evaluate_candidate(cid)
             except Exception as exc:  # noqa: BLE001 - audited, never fatal to the tick
@@ -1259,7 +1340,7 @@ class PromptRepairer:
         })
         self._save_candidates()
 
-    def process_failure(self, run_id: str, component: str, failure_reason: str, hypothesized_action: str, task_id: str = "", source: str = "", rollout_id: str = "") -> str:
+    def process_failure(self, run_id: str, component: str, failure_reason: str, hypothesized_action: str, task_id: str = "", source: str = "", rollout_id: str = "", evidence: dict | None = None) -> str:
         """Process a failure (OBSERVED -> EVIDENCE_GATHERING)."""
         # Per-event proof of the harness-supplied identity + the calling exit
         # path. Logs ONLY run_id/task_id/source/component — never headers/keys.
@@ -1311,7 +1392,11 @@ class PromptRepairer:
                 "action": hypothesized_action,
                 "component": component,
                 "task_id": task_id or "",
-                "evidence_runs": [{"run_id": run_id, "rollout_id": rollout_id, "hypothesis": hypothesized_action}] if source != "watch-loop" else [],
+                "evidence_runs": [{
+                    "run_id": run_id, "rollout_id": rollout_id,
+                    "hypothesis": hypothesized_action,
+                    **({"evidence": evidence} if evidence else {}),
+                }] if source != "watch-loop" else [],
                 "evidence_tasks": [task_id] if task_id else [],
                 "status": CandidateState.EVIDENCE_GATHERING.value,
                 "governance_version": GOVERNANCE_VERSION,
@@ -1343,7 +1428,11 @@ class PromptRepairer:
                 self._audit("WATCH_LOOP_EVENT", {"run_id": run_id, "matched": matched_id})
                 return "watch-loop: recorded, not counted"
                 
-            cand["evidence_runs"].append({"run_id": run_id, "rollout_id": rollout_id, "hypothesis": hypothesized_action})
+            cand["evidence_runs"].append({
+                "run_id": run_id, "rollout_id": rollout_id,
+                "hypothesis": hypothesized_action,
+                **({"evidence": evidence} if evidence else {}),
+            })
             if task_id and task_id not in cand["evidence_tasks"]:
                 cand["evidence_tasks"].append(task_id)
             # Canonical primary task identity (first task that produced the failure)
@@ -1397,18 +1486,25 @@ class PromptRepairer:
         # the candidate lesson is delivered only to the eval run that carries
         # this evaluation_id — never written to the global ACTIVE collection.
         evaluation_id = uuid.uuid4().hex
-        register_eval_context(
-            evaluation_id,
-            str(cand.get("id", "")),
-            str(cand.get("task_id", "")),
-            _derive_learner_artifact(cand),
-        )
         cand["evaluation_id"] = evaluation_id
         self._save_candidates()
+        # Freeze the exact state the evaluator judges. The evaluator receives an
+        # immutable snapshot (it only reads the candidate), and the receipt binds
+        # THIS snapshot's hash. A concurrent mutation of the live candidate is
+        # therefore both invisible to the evaluator and detected at promotion —
+        # no path can show the evaluator one state and promote another.
+        snapshot = json.loads(json.dumps(cand))
+        register_eval_context(
+            evaluation_id,
+            str(snapshot.get("id", "")),
+            str(snapshot.get("task_id", "")),
+            _derive_learner_artifact(snapshot),
+        )
+        delivered_state_hash = self._hash_candidate(snapshot)
 
         try:
             # evaluator must return dict with explicit PASS metric
-            eval_res = await self.evaluator(cand)
+            eval_res = await self.evaluator(snapshot)
             if not eval_res or not isinstance(eval_res, dict):
                 self._change_state(cand, CandidateState.EVALUATION_FAILED, "invalid evaluation result format")
                 return "rejected: invalid_evaluation_result"
@@ -1437,10 +1533,11 @@ class PromptRepairer:
             )
             return "rejected: no_signing_authority"
 
-        # Issue a TRUSTED receipt bound to the COMPLETE candidate state. The
-        # HMAC is keyed outside candidate state, so a candidate-JSON editor can
+        # Issue a TRUSTED receipt bound to the COMPLETE candidate state that
+        # produced the delivered artifact (captured before the await). The HMAC
+        # is keyed outside candidate state, so a candidate-JSON editor can
         # compute the public state hash but cannot forge this signature.
-        state_hash = self._hash_candidate(cand)
+        state_hash = delivered_state_hash
         receipt = {
             "eval_id": uuid.uuid4().hex,
             "candidate_id": str(cand.get("id", "")),
@@ -1803,6 +1900,21 @@ _repairer_instance = None
 def get_prompt_repairer() -> "PromptRepairer":
     global _repairer_instance
     if _repairer_instance is None:
-        _repairer_instance = PromptRepairer()
+        # W5: wire the LOCAL-ONLY experimental distiller. This constructs a
+        # closure; it makes no call until synthesis runs. If the local identity
+        # is not local-loopback the constructor refuses, and synthesis stays
+        # disabled (fail closed). There is no cloud provider path here.
+        distiller = None
+        try:
+            from swarm_os.services.lesson_distiller import (
+                default_local_identity,
+                make_local_distiller,
+            )
+
+            distiller = make_local_distiller(default_local_identity())
+        except Exception as exc:  # noqa: BLE001 - fail closed, never a cloud call
+            _log.warning("local distiller unavailable; synthesis disabled: %s", exc)
+            distiller = None
+        _repairer_instance = PromptRepairer(distiller=distiller)
     return _repairer_instance
 

@@ -78,6 +78,17 @@ def ev(**over) -> FailureEvidence:
     return FailureEvidence(**base)
 
 
+def validate_d(text: str):
+    """``validate`` as the pipeline invokes it: over a passed Layer-1 report.
+
+    L8 (independent validation) requires the deterministic membrane output to
+    have been supplied and to have passed; a standalone ``validate(text, ev())``
+    is deliberately no longer a full validation.
+    """
+    e = ev()
+    return validate(text, e, scrub(text, e))
+
+
 # ---------------------------------------------------------------------------
 # Stage A -- evidence-grounded diagnosis: POSITIVE
 # ---------------------------------------------------------------------------
@@ -354,18 +365,17 @@ class TestStageCMembrane:
 
 class TestStageDIndependentValidation:
     def test_valid_general_lesson_passes(self):
-        v = validate(GOOD_PRINCIPLE, ev())
+        v = validate_d(GOOD_PRINCIPLE)
         assert v.passed, v.rationale
         assert v.validator_id == "ej-independent-lesson-validator/1"
-        for key in ("L1_grounding", "L3_transferability", "L4_leakage",
-                    "L5_actionability", "L6_non_tautology", "L7_provenance_integrity",
-                    "L8_independent_validation"):
+        for key in ("L1_grounding", "L2_diagnosis", "L3_transferability",
+                    "L4_leakage", "L5_actionability", "L6_non_tautology",
+                    "L7_provenance_integrity", "L8_independent_validation"):
             assert v.checks[key]["pass"], key
 
     def test_generic_tautology_rejected(self):
-        v = validate(
-            "The previous attempt failed, so review the test failures and try again.",
-            ev(),
+        v = validate_d(
+            "The previous attempt failed, so review the test failures and try again."
         )
         assert not v.passed
         assert not v.checks["L6_non_tautology"]["pass"]
@@ -377,51 +387,107 @@ class TestStageDIndependentValidation:
             "failing tests. Review the test failures and the agent's approach to "
             "determine whether the modification targeted the correct location."
         )
-        assert not validate(bridge_tautology, ev()).passed
+        assert not validate_d(bridge_tautology).passed
 
     def test_task_identifying_lesson_rejected(self):
-        v = validate(
-            "Before changing dbt-databricks-935, verify the argument contract.",
-            ev(),
+        v = validate_d(
+            "Before changing dbt-databricks-935, verify the argument contract."
         )
         assert not v.passed
         assert not v.checks["L4_leakage"]["pass"]
 
     def test_repository_identifying_lesson_rejected(self):
-        v = validate(
-            "When editing code in the repository Databricks, verify the contract.",
-            ev(),
+        v = validate_d(
+            "When editing code in the repository Databricks, verify the contract."
         )
         assert not v.passed
         assert not v.checks["Q2_identifies_repository"]["pass"]
 
     def test_prescriptive_solution_rejected(self):
-        v = validate(
+        v = validate_d(
             "Before modifying a call, change the function to accept the new "
-            "argument and update the callers accordingly.",
-            ev(),
+            "argument and update the callers accordingly."
         )
         assert not v.passed
         assert not v.checks["Q7_prescribes_solution"]["pass"]
 
-    def test_instance_specific_memorization_rejected(self):
-        """Specific but patch-free text is still memorization, not transfer."""
-        v = validate(
-            "When the liquid clustering macro test fails in this repository, "
-            "prefer checking the cluster_by specification for the view first.",
-            ev(),
+    def test_named_test_reference_rejected(self):
+        """A principle that NAMES a specific test discloses source identity.
+
+        This replaces the former ``test_instance_specific_memorization_rejected``,
+        which passed only because the old ``q_test`` pattern matched the bare
+        English word "test" in "macro test fails". That text carries no
+        detectable instance identity, so the test proved nothing about
+        memorization. The narrowed pattern must still reject a real named test.
+        """
+        v = validate_d(
+            "Before changing the macro, run test_macros_create to confirm the failure."
         )
         assert not v.passed
+        assert not v.checks["Q5_reveals_test"]["pass"]
+
+    def test_generic_test_mention_is_not_leakage(self):
+        """The English word "test" is not a leak; only a NAMED test is."""
+        v = validate_d(
+            "Before editing, run the failing tests to confirm the failure "
+            "reproduces, then check the output of each failing case."
+        )
+        assert v.passed, v.rationale
+
+    def test_domain_specific_prose_is_a_known_limitation(self):
+        """Residual gap, recorded rather than hidden.
+
+        Domain-specific-but-non-identifying prose ("liquid clustering macro") is
+        not caught by any L1-L8 check: it names no repository, path, symbol or
+        test. This is the L3/L6 weakness the architecture document flags as
+        REQUIRES AUTHORIZATION, and it is a human transferability judgement the
+        validator cannot make. This test pins the CURRENT behaviour so any
+        future strengthening is a deliberate change, not an accident.
+        """
+        v = validate_d(
+            "When the liquid clustering macro fails, check the cluster_by "
+            "specification for the view first."
+        )
+        assert v.passed  # documents the gap; this is NOT a safety claim
 
     def test_empty_text_rejected(self):
-        assert not validate("", ev()).passed
+        assert not validate_d("").passed
 
     def test_overbudget_text_rejected(self):
-        assert not validate("word " * 400, ev()).passed
+        assert not validate_d("word " * 400).passed
 
     def test_no_general_condition_rejected_as_not_transferable(self):
-        v = validate("Read the source file thoroughly and carefully.", ev())
+        v = validate_d("Read the source file thoroughly and carefully.")
         assert not v.checks["L3_transferability"]["pass"]
+
+    def test_l8_requires_supplied_layer1_report(self):
+        """L8 is no longer vacuous: a standalone call without a report fails it."""
+        v = validate(GOOD_PRINCIPLE, ev())  # no report supplied
+        assert not v.checks["L8_independent_validation"]["pass"]
+        assert not v.passed
+
+    def test_l2_fails_when_evidence_yields_no_mechanism(self):
+        """L2 is a real check: evidence with no derivable feature fails it."""
+        e = ev(
+            source_modification_attempted=False,
+            source_changed=False,
+            ordered_tool_actions=(),
+            step_count=0,
+            successful_tool_calls=0,
+        )
+        v = validate("Before editing, verify the contract.", e, scrub("Before editing, verify the contract.", e))
+        assert not v.checks["L2_diagnosis"]["pass"]
+
+    def test_nine_questions_are_defined_in_one_place(self):
+        """The Q-check keys must match the section-8 question table."""
+        import swarm_os.services.lesson_synthesis as ls
+        keys = [k for k, _ in ls._LEAKAGE_QUESTIONS]
+        assert keys == [
+            "Q1_identifies_task", "Q2_identifies_repository", "Q3_reveals_file",
+            "Q4_reveals_symbol", "Q5_reveals_test", "Q6_reveals_patch",
+            "Q7_prescribes_solution", "Q8_materially_easier_source_task",
+            "Q9_transferable_principle",
+        ]
 
     def test_validator_is_independent_of_the_generator(self):
         """`validate` must not consult the generator, its prompt or its self-report.
@@ -514,6 +580,43 @@ class TestOrchestration:
     def test_end_to_end_principle_is_within_budget(self):
         att, _ = synthesize(ev(), distiller_returning(GOOD_PRINCIPLE))
         assert estimate_tokens(att.principle_text) <= MAX_RULE_TOKENS
+
+
+class TestStageFaultsFailClosed:
+    """A stage that RAISES must fail closed, not propagate.
+
+    The pre-fix ``synthesize`` guarded only the distiller call; a fault inside
+    ``scrub`` or ``validate`` would escape as an exception. Each stage call is
+    now guarded and returns a namespaced reason.
+    """
+
+    @pytest.mark.parametrize(
+        "stage,prefix",
+        [
+            ("diagnose", "stage_a:diagnose_error"),
+            ("abstract", "stage_b:abstract_error"),
+            ("scrub", "stage_c:scrub_error"),
+            ("validate", "stage_d:validator_error"),
+        ],
+    )
+    def test_stage_exception_fails_closed(self, monkeypatch, stage, prefix):
+        import swarm_os.services.lesson_synthesis as ls
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("injected stage fault")
+
+        monkeypatch.setattr(ls, stage, boom)
+        att, why = ls.synthesize(ls.FailureEvidence(**{
+            "task_id": "t", "rollout_id": "r", "evaluator_passed": False,
+            "evaluator_reason": "f2p: 0/1 passed", "classification": "BEHAVIORAL",
+            "termination_reason": "agent_completed", "step_count": 9,
+            "successful_tool_calls": 7,
+            "ordered_tool_actions": ("filesystem:patch",),
+            "source_modification_attempted": True, "source_changed": True,
+            "post_f2p_passed": 0, "post_f2p_failed": 1,
+        }), distiller_returning(GOOD_PRINCIPLE))
+        assert att is None
+        assert why.startswith(prefix), why
 
 
 # ---------------------------------------------------------------------------

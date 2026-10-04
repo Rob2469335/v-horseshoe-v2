@@ -1,12 +1,14 @@
 # Experiment J — Evidence-Grounded Transferable Lesson Synthesis (Architecture B)
 
-**Status:** engineering implementation. Not a scientific result. Does not authorize
-a learning event.
+**Status:** engineering implementation, including W5 production integration.
+Not a scientific result. Does not authorize a learning event.
 **Date:** 2026-10-03
 **Implements:** §5 of `docs/EXPERIMENT_J_TASK_READINESS_CONTRACT.md` (Option B).
 **Code:** `swarm_os/services/lesson_synthesis.py`, integration in
 `swarm_os/services/prompt_repairer.py`.
-**Tests:** `tests/test_lesson_synthesis.py` (76) plus updated promotion suites.
+**Tests:** `tests/test_lesson_synthesis.py` (85) plus updated promotion suites
+(`test_prompt_repairer.py`, `test_learner_artifact_derivation.py`,
+`test_experiment_lifecycle.py`).
 
 ---
 
@@ -123,10 +125,10 @@ verified failure evidence (closed dataclass)
   │     identity hit ⇒ REJECT · harmless hit ⇒ REDACT · structural ⇒ REJECT
   │     → ScrubReport(text, redactions, identity_hits, passed)
   │
-  └─ D. validate(scrubbed, ev)       LAYER 2 — independent
+  └─ D. validate(scrubbed, ev, report)   LAYER 2 — deterministic structural gate
         L1 grounding · L2 diagnosis · L3 transferability · L4 leakage
         L5 actionability · L6 non-tautology · L7 provenance integrity
-        L8 independent validation
+        L8 layer-1 report supplied and passed
         + the nine section-8 leakage questions (Q1…Q9)
         → QualityVerdict(passed, checks, validator_id, rationale)
               ⇒ SynthesisAttestation (persisted on the candidate)
@@ -146,6 +148,26 @@ All frozen dataclasses in `lesson_synthesis.py`: `FailureEvidence`,
 `EvidenceFeature`, `Diagnosis`, `Principle`, `ScrubReport`, `QualityVerdict`,
 `SynthesisAttestation`. `FailureEvidence` is closed by construction, so there is
 no path for free-form task text to reach abstraction unmediated.
+
+### 3.3 Synthesis schema and provenance (current)
+
+`SYNTHESIS_VERSION = "ej-lesson-synthesis/2"` (superseding `/1`). The persisted
+`SynthesisAttestation` carries:
+
+| Field | Meaning |
+|---|---|
+| `synthesis_version` | `ej-lesson-synthesis/2` |
+| `principle_text` | the delivered, worker-facing rule |
+| `feature_codes` / `mechanism` | Stage-A grounding (provenance; never delivered) |
+| `evidence_ref` | human-readable summary (not a checkable contract) |
+| `validator_id` / `validator_passed` / `rationale` / `redactions` | Stage-C/D provenance |
+| `task_id` | **structured** originating task (`attach_synthesis` requires it ∈ candidate `evidence_tasks`) |
+| `rollout_id` | **structured** run/rollout identity (`attach_synthesis` requires it ∈ candidate evidence run ids when present) |
+
+The two structured fields were added at `/2`: `evidence_ref` is free-text and is
+not a contract, so task/rollout identity is carried as fields and bound to the
+candidate by `attach_synthesis`. `_canonical_state` includes the whole
+attestation, so the receipt binds the delivered principle.
 
 ---
 
@@ -185,11 +207,19 @@ A bare short numeric token is deliberately **not** identity: it is unresolvable
 without the repository name (already blocked) and treating it as identity would
 reject innocuous rules. The composite `<repo>-<number>` form is blocked.
 
-**Layer 2 — independent semantic validation** (`validate`)
+**Layer 2 — deterministic structural validation** (`validate`)
 
-Answers §8's nine questions plus L1–L8. Independence is structural: the
-signature accepts only `(scrubbed_text, ev, report)`, and its executable body
-references no distiller, prompt or `Principle` (proven by AST test).
+Answers §8's nine questions plus L1–L8. It is **not a semantic judge**: it is a
+same-author, deterministic predicate set. What it establishes is structural
+independence from the generator — the signature accepts only
+`(scrubbed_text, ev, report)`, and its executable body references no distiller,
+prompt or `Principle` (proven by AST test). It does **not** establish
+statistical/semantic independence, and this document does not claim it does.
+`L8` asserts only that the Layer-1 scrub report was supplied **and passed**
+(`report is not None and report.passed`); it is not a generator-vs-validator
+distinctness proof. `L2` re-derives `derive_features(ev)` and requires a
+non-empty feature set, so evidence with no observable mechanism fails here as
+well as at Stage A.
 
 ### 5.1 The three-state distinction (§11)
 
@@ -206,13 +236,13 @@ references no distiller, prompt or `Principle` (proven by AST test).
 | Check | Pass condition | Class |
 |---|---|---|
 | L1 grounding | non-empty text | `PROVEN` |
-| L2 diagnosis | *(structural precondition)* a `Diagnosis` exists with a mechanism and ≥1 feature | `PROVEN` |
+| L2 diagnosis | `derive_features(ev)` is non-empty (re-derived in D, not trusted from A) | `PROVEN` |
 | L3 transferability | a general-condition marker present | `SUPPORTED` (heuristic) |
 | L4 leakage | no residual derived-identity term | `PROVEN` |
 | L5 actionability | ≥6 words and ≤ `MAX_RULE_TOKENS` | `PROVEN` |
 | L6 non-tautology | no `_TAUTOLOGY_MARKERS` | `SUPPORTED` (marker-based) |
 | L7 provenance integrity | provenance held outside worker-facing text | `PROVEN` |
-| L8 independent validation | validator id recorded and distinct from generator | `PROVEN` |
+| L8 layer-1 report | `report is not None and report.passed` — Layer-1 output supplied and passed. **Not** a generator/validator distinctness proof. | `PROVEN` |
 
 **No numerical quality score is used.** A weighted score would be an invented
 threshold. Every check is a boolean over an observable property.
@@ -252,10 +282,12 @@ unchanged.
 
 ### 7.1 Consequence: existing tests were updated, not weakened
 
-The prerequisite is fail-closed, so 22 existing promotion tests initially failed
-because they built candidates with no synthesis. Each was updated to satisfy the
-strengthened contract. Verified by diff: **only 3 assertion lines were removed**,
-each replaced by a stronger equivalent:
+The prerequisite is fail-closed, so existing promotion tests that built
+candidates with no synthesis failed and were updated to satisfy the strengthened
+contract. Two were missed by the original change and repaired separately
+(`test_experiment_lifecycle.py::TestEvidenceIdentityCount`, test-only). Verified
+by diff for the original change: **only 3 assertion lines were removed**, each
+replaced by a stronger equivalent:
 
 - `assert expected.startswith("no-edit: ")` ×2 → `assert expected == VALID_PRINCIPLE`
   (exact identity instead of prefix)
@@ -308,16 +340,143 @@ There is no degraded-success path. `PROVEN` by inspection of `synthesize`.
 
 ## 10. Known limitations
 
-1. **Stage B requires an injected distiller.** In this environment no LLM is
-   wired to it, so a live learning event cannot yet produce a principle.
-   `PROVEN` — `abstract()` has no fallback.
+1. **Stage B requires an injected distiller.** W5 wires a LOCAL-ONLY distiller
+   (`lesson_distiller.make_local_distiller`) into `get_prompt_repairer()`, but
+   the local model is not exercised by tests (a deterministic fake is used), so
+   live principle quality is `NOT ESTABLISHED`. `PROVEN` — `abstract()` has no
+   fallback; a missing or failed local distiller fails closed.
 2. **The distiller prompt (`_B_SYSTEM`/`_B_USER`) is engineering scaffolding, not
    a validated prompt.** Its output quality is `NOT ESTABLISHED` until exercised
    against real failure evidence.
 3. **L3/L6 are marker heuristics** — `SUPPORTED`, see §6.
-4. **W5 remains open.** `reflection_loop`'s richer distiller still cannot
-   contribute evidence because it passes no `task_id`. Routing it through
-   synthesis is `REQUIRES AUTHORIZATION`.
+4. **`reflection_loop`'s cloud-capable distiller is NOT used.** It passes no
+   `task_id`, consumes task-specific content, and can call a cloud model, so it
+   is excluded from the W5 path. Its prompt structure was not reused.
 5. **No live end-to-end run has occurred**, by instruction. Every property above is
    established by unit/integration tests and source inspection, not by a
    production run.
+6. **DNS / hostname resolution (`NOT ESTABLISHED`).** The allowlist accepts the
+   `localhost` alias in addition to loopback IPs; validation checks the hostname
+   *string*, and the socket resolves it. On a host with a tampered resolver this
+   alias could point elsewhere. Literal `127.0.0.1`/`::1` are not subject to
+   this; the default endpoint is a literal IP.
+7. **`0.0.0.0` is accepted as a loopback-equivalent host (`GOVERNANCE GAP`).**
+   It is a bind address, not a conventional outbound destination. It does not
+   create an off-host escape, but it is retained as an open policy question and
+   was not silently changed.
+8. **Model-identity default mismatch (`GOVERNANCE GAP`).** See §11.3.
+
+---
+
+## 11. W5 — production integration (implemented)
+
+The real learning path now invokes synthesis. No parallel pipeline was created;
+the existing bridge → `process_failure` → `evaluate_and_promote_eligible` →
+`evaluate_candidate` → `promote` chain is used, with synthesis inserted before
+evaluation.
+
+### 11.1 Structured failure evidence (`PROVEN`)
+
+The bridge (`evaluation_bridge.submit_evaluation_failure`) builds a
+`FailureEvidence` directly from the `EvaluationFailure` it already holds and
+passes `evidence=<dict>` to `process_failure`, which persists it on the matching
+`evidence_runs` entry. Stage A therefore consumes measured fields, never a
+reconstruction from failure prose. Only observed fields are copied; the gold
+patch and test patch are never present in `EvaluationFailure`. `FailureEvidence`
+gained lossless `to_dict`/`from_dict`; `from_dict` fails closed on malformed
+input and preserves the three-valued `evaluator_passed`.
+
+### 11.2 Run vs candidate granularity (`PROVEN`)
+
+Stage A is per-run; promotion is candidate-level. `lesson_synthesis.
+synthesize_candidate` resolves this explicitly:
+
+* it requires **every** identity-bearing run to carry structured evidence (a
+  single missing record fails closed — `_synthesize_eligible` in
+  `prompt_repairer`);
+* it diagnoses **every** run and requires a **non-empty intersection of feature
+  codes across all runs**; no shared mechanism ⇒ no principle. This is the guard
+  that prevents one convenient run from masquerading as the whole evidence base;
+* the principle is grounded in the shared mechanism only;
+* the membrane lexicon is the **union** of every contributing run's task id and
+  evaluator reason, so an identifier observed in any run is blocked;
+* per-run provenance is preserved: the candidate keeps its full `evidence_runs`,
+  and the attestation records `task_id`/`rollout_id` plus a rationale listing
+  `shared_mechanism`, `runs=N`, and `distiller=<id>`.
+
+### 11.3 Local-only distiller and transport (`PROVEN` for the mechanism)
+
+`swarm_os/services/lesson_distiller.py` exposes one production constructor,
+`make_local_distiller`, which refuses any non-`local` provider, any
+non-loopback/non-http `base_url`, and any `base_url` carrying URL userinfo
+(`LocalOnlyError`), before any call.
+
+**Endpoint is the Smart Model Proxy, not necessarily local inference.** The
+default `http://127.0.0.1:8080` is `model_router.py` ("Smart Model Proxy"),
+which forwards to `:8079`. In the RUNPOD topology (`SWARM_ROUTER_PINNED=1`)
+`:8079` is an ssh tunnel to a pod GPU, so a loopback `:8080` request would be a
+**network call**. The distiller therefore **refuses to construct when
+`SWARM_ROUTER_PINNED=1`** (fail closed). In the default LOCAL topology `:8079`
+is local `llama.exe`, so the forward stays on-host.
+
+**Transport containment.** `_http_openai_complete` uses an explicit
+`urllib.request.build_opener(ProxyHandler({}), _RejectRedirects())`:
+`ProxyHandler({})` installs **no proxy dispatch** (CPython `add_handler` skips
+`proxy_open`), so `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` and lowercase forms
+cannot redirect the request; `_RejectRedirects` refuses every
+301/302/303/307/308 (off-host **and** loopback), so a local endpoint cannot
+bounce the request elsewhere.
+
+There is no cloud fallback, no provider substitution, and no external credential
+lookup; the transport uses the fixed local `Bearer llama` token.
+`get_prompt_repairer()` wires this identity; if construction fails, synthesis
+stays disabled (fail closed). `make_fake_distiller` is a DEVELOPMENT FAKE
+(`provider="fake"`); its identity appears in the attestation rationale.
+
+**`GOVERNANCE GAP` — model identity.** `SWARM_DISTILLER_MODEL` defaults to
+`qwen3.5-4b`, but the LOCAL backend serves alias `robs4b`
+(`docs/INFERENCE_TOPOLOGY.md` §2; the router `/v1/models` spoofs
+`robs4b`/`qwen3.5-0.8b`). llama.cpp serves its single loaded model regardless of
+the request `model` field, so the call still runs locally, but the **declared**
+identity does not match the served artifact. The experimental distiller model
+identity must be confirmed by the operator and set explicitly before any
+learning event (`REQUIRES AUTHORIZATION`).
+
+### 11.4 Failure modes (`PROVEN`)
+
+Every stage fails closed: missing/failed distiller, missing structured evidence,
+undiagnosable run, no shared mechanism, scrub rejection, validator rejection,
+malformed attestation, or provenance mismatch all yield no validated synthesis,
+and `promote()` then rejects `no_validated_synthesis`. There is no canned
+fallback lesson.
+
+### 11.5 Boundaries unchanged
+
+F0/F1/F2 authority, `MIN_EVIDENCE_RUNS=3`, `MIN_EVIDENCE_TASKS=2`, the receipt
+and provenance protections (Fixes 3–5), and the evaluation state machine are
+unchanged. No `SWARM_RECEIPT_KEY`, no Qdrant contact, no ACTIVE lesson, no
+learning event.
+
+### 11.6 Receipt / provenance integrity (W5 additions)
+
+* **Immutable evaluator snapshot.** `evaluate_candidate` deep-copies the
+  candidate and hands the copy to the evaluator and the eval-context artifact;
+  the receipt binds the snapshot's hash. The evaluator can no longer observe a
+  mutating live object, and a concurrent mutation of the live candidate is
+  detected at promotion (`forged_or_mutated_evaluation`). `PROVEN`.
+* **Run provenance when `rollout_id` is empty.** `_synthesize_eligible` binds
+  the attestation's `rollout_id` to the candidate's evidence identity
+  (`rollout_id` or `run_id`) when the representative evidence has no
+  `rollout_id`, so `attach_synthesis` enforces run binding for legacy
+  run_id-only records instead of skipping it. `PROVEN`.
+
+### 11.7 Tests
+
+* `tests/test_lesson_distiller.py` — local-only boundary, fake vs real, and
+  **adversarial transport containment** against real loopback HTTP servers
+  (proxy-env escape for HTTP/HTTPS/ALL, off-host and loopback redirect
+  rejection, exactly-one-request, normal path, no-fallback, router-pin refusal,
+  userinfo refusal).
+* `tests/test_w5_integration.py` — candidate synthesis, tick integration,
+  membrane against W5 inputs, provenance crossing, bridge adapter,
+  empty-`rollout_id` run binding, and evaluator-snapshot isolation.
