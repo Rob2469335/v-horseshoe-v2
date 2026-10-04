@@ -275,6 +275,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-001 | Step 2b — canonical delivery-timestamp verification (implements `F2-CLARIFICATION-001` Option A) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per §13(4) and §13(7); expands the §10 file boundary by naming exactly two files; does not modify F0 |
 | F2-CLARIFICATION-002 | Same-second steps are AMBIGUOUS and excluded from the endpoint window | CLARIFICATION | 2026-10-04 | Dated F2 authorial interpretation per 13; does not modify F0; adopts the conservative reading, stated in the entry |
 | F2-IMPL-AUTH-002 | Step 2c - delivery-timestamp hardening (implements F2-CLARIFICATION-001/002 and a plausibility floor) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names no files beyond the two already named in F2-IMPL-AUTH-001; does not modify F0 |
+| F2-IMPL-AUTH-003 | Ratification (retroactive) of Step 1 and Step 1c assembler binding, commits bee672dc and 68208c4f | AUTHORIZED (RETROACTIVE) | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names no files beyond the two already named in F2-IMPL-AUTH-001; records that no authorization existed when the commits were made; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -448,6 +449,24 @@ authorization. Implementation remains a separate, subsequent step.
 **Explicit non-authorization.** Everything listed as not authorized in F2-IMPL-AUTH-001, plus: any rediscovery flag or ambiguity recording, `organism_console/*`, and `.github/*`.
 
 **Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
+
+### F2-IMPL-AUTH-003 - Ratification (retroactive) of Step 1 and Step 1c assembler binding
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7). This entry is RETROACTIVE: it is recorded after the work was committed, and it does not claim that an authorization existed when the work was done. Records no new science and modifies no frozen element.
+
+**Issue.** Commits `bee672dc` and `68208c4f` changed `qwen_train/f2_protocol.py` and `tests/test_f2_protocol.py`. Section 10 did not list those files, the readiness plan is subordinate and grants no authority, and no repository document named them as modifiable when the commits were made. The changes were made on operator chat instruction and were independently audited. Chat is not a repository authority.
+
+**Decision.** The operator ratifies, as of 2026-10-04, exactly the following behaviour added by those two commits: `assemble_f2_bundle` takes the seam delivery record as an input; it recomputes the SHA-256 of the exact delivered bytes and rejects on mismatch with the seam hash; it stores the treatment artifact as the exact delivered bytes; it requires the seam record's arm to equal the assembly arm; and for arm T it requires the exact lesson bytes to occur in the delivered bytes. The related tests are ratified with it.
+
+**File boundary.** Only `qwen_train/f2_protocol.py` and `tests/test_f2_protocol.py`, and only the behaviour listed in the decision.
+
+**Explicit non-authorization.** This entry does not ratify, authorize or review any other commit, including earlier F2 protocol, admission-gate or bundle-assembly commits. It does not authorize wiring `f2_arm_worker.py`, any runtime change, or any F2 execution.
+
+**Implementation status.** This entry records authorization for work already committed; it implements nothing.
 
 ---
 
