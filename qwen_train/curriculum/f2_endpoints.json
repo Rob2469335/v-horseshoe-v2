@@ -1,6 +1,6 @@
 {
   "derivation_method": "reference_modified_file_set_v1",
-  "derived": 8,
+  "derived": 12,
   "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
   "entries": [
     {
@@ -15,7 +15,7 @@
         "tests/test_package.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:02.278206+00:00",
+      "derived_at": "2026-10-04T05:45:13.396675+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "pypa__twine-1066",
       "reference_digest": "826534e0d04ca406e8dc297260732003e223fe44679c73a472e30b9c1c6009f0",
@@ -29,6 +29,32 @@
       "total_file_count": 2
     },
     {
+      "base_commit": "ad67fc66da24f4587c072b13bdaade357eeb6022",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "b522b0edad7c8ce0",
+      "clone_fingerprint_before": "b522b0edad7c8ce0",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 2,
+      "declared_test_files": [
+        "tests/unit_tests/responses/test_response_serializer.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:45:14.942513+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "sinaptik-ai__pandas-ai-1099",
+      "reference_digest": "ee30a31673b4bbd1ce5200c6ff01655fe2c423b55de8357aca5b5c4058706dc4",
+      "relevant_file_set": [
+        "pandasai/pipelines/chat/code_execution.py",
+        "pandasai/responses/response_serializer.py"
+      ],
+      "relevant_file_set_hash": "80ad05c644842a3f4dbdbf6ac665565d1fd6358e09f8400092bdd1bd41ce380f",
+      "repo": "Sinaptik-AI/pandas-ai",
+      "source_file_count": 2,
+      "source_line_count": 4,
+      "total_file_count": 3
+    },
+    {
       "base_commit": "88efb088fba2669db30df083285c826ded400cae",
       "candidates_considered": 1,
       "clone_fingerprint_after": "c20d131f3aee535e",
@@ -40,7 +66,7 @@
         "test/unit/rules/resources/properties/test_string_length.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:04.299391+00:00",
+      "derived_at": "2026-10-04T05:45:15.739971+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "aws-cloudformation__cfn-lint-3805",
       "reference_digest": "9225aaa1aaceca2904454075244059f5165b19c1c1bcf7b6c82493b08531d0f1",
@@ -65,7 +91,7 @@
         "tests/core/test_target_base.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:04.989276+00:00",
+      "derived_at": "2026-10-04T05:45:16.326530+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "meltano__sdk-1881",
       "reference_digest": "eab6c464237b0245836e7c5880782cae6050b1a1f3bf78e123a5ee4660359647",
@@ -80,6 +106,36 @@
       "total_file_count": 3
     },
     {
+      "base_commit": "4b1d2d99b027ec3d88e8ef6ab5e89ba7a83fb15b",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "1802c10a8cd9bc6d",
+      "clone_fingerprint_before": "1802c10a8cd9bc6d",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 4,
+      "declared_test_files": [
+        "tests/functional/adapter/liquid_clustering/fixtures.py",
+        "tests/functional/adapter/liquid_clustering/test_liquid_clustering.py",
+        "tests/unit/macros/relations/test_table_macros.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:45:16.978766+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "databricks__dbt-databricks-935",
+      "reference_digest": "8b6f2a731fc859aae3f734a1e9369e326eea38ea2800b136c687296dac28549c",
+      "relevant_file_set": [
+        "CHANGELOG.md",
+        "dbt/adapters/databricks/impl.py",
+        "dbt/include/databricks/macros/relations/liquid_clustering.sql",
+        "dbt/include/databricks/macros/relations/optimize.sql"
+      ],
+      "relevant_file_set_hash": "4689fdadb782581190dc2c9dc73f4d34661529f4200c02c2e85cda8a3d94d3d5",
+      "repo": "databricks/dbt-databricks",
+      "source_file_count": 4,
+      "source_line_count": 20,
+      "total_file_count": 7
+    },
+    {
       "base_commit": "715856fdb69deceba4d54afe4ccf3f7ad304c5ec",
       "candidates_considered": 1,
       "clone_fingerprint_after": "320866ce1922fb03",
@@ -91,7 +147,7 @@
         "test/devices_tests/sensor_test.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:06.041212+00:00",
+      "derived_at": "2026-10-04T05:45:17.470696+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "xknx__xknx-470",
       "reference_digest": "7e9b63f92babab67c7ddfb6bf49f9b7b3ae16c3b40bda57cc38336a270c2ac95",
@@ -120,7 +176,7 @@
         "tests/unit/test_util.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:06.774561+00:00",
+      "derived_at": "2026-10-04T05:45:18.292156+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "pybamm-team__pybamm-4267",
       "reference_digest": "e1baf549646f4bb2745a2817b6de7f1394aa200c0697f1bfda0bdac458fbaaa9",
@@ -132,6 +188,64 @@
       "source_file_count": 1,
       "source_line_count": 22,
       "total_file_count": 2
+    },
+    {
+      "base_commit": "1ce57f64c9fecb655856dd1f3098c7bf7a1d37fa",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "fce3b110c3260109",
+      "clone_fingerprint_before": "fce3b110c3260109",
+      "clone_unmutated": true,
+      "count_agreement": "mismatch",
+      "declared_file_count": 5,
+      "declared_test_files": [
+        "tests/test_routing.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:45:18.861840+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "pallets__werkzeug-2583",
+      "reference_digest": "591064a3288b05d91c4aee326b9dce89868f8cbf6ae2b6a5b2102cdf44cc4c76",
+      "relevant_file_set": [
+        "CHANGES.rst",
+        "src/werkzeug/routing/converters.py",
+        "src/werkzeug/routing/rules.py"
+      ],
+      "relevant_file_set_hash": "6a9b2b1260f521b11c7bbb64dc219ebace7e249f4eec4fa63221dd88cc10aa00",
+      "repo": "pallets/werkzeug",
+      "source_file_count": 3,
+      "source_line_count": 31,
+      "total_file_count": 4
+    },
+    {
+      "base_commit": "f1aac5bc4465e1ec622e4643e60ba38f8d2cea06",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "eaafd54d79962bb7",
+      "clone_fingerprint_before": "eaafd54d79962bb7",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 4,
+      "declared_test_files": [
+        "test/integration/test_retrieve_job.py",
+        "test/program.py",
+        "test/unit/mock/fake_runtime_client.py",
+        "test/unit/test_job_retrieval.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:45:19.317222+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "qiskit__qiskit-ibm-runtime-367",
+      "reference_digest": "399da94dde86f4010f2babaf767cae1ee88d04d4cc49ad6ea7f4697e7e1f23b2",
+      "relevant_file_set": [
+        "qiskit_ibm_runtime/api/clients/runtime.py",
+        "qiskit_ibm_runtime/api/rest/runtime.py",
+        "qiskit_ibm_runtime/qiskit_runtime_service.py",
+        "releasenotes/notes/creation-date-filters-871a1ca3c0d96fda.yaml"
+      ],
+      "relevant_file_set_hash": "7a794ea8b33921aa491a96d29ae6f80e4b820b911c3657e25518b2cd8b2434a5",
+      "repo": "Qiskit/qiskit-ibm-runtime",
+      "source_file_count": 4,
+      "source_line_count": 41,
+      "total_file_count": 8
     },
     {
       "base_commit": "aa5c1ac5d6f558ad4ef3948c025da78361318827",
@@ -146,7 +260,7 @@
         "envisage/tests/test_safeweakref.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:07.960564+00:00",
+      "derived_at": "2026-10-04T05:45:19.916503+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "enthought__envisage-275",
       "reference_digest": "f66f05379333bf47db5e6be3d19ff3bdaf43af510cd24725d7b8945781613bde",
@@ -174,7 +288,7 @@
         "test/python/visualization/timeline/test_core.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:08.852808+00:00",
+      "derived_at": "2026-10-04T05:45:20.633145+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "qiskit__qiskit-terra-5662",
       "reference_digest": "a18430a9e39b9f21b7b0f8c8b7819a0a5599229c792a71c24597a944bc05c08e",
@@ -206,7 +320,7 @@
         "tests/test_colormap.py"
       ],
       "derivation_method": "reference_modified_file_set_v1",
-      "derived_at": "2026-10-04T05:37:09.597130+00:00",
+      "derived_at": "2026-10-04T05:45:21.518444+00:00",
       "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
       "instance_id": "pyqtgraph__pyqtgraph-1845",
       "reference_digest": "4bcda01fb92f6b16588a570b3c004e85e3da18f679e4b892d2768991bd47c094",
@@ -220,7 +334,7 @@
       "total_file_count": 2
     }
   ],
-  "failed": 6,
+  "failed": 2,
   "failures": [
     {
       "error": "DerivationError: no child of 95b2de37ae7ea2cde50b23dfd657938a4cf60d25 has a test-file diff equal to the declared reference test patch ['pyfakefs/tests/fake_pathlib_test.py']; refusing to guess the reference fix commit",
@@ -229,22 +343,6 @@
     {
       "error": "DerivationError: reference fix commit is AMBIGUOUS: 2 children of df9ad4085d60710b507b54c8fc369ee186eb1d64 match the declared test patch; refusing to guess",
       "instance_id": "pallets__click-2380"
-    },
-    {
-      "error": "DerivationError: no child commit of base ad67fc66da24f4587c072b13bdaade357eeb6022 in C:\\Users\\rober\\Projects\\swe_probe_work\\sinaptik-ai__pandas-ai-1099\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
-      "instance_id": "sinaptik-ai__pandas-ai-1099"
-    },
-    {
-      "error": "DerivationError: no child commit of base 4b1d2d99b027ec3d88e8ef6ab5e89ba7a83fb15b in C:\\Users\\rober\\Projects\\swe_probe_work\\databricks__dbt-databricks-935\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
-      "instance_id": "databricks__dbt-databricks-935"
-    },
-    {
-      "error": "DerivationError: no child commit of base 1ce57f64c9fecb655856dd1f3098c7bf7a1d37fa in C:\\Users\\rober\\Projects\\swe_probe_work\\pallets__werkzeug-2583\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
-      "instance_id": "pallets__werkzeug-2583"
-    },
-    {
-      "error": "DerivationError: no child commit of base f1aac5bc4465e1ec622e4643e60ba38f8d2cea06 in C:\\Users\\rober\\Projects\\swe_probe_work\\qiskit__qiskit-ibm-runtime-367\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
-      "instance_id": "qiskit__qiskit-ibm-runtime-367"
     }
   ],
   "operator_controls": [

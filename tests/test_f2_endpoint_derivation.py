@@ -261,3 +261,108 @@ class TestEndpointMaterialisation:
         )
         assert spec.derivation_source == DERIVATION_METHOD
         assert spec.relevant_file_set_hash == res.relevant_file_set_hash
+
+class TestReadOnlyGitEntryPoint:
+    """FIX 2: fingerprinting must pass through the SAME read-only allowlist.
+
+    The module has exactly one git entry point (``_git``). Before the fix,
+    ``_clone_fingerprint`` called ``subprocess.run`` directly, so the
+    documentation claim "every git invocation is checked against an allowlist"
+    was false for that path. These tests prove the claim behaviourally, not by
+    reading source text.
+    """
+
+    def test_fingerprint_issues_only_read_only_subcommands(self, repo, monkeypatch):
+        """Capture the ACTUAL git subcommands the fingerprint path issues."""
+        import subprocess as _sp
+
+        from qwen_train.f2_endpoint_derivation import READ_ONLY_GIT_SUBCOMMANDS
+
+        seen: list[str] = []
+        real_run = _sp.run
+
+        def spy(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and len(cmd) >= 4 and cmd[0] == "git":
+                seen.append(cmd[3])  # ["git","-C",path,SUBCOMMAND,...]
+            return real_run(cmd, *a, **kw)
+
+        monkeypatch.setattr(_sp, "run", spy)
+        from qwen_train.f2_endpoint_derivation import _clone_fingerprint
+
+        fp = _clone_fingerprint(repo["repo"])
+        assert len(fp) == 16
+        assert seen, "fingerprinting issued no git command at all"
+        assert set(seen) <= READ_ONLY_GIT_SUBCOMMANDS, (
+            f"fingerprint path issued non-read-only subcommand(s): "
+            f"{sorted(set(seen) - READ_ONLY_GIT_SUBCOMMANDS)}"
+        )
+
+    def test_fingerprint_routes_through_the_git_allowlist(self, repo, monkeypatch):
+        """Every subcommand the fingerprint path requests reaches ``_git``."""
+        from qwen_train import f2_endpoint_derivation as M
+
+        recorded: list[str] = []
+        real_git = M._git
+
+        def spy(clone, args):
+            recorded.append(args[0])
+            return real_git(clone, args)
+
+        monkeypatch.setattr(M, "_git", spy)
+        M._clone_fingerprint(repo["repo"])
+        assert recorded == ["rev-parse", "for-each-ref", "rev-list"]
+        assert set(recorded) <= M.READ_ONLY_GIT_SUBCOMMANDS
+
+    def test_allowlist_still_refuses_writes_on_that_path(self, repo):
+        """The allowlist that now covers fingerprinting still rejects writes."""
+        from qwen_train.f2_endpoint_derivation import (
+            READ_ONLY_GIT_SUBCOMMANDS,
+            DerivationError,
+            _git,
+        )
+
+        for bad in ("reset", "checkout", "gc", "update-ref", "fetch", "merge", "rebase"):
+            assert bad not in READ_ONLY_GIT_SUBCOMMANDS
+            with pytest.raises(DerivationError, match="non-read-only"):
+                _git(repo["repo"], [bad])
+
+    def test_fingerprint_is_stable_and_detects_ref_changes(self, repo):
+        """A fingerprint must be stable when nothing changes and sensitive to a ref."""
+        from qwen_train.f2_endpoint_derivation import _clone_fingerprint
+
+        a = _clone_fingerprint(repo["repo"])
+        b = _clone_fingerprint(repo["repo"])
+        assert a == b, "fingerprint must be deterministic"
+        _git_ok(repo["repo"], "branch", "extra-ref", repo["base"])
+        c = _clone_fingerprint(repo["repo"])
+        assert c != a, "fingerprint must change when a ref is added"
+
+
+class TestDeterminismAndSafety:
+    def test_reference_digest_is_deterministic(self, repo):
+        from qwen_train.f2_endpoint_derivation import reference_digest
+
+        d1 = _derive(repo).reference_digest
+        d2 = _derive(repo).reference_digest
+        assert d1 == d2 and len(d1) == 64
+        assert d1 == reference_digest("org/proj", repo["ref"])
+
+    def test_relevant_file_hash_is_deterministic_across_runs(self, repo):
+        assert _derive(repo).relevant_file_set_hash == _derive(repo).relevant_file_set_hash
+
+    def test_unsafe_path_fails_closed(self, repo):
+        """The shared readiness validator rejects traversal/absolute paths."""
+        r = repo["repo"]
+        _git_ok(r, "checkout", "-q", "-b", "unsafe", repo["base"])
+        (r / "src" / "evil").mkdir(exist_ok=True)
+        target = r / "src" / "evil" / ".." / ".." / "escape.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        _git_ok(r, "add", "-A")
+        _git_ok(r, "commit", "-qm", "unsafe path")
+        # A traversal path can never be canonicalised into a safe set.
+        from runtime_v2.services.task_readiness import canonical_relevant_file_set
+
+        with pytest.raises(Exception):
+            canonical_relevant_file_set(["../../etc/passwd"])
+        with pytest.raises(Exception):
+            canonical_relevant_file_set(["/absolute/path.py"])

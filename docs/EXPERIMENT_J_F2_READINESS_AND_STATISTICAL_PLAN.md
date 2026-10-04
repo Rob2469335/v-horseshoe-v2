@@ -291,9 +291,13 @@ reference test patch** (an already-authorized artifact):
 > *test-file* diff set exactly equals the declared reference test patch's file
 > set; `relevant_file_set` is that commit's **non-test** diff paths.
 
-Two independent declared artifacts must agree or the derivation fails closed:
-the test-patch match (authoritative) plus a recorded `num_modified_files`
-diagnostic.
+The **authoritative discriminator is the test-patch match alone**. The pool row's
+`num_modified_files` is a recorded **diagnostic** only (`count_agreement` ∈
+`matches_source_count` / `matches_total_count` / `mismatch` / `not_declared`) and
+**never causes rejection** of an otherwise uniquely identified reference commit —
+the field carries inconsistent semantics across rows (source-only for
+`pypa__twine-1066`, all-files for `xknx__xknx-470`), so count gating was removed
+after it produced demonstrably false rejections.
 
 ### Operator controls — all satisfied
 
@@ -311,19 +315,26 @@ diagnostic.
 
 ### Additional controls implemented (beyond the operator list)
 
-* **Read-only enforcement.** Every `git` invocation is checked against an
-  allowlist of read-only subcommands (`rev-parse`, `rev-list`, `diff`, `log`,
-  `for-each-ref`, `cat-file`, `show`). `reset`, `checkout`, `gc`, `update-ref`
-  are refused at the call site. **PROVEN** by test.
+* **Read-only enforcement — single git entry point.** Every `git` invocation
+  passes through `_git`, which checks an allowlist of read-only subcommands
+  (`rev-parse`, `rev-list`, `diff`, `log`, `for-each-ref`, `cat-file`, `show`).
+  `reset`, `checkout`, `gc`, `update-ref`, `fetch`, `merge`, `rebase` are refused
+  at the call site. **Corrected in this revision:** `_clone_fingerprint` previously
+  called `subprocess.run` directly, bypassing the allowlist; it now routes through
+  `_git`, so the claim is true for *every* git invocation. **PROVEN** by test
+  (`TestReadOnlyGitEntryPoint`), which fails if fingerprinting does not call `_git`.
 * **Clone non-mutation proof.** Each derivation fingerprints the clone
-  (`HEAD` + all refs + commit count) before and after; a change raises. All 8
+  (`HEAD` + all refs + commit count) before and after; a change raises. All 12
   successful derivations recorded `clone_unmutated: true`.
 * **No gold content read.** Only `--name-only` and `--numstat` are used: paths
   and line counts, never a hunk or file body.
 
-### Result — 8 derived, 6 fail closed
+### Result — 12 derived, 2 fail closed
 
-| Derived (8) | `relevant_file_set` |
+Revision `48d17a65` reported 8 derived / 6 failed. The four "no child" rows were
+recovered by controlled fetch (see below); **no other row changed**.
+
+| Derived (12) | `relevant_file_set` |
 |---|---|
 | `pypa__twine-1066` | `twine/package.py` |
 | `aws-cloudformation__cfn-lint-3805` | `src/cfnlint/rules/resources/properties/StringLength.py` |
@@ -333,37 +344,59 @@ diagnostic.
 | `enthought__envisage-275` | `envisage/extension_registry.py`, `envisage/safeweakref.py`, `setup.cfg` |
 | `qiskit__qiskit-terra-5662` | 7 `.py` + `releasenotes/notes/*.yaml` |
 | `pyqtgraph__pyqtgraph-1845` | `pyqtgraph/colormap.py` |
+| **`sinaptik-ai__pandas-ai-1099`** | `pandasai/pipelines/chat/code_execution.py`, `pandasai/responses/response_serializer.py` |
+| **`databricks__dbt-databricks-935`** | `CHANGELOG.md`, `dbt/adapters/databricks/impl.py`, `dbt/include/databricks/macros/relations/liquid_clustering.sql`, `…/optimize.sql` |
+| **`pallets__werkzeug-2583`** | `CHANGES.rst`, `src/werkzeug/routing/converters.py`, `src/werkzeug/routing/rules.py` |
+| **`qiskit__qiskit-ibm-runtime-367`** | `qiskit_ibm_runtime/api/clients/runtime.py`, `qiskit_ibm_runtime/api/rest/runtime.py`, `qiskit_ibm_runtime/qiskit_runtime_service.py`, `releasenotes/notes/creation-date-filters-*.yaml` |
 
-| Fail-closed (6) | Reason |
+| Fail-closed (2) | Reason |
 |---|---|
-| `pytest-dev__pyfakefs-916` | no child matches the declared test patch |
-| `pallets__click-2380` | **AMBIGUOUS** — 2 children match the declared test patch |
-| `sinaptik-ai__pandas-ai-1099` | base has no child in the fetched refs |
-| `databricks__dbt-databricks-935` | base has no child in the fetched refs |
-| `pallets__werkzeug-2583` | base has no child in the fetched refs (base object present; 5181 commits) |
-| `qiskit__qiskit-ibm-runtime-367` | base has no child in the fetched refs (base object present; 884 commits) |
+| `pytest-dev__pyfakefs-916` | no child matches the declared test patch — **honest failure, not rescued** |
+| `pallets__click-2380` | **AMBIGUOUS** — 2 children match the declared test patch — **honest failure, not rescued** |
+
+`pallets__werkzeug-2583` derived with `count_agreement = mismatch`, which is a
+live demonstration that the diagnostic no longer gates: under the removed count
+gate this row would have been rejected despite a uniquely identified reference
+commit.
+
+### Controlled network recovery (4 rows)
+
+The four "no child" clones were **truncated at base** — zero refs, no remote
+configured, and no future history at all (distinct from the normally-cloned rows,
+which carry remotes and hundreds of refs). Recovery was the minimum network
+operation: add the remote and fetch the default branch, no tags.
+
+| Row | default branch | fetch rc | refs | commits | children of base | worktree unchanged |
+|---|---|---|---|---|---|---|
+| `sinaptik-ai__pandas-ai-1099` | main | 0 | 0→2 | 909→1416 | 1 | **yes** |
+| `databricks__dbt-databricks-935` | main | 0 | 0→2 | 1149→1695 | 1 | **yes** |
+| `pallets__werkzeug-2583` | main | 0 | 2→2 | 6094→6094 | 1 | **yes** |
+| `qiskit__qiskit-ibm-runtime-367` | main | 0 | 0→2 | 884→2634 | 1 | **yes** |
+
+No checkout, reset, rebase, merge, or working-tree modification. Pre/post
+`git status --porcelain` was recorded for each and is byte-identical. The fetched
+repositories remain **curator-side**: the arm-workspace contamination channel
+(future history) is still closed at arm time by `_strip_future_history`.
 
 ### Two construct-validity observations for the operator
 
 **(a) Some derived sets include non-code files.** `xknx-470` includes
 `changelog.md` and `docs/sensor.md`; `envisage-275` includes `setup.cfg`;
-`qiskit-terra-5662` includes a release note. This is *faithful* to the authorized
-definition (the reference commit's non-test files) but it means the primary
-endpoint could be satisfied by editing a changelog. A code-extension filter
-would be a **methodology change beyond the Q8 authorization** and is therefore
-**not applied** — `REQUIRES AUTHORIZATION`.
+`qiskit-terra-5662` includes a release note; the recovered `databricks-935`
+includes `CHANGELOG.md` and two `.sql` macros, and `werkzeug-2583` includes
+`CHANGES.rst`. This is *faithful* to the authorized definition (the reference
+commit's non-test files) but it means the primary endpoint could be satisfied by
+editing a changelog. **Retained exactly as derived — no extension filter.** A
+code-only filter would be a **methodology change beyond the Q8 authorization** —
+`REQUIRES AUTHORIZATION`.
 
-**(b) The 4 "no child" failures are a clone-completeness issue, not a data
-issue.** The base commit object is present but is the parent of nothing in the
-fetched refs, so the reference commit is not reachable. Resolving them needs a
-`git fetch` of the relevant history — a **network operation against the task
-repositories**, which is a decision for the operator, not an implementation
-detail. `REQUIRES AUTHORIZATION`.
+**(b) RESOLVED in this revision.** The four clone-completeness failures were
+recovered under the operator's controlled-fetch authorization.
 
 ### Effect on admissibility
 
-`S6_relevant_file_set` now **passes for 8 of 14** tasks (was 0). Admitted count
-remains **0** because `S8_evidence_provenance` fails for all 14 — base/gold
+`S6_relevant_file_set` now **passes for 12 of 14** tasks (was 0, then 8). Admitted
+count remains **0** because `S8_evidence_provenance` fails for all 14 — base/gold
 evidence digests require actual base and gold test runs, which is a separate
 authorization. **Q8 is delivered; R8/S8 evidence provenance is the next gate.**
 

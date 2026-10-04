@@ -29,16 +29,19 @@ patch**, which is already an authorized artifact supplied with the instance:
     *test-file* diff set exactly equals the declared reference test patch's file
     set.
 
-On ``pypa__twine-1066`` this selects exactly one of three candidates, and the
-result is independently cross-checked against the pool row's
-``num_modified_files``. Two independent declared artifacts must agree, or the
-derivation fails closed.
+On ``pypa__twine-1066`` this selects exactly one of three candidates. The pool
+row's ``num_modified_files`` is then consulted as an INDEPENDENT DIAGNOSTIC and
+recorded as ``count_agreement``. It is **never an acceptance gate**: the field
+carries inconsistent semantics across rows (source-only for
+``pypa__twine-1066``, all-files for ``xknx__xknx-470``), so gating on it produced
+demonstrably false rejections. A count discrepancy is published, not fatal.
 
 Contamination controls (operator controls 1-9)
 ----------------------------------------------
-* **Read-only against the task clone.** Every git invocation is checked against
-  an allowlist of read-only subcommands. No checkout, reset, gc, update-ref, or
-  any write. The clone is never mutated.
+* **Read-only against the task clone.** Every git invocation passes through a
+  single entry point (:func:`_git`) that enforces an allowlist of read-only
+  subcommands. No checkout, reset, gc, update-ref, or any write. The clone is
+  never mutated.
 * **No gold content is read.** Only ``git diff --name-only`` / ``--numstat``
   (path and line counts) are consulted. No gold hunk, no patch body, no file
   content.
@@ -270,9 +273,11 @@ def derive_relevant_file_set(
     """Derive one task's ``relevant_file_set`` under the authorized methodology.
 
     ``declared_test_patch_files`` is the file set of the instance's reference
-    test patch -- an already-authorized artifact. ``expected_source_file_count``
-    is the pool row's ``num_modified_files``; when supplied it is an INDEPENDENT
-    cross-check and a mismatch fails closed.
+    test patch -- an already-authorized artifact, and the **authoritative**
+    discriminator. ``expected_source_file_count`` is the pool row's
+    ``num_modified_files``; it is recorded as an independent **diagnostic**
+    (``count_agreement``) and never causes rejection of an otherwise uniquely
+    identified reference commit.
     """
     clone = Path(clone_path)
     if not (clone / ".git").exists():
@@ -392,22 +397,17 @@ def load_declared_test_patch(clone_parent: Path | str) -> tuple[str, ...]:
 
 
 def _clone_fingerprint(clone: Path) -> str:
-    """Fingerprint of a clone's HEAD + ref topology, to prove non-mutation."""
-    import subprocess
+    """Fingerprint of a clone's HEAD + ref topology, to prove non-mutation.
 
-    parts: list[str] = []
-    for args in (
-        ["rev-parse", "HEAD"],
-        ["for-each-ref", "--format=%(refname) %(objectname)"],
-        ["rev-list", "--all", "--count"],
-    ):
-        proc = subprocess.run(
-            ["git", "-C", str(clone), *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        parts.append(proc.stdout.strip())
+    Routed through :func:`_git` so the read-only allowlist covers fingerprinting
+    too. This module has exactly ONE git entry point: there is no code path that
+    can reach ``git`` without passing the allowlist check.
+    """
+    parts = [
+        _git(clone, ["rev-parse", "HEAD"]).strip(),
+        _git(clone, ["for-each-ref", "--format=%(refname) %(objectname)"]).strip(),
+        _git(clone, ["rev-list", "--all", "--count"]).strip(),
+    ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
