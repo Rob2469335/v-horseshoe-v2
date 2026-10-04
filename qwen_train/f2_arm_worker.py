@@ -308,6 +308,16 @@ def run_worker(argv: list[str] | None = None) -> int:
                     workspace_root=workspace_root,
                     repo_root=os.environ.get("SWARM_F2_REPO_ROOT", str(_HERE.parent)),
                 )
+                # PER-ARM FILESYSTEM ISOLATION (design §13.5). Reset the task
+                # repository to the declared base_commit + authorized test patch
+                # BEFORE the arm can mutate it, so an arm never inherits another
+                # arm's (or a failed attempt's) repository state. Reuses the F1
+                # arm_workspace machinery; fail closed.
+                from qwen_train.arm_workspace import prepare_arm_workspace
+
+                prepare_arm_workspace(
+                    workspace_root, str(task_binding.get("base_commit") or "")
+                )
 
             adapter = F2ExecutionAdapter(
                 arm=artifact.arm,

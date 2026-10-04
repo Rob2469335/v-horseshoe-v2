@@ -257,6 +257,56 @@ def prepare_fresh_arm_workspace(
     return expected
 
 
+def resolve_task_repo(workspace_root: Path | str) -> Path:
+    """Locate the git repository the agent edits within an F2 task workspace.
+
+    The probe layout is ``<WORK>/<instance_id>/{repo/, venv/, test_patch.diff}``;
+    a caller may hand us either the instance directory or the ``repo`` itself.
+    Fail closed when neither is a git repository -- an F2 arm must never run
+    against an unidentifiable workspace.
+    """
+    ws = Path(workspace_root)
+    if (ws / ".git").exists():
+        return ws
+    nested = ws / "repo"
+    if (nested / ".git").exists():
+        return nested
+    raise FreshArmWorkspaceError(
+        f"no git repository in F2 task workspace {ws} "
+        f"(expected {ws}/.git or {ws}/repo/.git)"
+    )
+
+
+def resolve_task_test_patch(repo: Path) -> Path:
+    """The authorized task test patch is a SIBLING of the task repo.
+
+    ``<WORK>/<instance_id>/test_patch.diff`` sits outside ``repo/`` so the
+    ``git clean -fdx`` inside the repo cannot remove it (same invariant as the
+    F1 evaluator path). Fail closed when absent.
+    """
+    candidate = Path(repo).parent / "test_patch.diff"
+    if candidate.is_file():
+        return candidate
+    raise FreshArmWorkspaceError(
+        f"authorized test patch not found beside task repo {repo}: {candidate}"
+    )
+
+
+def prepare_arm_workspace(workspace_root: Path | str, base_commit: str) -> Path:
+    """Establish per-arm isolation for an F2 arm, reusing the F1 machinery.
+
+    Resets the task repository to ``base_commit`` + EXACTLY the authorized test
+    patch (via :func:`prepare_fresh_arm_workspace`) before the arm's task
+    execution can mutate it. Idempotent across arms because the reset discards
+    the previous arm's state before re-applying the patch. Fail closed: returns
+    the repo path on success; raises ``FreshArmWorkspaceError`` otherwise.
+    """
+    repo = resolve_task_repo(workspace_root)
+    patch = resolve_task_test_patch(repo)
+    prepare_fresh_arm_workspace(repo, base_commit, patch)
+    return repo
+
+
 def repo_commit_id(rev: str, repo: Path) -> str:
     """Resolve ``rev`` to a full commit id inside ``repo``."""
     proc = _run(["git", "rev-parse", "--verify", f"{rev}^{{commit}}"], cwd=repo)
