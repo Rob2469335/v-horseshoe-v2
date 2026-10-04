@@ -125,9 +125,17 @@ class TestLocalOnlyBoundary:
                 complete=lambda _p: "x",
             )
 
-    def test_default_identity_is_local_loopback(self):
+    def test_default_identity_requires_explicit_model(self, monkeypatch):
+        """No silent model identity: unset SWARM_DISTILLER_MODEL fails closed."""
+        monkeypatch.delenv("SWARM_DISTILLER_MODEL", raising=False)
+        with pytest.raises(LocalOnlyError):
+            default_local_identity()
+
+    def test_default_identity_is_local_loopback_when_set(self, monkeypatch):
+        monkeypatch.setenv("SWARM_DISTILLER_MODEL", "robs4b")
         ident = default_local_identity()
         assert ident.provider == "local"
+        assert ident.model_id == "robs4b"
         assert ident.base_url.startswith("http://127.0.0.1")
 
     def test_http_failure_fails_closed_not_network_fallback(self):

@@ -515,14 +515,13 @@ lookup; the transport uses the fixed local `Bearer llama` token.
 stays disabled (fail closed). `make_fake_distiller` is a DEVELOPMENT FAKE
 (`provider="fake"`); its identity appears in the attestation rationale.
 
-**`GOVERNANCE GAP` — model identity.** `SWARM_DISTILLER_MODEL` defaults to
-`qwen3.5-4b`, but the LOCAL backend serves alias `robs4b`
-(`docs/INFERENCE_TOPOLOGY.md` §2; the router `/v1/models` spoofs
-`robs4b`/`qwen3.5-0.8b`). llama.cpp serves its single loaded model regardless of
-the request `model` field, so the call still runs locally, but the **declared**
-identity does not match the served artifact. The experimental distiller model
-identity must be confirmed by the operator and set explicitly before any
-learning event (`REQUIRES AUTHORIZATION`).
+**`GOVERNANCE GAP` — model identity (now fail-closed).** The LOCAL backend
+serves alias `robs4b` (`docs/INFERENCE_TOPOLOGY.md` §2); which model the
+distiller must declare is **not established by repository authority**
+(`REQUIRES AUTHORIZATION`). `default_local_identity()` therefore has **no silent
+default**: if `SWARM_DISTILLER_MODEL` is unset it raises `LocalOnlyError`, so
+`get_prompt_repairer` disables synthesis rather than running under an unknown
+identity. The operator must set the identity explicitly before a learning event.
 
 ### 11.4 Failure modes (`PROVEN`)
 
@@ -562,3 +561,21 @@ learning event.
 * `tests/test_w5_integration.py` — candidate synthesis, tick integration,
   membrane against W5 inputs, provenance crossing, bridge adapter,
   empty-`rollout_id` run binding, and evaluator-snapshot isolation.
+
+### 11.8 Per-task readiness mechanism (`PROVEN`)
+
+`runtime_v2/services/task_readiness.py` provides the governed, content-addressed
+per-task readiness representation required by the readiness contract:
+
+* `TaskReadiness` binds `task_id`, `base_commit`, a validated frozen
+  `relevant_file_set`, and the declared F2P/P2P sets; the set is normalized,
+  sorted and SHA-256 addressed (`compute_relevant_file_set_hash`).
+* `from_dict`/`load` fail closed on a malformed declaration or a hash mismatch.
+* `evaluate_readiness` evaluates R1–R8 mechanically and fails closed: a missing
+  (`None`) condition is NOT a pass.
+* `endpoint_measurable` returns `None` (NOT ESTABLISHED) when no declaration is
+  supplied.
+
+It ships **no** F2 task values: designating the five tasks' `relevant_file_set`
+is an operator/scientific decision (readiness contract §6,
+`REQUIRES AUTHORIZATION`). Tests: `tests/test_task_readiness.py`.

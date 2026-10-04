@@ -53,7 +53,9 @@ log = logging.getLogger(__name__)
 LOCAL_PROVIDER = "local"
 FAKE_PROVIDER = "fake"
 DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:8080"
-DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
+#: Deprecated placeholder — no silent default. The model identity must be set
+#: explicitly via ``SWARM_DISTILLER_MODEL`` (see ``default_local_identity``).
+DEFAULT_LOCAL_MODEL = ""
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 
 #: Style guidance only. The information boundary is enforced by what the caller
@@ -214,11 +216,24 @@ def make_fake_distiller(
 
 
 def default_local_identity() -> DistillerIdentity:
-    """The default experimental identity (provider=local, local model)."""
+    """The experimental identity (provider=local, EXPLICIT model).
+
+    No silent model default: the declared identity must match the served
+    artifact, and which model that is (``robs4b`` vs ``qwen3.5-4b``) is an
+    operator/scientific decision not established by repository authority
+    (``GOVERNANCE GAP`` / ``REQUIRES AUTHORIZATION``). A missing identity is
+    refused (fail closed) rather than guessed, so ``get_prompt_repairer``
+    disables synthesis instead of running under an unknown model identity.
+    """
     import os
 
+    model_id = os.environ.get("SWARM_DISTILLER_MODEL", "").strip()
+    if not model_id:
+        raise LocalOnlyError(
+            "distiller model identity is not established: set SWARM_DISTILLER_MODEL"
+        )
     return DistillerIdentity(
         provider=LOCAL_PROVIDER,
-        model_id=os.environ.get("SWARM_DISTILLER_MODEL", DEFAULT_LOCAL_MODEL),
+        model_id=model_id,
         base_url=os.environ.get("SWARM_DISTILLER_BASE_URL", DEFAULT_LOCAL_BASE_URL),
     )
