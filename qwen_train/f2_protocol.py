@@ -1069,6 +1069,15 @@ def assemble_f2_bundle(
     lesson_art: ArtifactRef | None = None
     if arm == F2_TREATMENT_ARM:
         lb = (lesson_block_text or "").encode("utf-8")
+        # The exact lesson bytes MUST occur inside the delivered artifact. The
+        # renderer (f2_arm_primitives.render_block_from_records) inserts each
+        # lesson's rule_text verbatim, so this is an exact UTF-8 byte-substring
+        # check: no normalisation, no re-encoding, no line-ending changes.
+        if lb not in delivered_bytes:
+            raise ValueError(
+                "arm T: the exact lesson bytes do not occur in the delivered "
+                "artifact; the lesson is not bound to what was delivered"
+            )
         lesson_hash = _sha256(lb)
         lesson_art = _put_artifact(store, f"{slug}lesson_block.txt", lb, ROLE_LESSON_BLOCK)
 
