@@ -11,6 +11,12 @@ No test is run, no service is started, no network is contacted.
 """
 from __future__ import annotations
 
+import atexit
+import hashlib
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 
 from qwen_train.f2_population import (
@@ -21,6 +27,68 @@ from qwen_train.f2_population import (
     screen_pool_rows,
 )
 
+# S8 is a machine-verifiable contract: digests are compact identities, and
+# admission requires VERIFIED evidence records. Verification now also REQUIRES a
+# trusted artifact root and an evaluator authorization, so these fixtures create
+# real artifacts in a shared root.
+_EVALUATOR = "f2_base_gold_runner"
+_EVALUATOR_VERSION = "v1"
+AUTHORIZED = {_EVALUATOR: (_EVALUATOR_VERSION,)}
+
+_EVIDENCE_ROOT = Path(tempfile.mkdtemp(prefix="f2_evidence_fixture_"))
+atexit.register(shutil.rmtree, _EVIDENCE_ROOT, ignore_errors=True)
+
+
+def _artifact(name: str, content: str, role: str):
+    from qwen_train.f2_evidence import ArtifactRef
+
+    data = content.encode("utf-8")
+    (_EVIDENCE_ROOT / name).write_bytes(data)
+    return ArtifactRef(
+        name=name, digest=hashlib.sha256(data).hexdigest(), size_bytes=len(data), role=role
+    )
+
+
+def _evidence_pair(instance_id, repo, base_commit):
+    from qwen_train.f2_evidence import (
+        ROLE_RUN_LOG,
+        ROLE_TEST_OUTPUT,
+        build_evidence_record,
+    )
+
+    slug = instance_id.replace("/", "_").replace(".", "_")
+
+    def rec(state, result):
+        return build_evidence_record(
+            instance_id=instance_id,
+            repository=repo,
+            base_commit=base_commit,
+            execution_state_identity=state,
+            execution_state_digest=hashlib.sha256(
+                f"{state}|{instance_id}".encode()
+            ).hexdigest(),
+            test_command="pytest -q",
+            environment_identity="python_base_310",
+            evaluator_identity=_EVALUATOR,
+            evaluator_version=_EVALUATOR_VERSION,
+            execution_started_at="2026-10-04T00:00:00Z",
+            execution_finished_at="2026-10-04T00:01:00Z",
+            execution_result=result,
+            test_output_artifact=_artifact(
+                f"{slug}-{state}-test.out", f"{state} test output\n", ROLE_TEST_OUTPUT
+            ),
+            run_log_artifact=_artifact(
+                f"{slug}-{state}-run.log", f"{state} run log\n", ROLE_RUN_LOG
+            ),
+        )
+
+    return rec("base", "fail"), rec("gold", "pass")
+
+
+_BASE_EV, _GOLD_EV = _evidence_pair(
+    "pypa__twine-1066", "pypa/twine", "4a1fc064a7899872ee845df6a8810bb51a6845ac"
+)
+
 GOOD = dict(
     instance_id="pypa__twine-1066",
     repo="pypa/twine",
@@ -29,8 +97,12 @@ GOOD = dict(
     fail_to_pass=["tests/test_package.py::test_x"],
     pass_to_pass=["tests/test_package.py::test_y"],
     relevant_file_set=["twine/package.py"],
-    base_evidence_digest="a" * 64,
-    gold_evidence_digest="b" * 64,
+    base_evidence_digest=_BASE_EV.evidence_record_digest,
+    gold_evidence_digest=_GOLD_EV.evidence_record_digest,
+    base_evidence=_BASE_EV,
+    artifact_root=_EVIDENCE_ROOT,
+    gold_evidence=_GOLD_EV,
+    authorized_evaluators=AUTHORIZED,
 )
 
 
@@ -88,10 +160,23 @@ class TestR8IsEnforcedNotDefaulted:
         e = _entry(relevant_file_set=[])
         assert e.admitted is False
 
-    def test_missing_evidence_digests_are_rejected(self):
-        e = _entry(base_evidence_digest="", gold_evidence_digest="")
+    def test_missing_evidence_records_are_rejected(self):
+        """S8 gates on VERIFIED records; without them it fails closed."""
+        e = _entry(base_evidence=None, gold_evidence=None)
         assert _rule(e, "S8_evidence_provenance") is False
         assert e.admitted is False
+
+    def test_empty_evidence_identity_is_reported_but_not_gating(self):
+        """A compact identity is a manifest convenience, not the admission gate.
+
+        With no identity recorded the entry reports ``evidence_identity_recorded
+        == False`` while verification still succeeds on the records themselves.
+        Admission follows VERIFICATION, never string presence.
+        """
+        e = _entry(base_evidence_digest="", gold_evidence_digest="")
+        assert e.to_dict()["evidence_identity_recorded"] is False
+        assert e.evidence_verified is True
+        assert e.admitted is True
 
     def test_test_file_in_relevant_set_is_rejected(self):
         """F1-OP-003 excluded the test file from the endpoint."""
@@ -168,8 +253,28 @@ class TestRealPoolScreening:
         assert s["admitted"] == 0
         assert s["failing_rules"].get("S6_relevant_file_set") == len(rows)
 
-    def test_supplying_endpoints_and_digests_admits_tasks(self):
-        """With endpoints + evidence supplied, admission follows the DATA.
+    def test_digests_alone_do_not_admit_tasks(self):
+        """S8 regression guard: a non-empty digest is NOT provenance.
+
+        Previously this test asserted that supplying ``evidence_digests`` admitted
+        tasks. That was the defect: string presence was treated as verified
+        evidence. Under the machine-verifiable contract, digests are compact
+        identities only, so every task must still fail S8.
+        """
+        rows = load_pool_rows(self.POOL)
+        sets = {r["instance_id"]: ["pkg/mod.py"] for r in rows}
+        digs = {r["instance_id"]: ("a" * 64, "b" * 64) for r in rows}
+        manifest = screen_pool_rows(rows, relevant_file_sets=sets, evidence_digests=digs)
+        manifest.verify()
+        s = manifest.summary()
+        assert s["admitted"] == 0
+        assert s["failing_rules"]["S8_evidence_provenance"] == len(rows)
+        # The identity was recorded, yet nothing was verified.
+        assert s["evidence_identity_recorded"] == len(rows)
+        assert s["evidence_verified"] == 0
+
+    def test_verified_evidence_admits_tasks(self):
+        """With endpoints AND verified base/gold evidence, admission follows DATA.
 
         Screening the real pool found that `pyqtgraph__pyqtgraph-1845` declares an
         EMPTY pass_to_pass set, so S4 (R3 needs something to regress) rejects it.
@@ -179,17 +284,27 @@ class TestRealPoolScreening:
         rows = load_pool_rows(self.POOL)
         sets = {r["instance_id"]: ["pkg/mod.py"] for r in rows}
         digs = {r["instance_id"]: ("a" * 64, "b" * 64) for r in rows}
-        manifest = screen_pool_rows(rows, relevant_file_sets=sets, evidence_digests=digs)
+        recs = {
+            r["instance_id"]: _evidence_pair(
+                r["instance_id"], r["repo"], r["base_commit"]
+            )
+            for r in rows
+        }
+        manifest = screen_pool_rows(
+            rows,
+            relevant_file_sets=sets,
+            evidence_digests=digs,
+            evidence_records=recs,
+            artifact_root=_EVIDENCE_ROOT,
+            authorized_evaluators=AUTHORIZED,
+        )
         manifest.verify()
         summary = manifest.summary()
-        rejected = [
-            e.instance_id
-            for e in manifest.entries
-            if not e.admitted
-        ]
+        rejected = [e.instance_id for e in manifest.entries if not e.admitted]
         assert rejected == ["pyqtgraph__pyqtgraph-1845"]
         assert summary["admitted"] == len(rows) - 1
         assert summary["failing_rules"]["S4_pass_to_pass"] == 1
+        assert summary["evidence_verified"] == len(rows)
 
     def test_repr_encoded_list_fields_are_parsed(self):
         rows = [
@@ -208,6 +323,9 @@ class TestRealPoolScreening:
             rows,
             relevant_file_sets={"x__y-1": ["y/mod.py"]},
             evidence_digests={"x__y-1": ("a" * 64, "b" * 64)},
+            evidence_records={"x__y-1": _evidence_pair("x__y-1", "x/y", "abcdef1234")},
+            artifact_root=_EVIDENCE_ROOT,
+            authorized_evaluators=AUTHORIZED,
         )
         entry = manifest.entries[0]
         assert entry.fail_to_pass == ("tests/t.py::a",)

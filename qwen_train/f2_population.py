@@ -56,6 +56,7 @@ from qwen_train.f2_endpoint import (
     FrozenEndpoint,
     freeze_endpoint,
 )
+from qwen_train.f2_evidence import STATE_MISSING, verify_task_evidence
 
 __all__ = [
     "ScreenResult",
@@ -75,6 +76,13 @@ def _sha256_text(text: str) -> str:
 
 def _canon(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+#: Module-private sentinel. Possession is the ONLY way to construct a
+#: ``PopulationEntry``, so an entry (and therefore an admission decision) can
+#: only originate from ``screen_entry``. A caller cannot manufacture
+#: ``evidence_verified=True`` / a passing S8 screen and have it count.
+_ENTRY_PROOF = object()
 
 
 @dataclass(frozen=True)
@@ -102,21 +110,39 @@ class PopulationEntry:
     endpoint: FrozenEndpoint
     base_evidence_digest: str = ""
     gold_evidence_digest: str = ""
+    # S8: the admission decision is based on VERIFIED evidence, never on string
+    # presence. ``evidence_verified`` is True only when the machine-verifiable
+    # provenance contract accepts the base/gold pair; ``evidence_state`` carries
+    # the distinct reason when it does not.
+    evidence_verified: bool = False
+    evidence_state: str = "MISSING"
+    evidence_scientifically_sufficient: bool = False
     language: str = ""
     usable: bool = True
     notes: str = ""
     screens: tuple[ScreenResult, ...] = field(default_factory=tuple)
+    _proof: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._proof is not _ENTRY_PROOF:
+            raise TypeError(
+                "PopulationEntry must be produced by screen_entry(); it cannot be "
+                "constructed directly, so an admission decision cannot be forged "
+                "from caller-supplied booleans."
+            )
 
     @property
     def admitted(self) -> bool:
         return all(s.passed for s in self.screens)
 
     def identity_payload(self) -> dict[str, Any]:
-        """The hash-bound payload. Anything mutable is deliberately EXCLUDED.
+        """The hash-bound payload.
 
-        ``usable``, ``notes``, ``screens`` and ``language`` are excluded because
-        they are annotations that may be revised; everything that determines what
-        is measured is included.
+        ``usable``, ``notes`` and ``screens`` are excluded because they are
+        mutable annotations. The S8 verdict fields ARE included (H2): if a value
+        determines whether an entry is eligible for admission, changing it MUST
+        change the integrity identity. An evidence verdict that is not covered by
+        the anchor is an incomplete anchor.
         """
         return {
             "schema": MANIFEST_SCHEMA_VERSION,
@@ -131,6 +157,12 @@ class PopulationEntry:
             "horizon_steps": self.endpoint.horizon_steps,
             "base_evidence_digest": self.base_evidence_digest,
             "gold_evidence_digest": self.gold_evidence_digest,
+            # Admission-relevant S8 state (H2).
+            "evidence_verified": self.evidence_verified,
+            "evidence_state": self.evidence_state,
+            "evidence_scientifically_sufficient": (
+                self.evidence_scientifically_sufficient
+            ),
         }
 
     @property
@@ -147,6 +179,16 @@ class PopulationEntry:
                 "admitted": self.admitted,
                 "identity_hash": self.identity_hash,
                 "endpoint": self.endpoint.to_dict(),
+                # S8 outcome: identity recorded vs verified vs scientifically
+                # sufficient are three separate statements.
+                "evidence_identity_recorded": bool(
+                    self.base_evidence_digest and self.gold_evidence_digest
+                ),
+                "evidence_verified": self.evidence_verified,
+                "evidence_state": self.evidence_state,
+                "evidence_scientifically_sufficient": (
+                    self.evidence_scientifically_sufficient
+                ),
                 "screens": [s.to_dict() for s in self.screens],
             }
         )
@@ -166,6 +208,11 @@ def screen_entry(
     horizon_steps: int = DEFAULT_HORIZON_STEPS,
     base_evidence_digest: str = "",
     gold_evidence_digest: str = "",
+    base_evidence: Any = None,
+    gold_evidence: Any = None,
+    artifact_root: Any = None,
+    authorized_evaluators: Mapping[str, tuple[str, ...]] | None = None,
+    expected_gold_state_digest: str | None = None,
     language: str = "",
     usable: bool = True,
     derivation_evidence: Sequence[str] = (),
@@ -174,6 +221,10 @@ def screen_entry(
 
     Never raises for an inadmissible task: an inadmissible task is a RESULT, not
     an error, and its failing rule must be visible in the manifest.
+
+    S8 accepts the task ONLY when :func:`qwen_train.f2_evidence.verify_task_evidence`
+    verifies the base/gold pair. ``base_evidence_digest`` / ``gold_evidence_digest``
+    remain compact manifest identities; a non-empty digest by itself NEVER admits.
     """
     screens: list[ScreenResult] = []
 
@@ -249,16 +300,41 @@ def screen_entry(
     else:
         screens.append(ScreenResult("S7_source_not_test", False, "no endpoint"))
 
-    # S8 - base/gold provenance with cryptographic digests (R5/R8).
-    have_evidence = bool(base_evidence_digest) and bool(gold_evidence_digest)
-    screens.append(
-        ScreenResult(
-            "S8_evidence_provenance",
-            have_evidence,
-            "base+gold digests recorded"
-            if have_evidence
-            else "base/gold evidence digests missing (R5 substitute-probe only)",
+    # S8 - base/gold evidence provenance (R5).
+    #
+    # The admission decision is made by the machine-verifiable contract in
+    # qwen_train.f2_evidence, NEVER by string presence. A non-empty digest
+    # establishes integrity only; it is not provenance and not scientific
+    # validity. When no evidence records are supplied, S8 fails closed with a
+    # reason rather than coercing to True.
+    evidence_verification = verify_task_evidence(
+        task_id=str(instance_id or ""),
+        repository=str(repo or ""),
+        base_commit=str(base_commit or ""),
+        base_evidence=base_evidence,
+        gold_evidence=gold_evidence,
+        artifact_root=artifact_root,
+        authorized_evaluators=authorized_evaluators,
+        expected_gold_state_digest=expected_gold_state_digest,
+    )
+    evidence_ok = evidence_verification.ok
+    identity_recorded = bool(base_evidence_digest and gold_evidence_digest)
+    if evidence_ok:
+        s8_detail = (
+            "base/gold evidence verified: integrity + provenance + required "
+            "base-fails/gold-passes relationship"
         )
+    elif evidence_verification.state == STATE_MISSING and identity_recorded:
+        s8_detail = (
+            "evidence identity recorded but provenance NOT verified "
+            "(a digest is not provenance); supply verifiable evidence records"
+        )
+    else:
+        s8_detail = (
+            f"{evidence_verification.state}: {evidence_verification.detail}"
+        )
+    screens.append(
+        ScreenResult("S8_evidence_provenance", evidence_ok, s8_detail)
     )
     screens.append(
         ScreenResult("S9_probe_usable", bool(usable), f"usable={usable}")
@@ -286,9 +362,15 @@ def screen_entry(
         endpoint=endpoint,
         base_evidence_digest=str(base_evidence_digest or ""),
         gold_evidence_digest=str(gold_evidence_digest or ""),
+        evidence_verified=bool(evidence_verification.ok),
+        evidence_state=str(evidence_verification.state),
+        evidence_scientifically_sufficient=bool(
+            evidence_verification.scientifically_sufficient
+        ),
         language=str(language or ""),
         usable=bool(usable),
         screens=tuple(screens),
+        _proof=_ENTRY_PROOF,
     )
 
 
@@ -333,6 +415,26 @@ class PopulationManifest:
             "admitted": len(self.admitted),
             "distinct_repositories": len({e.repo for e in self.entries if e.repo}),
             "failing_rules": dict(sorted(failing.items())),
+            # S8 is reported as three separate statements, never one boolean:
+            # an identity can be recorded without being verified, and verified
+            # without being scientifically sufficient.
+            "evidence_identity_recorded": sum(
+                1
+                for e in self.entries
+                if e.base_evidence_digest and e.gold_evidence_digest
+            ),
+            "evidence_verified": sum(1 for e in self.entries if e.evidence_verified),
+            "evidence_scientifically_sufficient": sum(
+                1 for e in self.entries if e.evidence_scientifically_sufficient
+            ),
+            "evidence_states": dict(
+                sorted(
+                    {
+                        st: sum(1 for e in self.entries if e.evidence_state == st)
+                        for st in {e.evidence_state for e in self.entries}
+                    }.items()
+                )
+            ),
             "entries": [e.to_dict() for e in self.entries],
         }
 
@@ -376,19 +478,30 @@ def screen_pool_rows(
     *,
     relevant_file_sets: Mapping[str, Sequence[str]] | None = None,
     evidence_digests: Mapping[str, tuple[str, str]] | None = None,
+    evidence_records: Mapping[str, tuple[Any, Any]] | None = None,
+    artifact_root: Any = None,
+    authorized_evaluators: Mapping[str, tuple[str, ...]] | None = None,
+    expected_gold_state_digests: Mapping[str, str] | None = None,
 ) -> PopulationManifest:
     """Screen raw pool rows into a manifest.
 
-    ``relevant_file_sets`` and ``evidence_digests`` are supplied by the caller
-    because neither is derivable offline: designating a relevant file set is a
-    scientific act (R8) and evidence digests come from an actual base/gold run
-    (R5). Absence is recorded as a FAILING rule, never silently defaulted.
+    ``relevant_file_sets`` and evidence are supplied by the caller because neither
+    is derivable offline: designating a relevant file set is a scientific act (R8)
+    and evidence comes from an actual base/gold run (R5). Absence is recorded as a
+    FAILING rule, never silently defaulted.
+
+    ``evidence_digests`` are compact manifest identities only. Admission requires
+    ``evidence_records`` (a mapping ``instance_id -> (base_record, gold_record)``)
+    that the S8 verifier accepts; a non-empty digest alone never admits.
     """
     relevant_file_sets = relevant_file_sets or {}
     evidence_digests = evidence_digests or {}
+    evidence_records = evidence_records or {}
+    expected_gold_state_digests = expected_gold_state_digests or {}
     entries: list[PopulationEntry] = []
     for row in rows:
         iid = str(row.get("instance_id") or "")
+        base_rec, gold_rec = evidence_records.get(iid, (None, None))
         entries.append(
             screen_entry(
                 instance_id=iid,
@@ -400,6 +513,11 @@ def screen_pool_rows(
                 relevant_file_set=relevant_file_sets.get(iid),
                 base_evidence_digest=evidence_digests.get(iid, ("", ""))[0],
                 gold_evidence_digest=evidence_digests.get(iid, ("", ""))[1],
+                base_evidence=base_rec,
+                gold_evidence=gold_rec,
+                artifact_root=artifact_root,
+                authorized_evaluators=authorized_evaluators,
+                expected_gold_state_digest=expected_gold_state_digests.get(iid),
                 language=str(row.get("language") or ""),
                 usable=bool(row.get("usable", True)),
             )

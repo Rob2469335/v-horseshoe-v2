@@ -402,6 +402,145 @@ authorization. **Q8 is delivered; R8/S8 evidence provenance is the next gate.**
 
 ---
 
+## 4c. S8 evidence provenance contract
+
+**Module:** `qwen_train/f2_evidence.py` · **Tests:** `tests/test_f2_evidence.py`
+**Population integration:** `qwen_train/f2_population.py` (`S8_evidence_provenance`)
+
+### The defect this replaces
+
+S8 previously accepted a task when two strings were non-empty:
+
+```python
+bool(base_evidence_digest) and bool(gold_evidence_digest)
+```
+
+A digest establishes **integrity only**. It does not establish that the artifact
+was produced for *this* task, at *this* base commit, by an *authorized* evaluator,
+nor that the pair demonstrates what R5 requires (*"Base and gold runs archived
+outside the agent workspace with SHA-256. A substitute probe does not satisfy
+this."*). The contract now separates three questions that were previously
+collapsed:
+
+| Question | Meaning |
+|---|---|
+| **Integrity** | Does the record hash to its own digest, and do the referenced artifacts match theirs? |
+| **Provenance** | Was it produced for the declared task/repo/base by an authorized evaluator at a declared version, from a declared execution? |
+| **Scientific validity** | Does the base/gold pair establish the required relationship (same task; base does not pass; gold does)? |
+
+### Schema (`f2_evidence_record_v1`)
+
+`schema_version` · `instance_id` · `repository` · `base_commit` ·
+`execution_state_identity` (`base`|`gold`) · `execution_state_digest` (opaque) ·
+`test_command` · `environment_identity` · `evaluator_identity` ·
+`evaluator_version` · `execution_started_at` · `execution_finished_at` ·
+`execution_result` (`pass`|`fail`|`error`) · `failure_class`
+(``|`execution`|`environment`|`evaluator`) · `test_output_artifact` ·
+`run_log_artifact` · `evidence_record_digest`.
+
+Each artifact is an `ArtifactRef` (`name`, `digest`, `size_bytes`) — identity and
+metadata, never payload. `execution_state_digest` is an **opaque** digest of the
+execution state: it commits to which state ran without exposing a gold commit SHA
+or any oracle content.
+
+### Canonicalization
+
+Digest = SHA-256 over `json.dumps(payload, sort_keys=True, separators=(",",":"),
+ensure_ascii=False)` — the repository's existing convention — **excluding**
+`evidence_record_digest` itself, so the digest is never self-referential.
+Verified by test: key order does not affect the digest; an unchanged record
+reproduces the same digest; the digest is unchanged by rewriting its own field.
+
+### Distinct, non-collapsible outcomes
+
+`VERIFIED` · `MISSING` · `MALFORMED` · `UNKNOWN_SCHEMA` · `DIGEST_MISMATCH` ·
+`IDENTITY_MISMATCH` · `EXECUTION_FAILURE` · `ENVIRONMENT_FAILURE` ·
+`EVALUATOR_FAILURE` · `UNAUTHORIZED_PROCEDURE` · `ARTIFACT_MISSING` ·
+`ARTIFACT_DIGEST_MISMATCH` · `SCIENTIFICALLY_INSUFFICIENT`.
+
+`EvidenceVerification` carries three independent booleans (`integrity_ok`,
+`provenance_ok`, `scientifically_sufficient`) plus the state, so a failure
+preserves *why*.
+
+### R5 bridge
+
+`r5_from_evidence(verification) -> bool | None`: `VERIFIED -> True`,
+`MISSING -> None` (NOT ESTABLISHED, fail-closed default), any other failure
+`-> False`. This is the only sanctioned path to `R5=True`; a caller holding only
+digests cannot reach `True`. The existing R1–R8 tri-state behaviour is preserved.
+
+### Worker-facing safety
+
+The population manifest entry carries only compact evidence **identities** (the
+64-hex record digests) plus the verdicts. Verified by test: no
+`execution_state_digest`, no artifact names, no evidence payload, and the only
+40-hex token present is the task's `base_commit`.
+
+### Status
+
+**S8 mechanism implemented and hardened.** This is *not* a claim that S8 evidence
+exists. Actual evidence has **not** been generated: it requires running the base
+and gold evaluations for each task, which is a separate authorization. Population
+admission therefore remains **blocked** until authorized evidence is produced and
+independently verified. `S6` passes for 12/14; `S8` passes for **0/14**.
+
+### Hardening (research-grade trust model)
+
+| # | Change | Why |
+|---|---|---|
+| H1 | Evaluator authorization **fails closed**. Absence is `PROVENANCE_NOT_ESTABLISHED`, denial is `UNAUTHORIZED_PROCEDURE`. An empty authorized-version set is rejected. | Previously `authorized_evaluators=None` silently disabled the check, so *any* evaluator was treated as authorized. |
+| H2 | The S8 verdict (`evidence_verified`, `evidence_state`, `evidence_scientifically_sufficient`) is **covered by the population identity hash**. | An admission-relevant value outside the integrity anchor makes the anchor incomplete. |
+| H3 | `EvidenceVerification` carries a module-private proof token; **direct construction raises `TypeError`**. | The Python type layer is not a trust boundary. Only the verifier can produce a verification. |
+| H4 | `load_evidence_record` returns `LOAD_PARSED`/`LOAD_MISSING`/`LOAD_MALFORMED` — never a verification state. | A parsed JSON object is untrusted; it must not read as "verified". |
+| H5 | `ArtifactRef` binds `role`; the role must match the slot it occupies. | A test-output artifact can no longer be substituted for a run-log. |
+| H6 | Artifact names are **resolved and contained under the trusted root**; absolute paths, `..`, and symlink/junction escapes are rejected (`ARTIFACT_ESCAPES_ROOT`). Digest and size come from **one open handle** (TOCTOU-safe). | `root / name` previously allowed escape via `..` or an absolute path. |
+| H18 | A **trusted artifact root is required**; without one the result is `PROVENANCE_NOT_ESTABLISHED`. | Artifact provenance cannot be established from a bare digest. |
+| H2/H19 | Timestamps are **excluded from the cryptographic identity** but retained on the record for audit. | A clock is not a trust anchor; formatting/skew must not change what the evidence scientifically is. |
+| H12 | `PROVENANCE_NOT_ESTABLISHED` added, distinct from `UNAUTHORIZED_PROCEDURE` and `EVALUATOR_FAILURE`. | "We hold no authority" and "this procedure is denied" are different findings. |
+| H15 | Schema versioning fails closed on missing, unknown, or future versions. | No silent interpretation under a different schema. |
+
+### Trust model — what S8 proves and does not prove
+
+**What S8 proves (given a trusted artifact root and an evaluator allowlist):**
+that a record is internally consistent; that its artifacts exist under the trusted
+root and hash to the recorded digests; that the declared evaluator and version are
+authorized; that base and gold describe the same task, repository and base commit
+but *different* execution states; that the base state does not pass and the gold
+state does; and that the whole base/gold relationship is bound by a deterministic
+digest.
+
+**What S8 does NOT prove:** that the evaluation actually ran; that the declared
+test command was executed; that the environment matched its declaration; who
+physically produced the bytes; that the artifacts were not produced *after* the
+fact by an actor with write access to the store; or that the record was not
+crafted by someone who could compute a correct digest over fabricated content.
+These are properties of the **controlled execution and curation layer**, not of a
+hash. The mechanism is deliberately explicit about this boundary rather than
+implying more than it establishes.
+
+**What crosses into the worker-facing manifest:** only the two 64-hex record
+digests and the three verdict fields, plus the task's own `base_commit`. The
+execution-state digest, artifact names, artifact payloads, and any gold patch,
+diff, hunk, or reference commit id are withheld. Verified by test, including an
+adversarial case whose gold artifacts *are* the patch text.
+
+### Outstanding governance (not implementation)
+
+* **Who is authorized to produce S8 evidence**, and the concrete
+  evaluator identity/version, is not yet named in authority.
+* **Evaluator implementation identity** (`evaluator_implementation_digest`) is not
+  governed; a name+version can be reused for a different implementation. The
+  mechanism does not fake this — it is a `GOVERNANCE GAP`.
+* **Trusted artifact store / retention**: where S8 artifacts must live, whether
+  that location is immutable, retention duration, deletion detectability, and
+  whether a later researcher can retrieve the exact bytes are all
+  `GOVERNANCE GAP — ARTIFACT RETENTION AUTHORITY NOT ESTABLISHED`.
+* **Curator authority and independent-verifier authority** are not yet defined.
+* **Execution identity**: there is no immutable run registry, so a run is
+  identified by its content, not by a registry-issued id. `GOVERNANCE GAP`.
+
+---
+
 ## 5. Clean room (R4) — what is now proven, and what is not
 
 **Closed and proven.** The untrusted-subprocess environment builder previously
