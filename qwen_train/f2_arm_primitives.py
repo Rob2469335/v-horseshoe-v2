@@ -210,6 +210,7 @@ def build_c0_artifact(
     experiment_id: str = "experiment_j",
     protocol_version: str = "f2_v1",
     freeze_timestamp: float | None = None,
+    task_readiness: dict | None = None,
 ) -> FrozenArtifact:
     """Construct the C0 no-treatment control artifact (design §3).
 
@@ -230,6 +231,7 @@ def build_c0_artifact(
         experiment_id=experiment_id,
         protocol_version=protocol_version,
         freeze_timestamp=ts,
+        task_readiness=task_readiness,
     )
     verify_manifest(c0)
     return c0

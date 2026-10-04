@@ -111,6 +111,13 @@ class FrozenArtifact:
     freeze_timestamp: float = 0.0  # time.time()
     promotion_proof_ref: str | None = None  # opaque reference to HMAC proof
 
+    # -- task-readiness binding (F2 execution prerequisite) ------------------
+    # Canonical payload {"declaration","evidence","verdict"} of the governed
+    # TaskReadiness gate, hashed into manifest_hash so the ONLY integrity anchor
+    # crossing the process boundary carries it. ``None`` = absent => the
+    # execution seam must refuse (fail closed); it is never optional evidence.
+    task_readiness: dict | None = None
+
     # -- persistence --------------------------------------------------------
     content_address: str = ""  # filename-friendly prefix of manifest_hash
 
@@ -154,6 +161,7 @@ class FrozenArtifact:
             "lesson_set_hash": self.lesson_set_hash,
             "freeze_timestamp": self.freeze_timestamp,
             "promotion_proof_ref": self.promotion_proof_ref,
+            "task_readiness": self.task_readiness,
         }
         if include_manifest_hash:
             payload["manifest_hash"] = self.manifest_hash
@@ -221,6 +229,7 @@ def freeze_artifact(
     protocol_version: str = "f2_v1",
     promotion_proof_ref: str | None = None,
     freeze_timestamp: float | None = None,
+    task_readiness: dict | None = None,
 ) -> FrozenArtifact:
     """Create a FrozenArtifact with all three hashes computed."""
     import time as _time
@@ -240,6 +249,7 @@ def freeze_artifact(
         rendered_artifact=rendered_artifact,
         freeze_timestamp=ts,
         promotion_proof_ref=promotion_proof_ref,
+        task_readiness=task_readiness,
     )
 
     ts_hash = artifact.compute_treatment_set_hash()
@@ -262,6 +272,7 @@ def freeze_artifact(
         lesson_set_hash=ls_hash,
         freeze_timestamp=artifact.freeze_timestamp,
         promotion_proof_ref=artifact.promotion_proof_ref,
+        task_readiness=artifact.task_readiness,
     )
 
     m_hash = artifact.compute_manifest_hash()
@@ -284,6 +295,7 @@ def freeze_artifact(
         manifest_hash=m_hash,
         freeze_timestamp=artifact.freeze_timestamp,
         promotion_proof_ref=artifact.promotion_proof_ref,
+        task_readiness=artifact.task_readiness,
         content_address=ca,
     )
 
@@ -333,6 +345,7 @@ def dict_to_manifest(data: dict) -> FrozenArtifact:
         manifest_hash=str(data.get("manifest_hash", "")),
         freeze_timestamp=float(data.get("freeze_timestamp", 0.0)),
         promotion_proof_ref=data.get("promotion_proof_ref"),
+        task_readiness=data.get("task_readiness"),
         content_address=content_address,
     )
 

@@ -45,6 +45,7 @@ from runtime_v2.services.task_readiness import (
     TaskReadiness,
     endpoint_measurable,
     evaluate_readiness,
+    manifest_readiness_payload,
 )
 
 from runtime_v2.services.f2_freeze import (
@@ -188,6 +189,16 @@ def run_f2_arm(
         task_id=task_id,
         base_commit=base_commit,
     )
+    # The gate's inputs are frozen INTO the manifest so the execution seam can
+    # enforce the same gate from manifest-verified data (no caller trust).
+    _ev_norm = (
+        readiness_evidence
+        if isinstance(readiness_evidence, ReadinessEvidence)
+        else ReadinessEvidence.from_dict(readiness_evidence)
+    )
+    readiness_payload = manifest_readiness_payload(
+        readiness_decl, _ev_norm, readiness_verdict
+    )
 
     manifest_dir = Path(manifest_dir)
     worker_script = Path(worker_script)
@@ -203,6 +214,7 @@ def run_f2_arm(
             model_name=model_name,
             experiment_id=experiment_id,
             protocol_version=protocol_version,
+            task_readiness=readiness_payload,
         )
     else:
         active_block, ordered_lessons = render_t()
@@ -216,6 +228,7 @@ def run_f2_arm(
             task_id=task_id,
             experiment_id=experiment_id,
             protocol_version=protocol_version,
+            task_readiness=readiness_payload,
         )
         if arm == "T":
             arm_artifact = t
@@ -375,6 +388,7 @@ def _freeze_t(
     task_id: str,
     experiment_id: str,
     protocol_version: str,
+    task_readiness: dict | None = None,
 ) -> FrozenArtifact:
     from runtime_v2.services.f2_freeze import freeze_artifact
 
@@ -389,6 +403,7 @@ def _freeze_t(
         task_id=task_id,
         experiment_id=experiment_id,
         protocol_version=protocol_version,
+        task_readiness=task_readiness,
     )
     verify_manifest(t)
     return t

@@ -62,6 +62,7 @@ from runtime_v2.services.f2_freeze import (
     load_manifest,
     verify_manifest,
 )
+from runtime_v2.services.task_readiness import enforce_readiness_from_manifest_payload
 from runtime_v2.services.f2_replay import (
     MANIFEST_PATH_ENV,
     REPLAY_REQUESTED_ENV,
@@ -405,6 +406,15 @@ def start_real_p2_production_model(
 
     The fake-model entry point is retained unchanged for the existing tests.
     """
+    # READINESS GATE (F2 execution prerequisite, fail closed): this is the
+    # lowest production-reachable boundary before the P2/model spawn, so the
+    # gate is enforced here from the MANIFEST (the only integrity anchor that
+    # crosses the process boundary) — a caller cannot inject ready=True.
+    _artifact = load_manifest(manifest_path)
+    verify_manifest(_artifact)
+    enforce_readiness_from_manifest_payload(
+        _artifact.task_readiness, task_id=_artifact.task_id
+    )
     return _start_real_p2(
         attempt_id=attempt_id,
         repo_root=repo_root,
@@ -1176,6 +1186,13 @@ class F2ExecutionAdapter:
 
         artifact = self._load_verified_manifest()
         self._require_replay_established(artifact)
+
+        # READINESS GATE (F2 execution prerequisite, fail closed). Enforced from
+        # the VERIFIED manifest — the only integrity anchor crossing the process
+        # boundary — so no caller can inject ready=True or a forged verdict.
+        enforce_readiness_from_manifest_payload(
+            artifact.task_readiness, task_id=artifact.task_id
+        )
 
         if work_dir is None:
             work_dir = Path(tempfile.mkdtemp(prefix="f2_real_p2_"))

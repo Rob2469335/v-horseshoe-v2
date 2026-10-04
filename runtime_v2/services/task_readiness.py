@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
@@ -197,6 +197,9 @@ class ReadinessEvidence:
             }
         )
 
+    def to_dict(self) -> dict:
+        return {name: getattr(self, name) for name in READINESS_CONDITIONS}
+
 
 @dataclass(frozen=True)
 class ReadinessVerdict:
@@ -237,3 +240,86 @@ def endpoint_measurable(tr: TaskReadiness | None) -> bool | None:
     except TaskReadinessError:
         return False
     return True
+
+
+def manifest_readiness_payload(
+    tr: TaskReadiness,
+    evidence: ReadinessEvidence,
+    verdict: ReadinessVerdict,
+) -> dict:
+    """The canonical readiness payload frozen INTO the F2 manifest.
+
+    The manifest is the only integrity anchor that crosses the process boundary
+    (worker/adapter receive a manifest path, not trusted memory), so the
+    readiness gate is enforced from manifest-verified data, never from a
+    caller-supplied ``ready=True``.
+    """
+    if not isinstance(tr, TaskReadiness):
+        raise TaskReadinessError("declaration must be a TaskReadiness")
+    if not isinstance(evidence, ReadinessEvidence):
+        raise TaskReadinessError("evidence must be a ReadinessEvidence")
+    if not isinstance(verdict, ReadinessVerdict):
+        raise TaskReadinessError("verdict must be a ReadinessVerdict")
+    # Normalize R8 in the recorded evidence so it always equals what the
+    # manifest-bound gate will recompute (endpoint_measurable(tr)).
+    evidence_norm = replace(evidence, R8_endpoint_measurable=endpoint_measurable(tr))
+    return {
+        "declaration": tr.to_dict(),
+        "evidence": evidence_norm.to_dict(),
+        "verdict": verdict.to_dict(),
+    }
+
+
+def enforce_readiness_from_manifest_payload(
+    payload: Mapping[str, Any] | None,
+    *,
+    task_id: str,
+    base_commit: str = "",
+) -> tuple[TaskReadiness, ReadinessVerdict]:
+    """Fail-closed readiness enforcement from a MANIFEST-BOUND payload.
+
+    The R1-R8 logic is ``evaluate_readiness`` (the single canonical
+    implementation); this wrapper only changes WHERE the inputs come from: a
+    verified frozen manifest rather than a caller's memory. It therefore
+    independently reconstructs the verdict — a caller cannot inject
+    ``ready=True`` or a forged verdict, because the recorded verdict must
+    agree with the recomputed one.
+
+    Raises ``ReadinessGateError`` on: absent/empty payload, malformed
+    declaration, hash mismatch, identity mismatch, or any R1-R8 not explicitly
+    ``True``.
+    """
+    if not isinstance(payload, Mapping) or not payload:
+        raise ReadinessGateError(
+            "frozen manifest carries no task-readiness declaration: F2 cannot proceed"
+        )
+    declaration = payload.get("declaration")
+    evidence_raw = payload.get("evidence")
+    recorded = payload.get("verdict")
+
+    tr = TaskReadiness.from_dict(declaration)
+    # Identity binding to the manifest the caller already verified.
+    if task_id and tr.task_id != task_id:
+        raise ReadinessGateError(
+            f"readiness task_id {tr.task_id!r} != manifest task_id {task_id!r}"
+        )
+    if base_commit and tr.base_commit != base_commit:
+        raise ReadinessGateError(
+            f"readiness base_commit {tr.base_commit!r} != expected {base_commit!r}"
+        )
+    ev = ReadinessEvidence.from_dict(evidence_raw)
+    # R8 is derived from the declaration; a manifest cannot assert it.
+    ev = replace(ev, R8_endpoint_measurable=endpoint_measurable(tr))
+    verdict = evaluate_readiness(ev)
+    if not verdict.ready:
+        raise ReadinessGateError(
+            "task not READY (unmet: " + ", ".join(verdict.unmet) + ")"
+        )
+    if isinstance(recorded, Mapping):
+        rec_ready = recorded.get("ready")
+        rec_unmet = tuple(recorded.get("unmet") or ())
+        if rec_ready is not True or rec_unmet != verdict.unmet:
+            raise ReadinessGateError(
+                "recorded readiness verdict disagrees with the recomputed gate"
+            )
+    return tr, verdict
