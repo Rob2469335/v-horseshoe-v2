@@ -226,6 +226,29 @@ class TestWorkerPlumbing:
         assert order[0][2] == "deadbeef"
         assert order[-1][0] == "execute"  # isolation happened BEFORE execution
 
+    def test_execute_without_declared_task_fails_closed(self, tmp_path, monkeypatch):
+        """--execute with no --instance-id cannot be isolated => fail before spawn."""
+        from qwen_train import f2_arm_worker as WORKER
+        from qwen_train import f2_execution_adapter as ADAPTER
+
+        constructed = {"n": 0}
+
+        class _FakeAdapter:
+            def __init__(self, *a, **k):
+                constructed["n"] += 1
+
+            def execute_arm_real(self, **k):
+                constructed["n"] += 1
+                return {}
+
+        monkeypatch.setattr(ADAPTER, "F2ExecutionAdapter", _FakeAdapter)
+        monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(tmp_path))
+        monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "ws"))
+        manifest = self._manifest(tmp_path, with_readiness=True)
+        rc = WORKER.run_worker(argv=["--manifest", str(manifest), "--arm", "T", "--execute"])
+        assert rc != 0
+        assert constructed["n"] == 0  # no adapter / no P2 spawn
+
     def test_workspace_isolation_does_not_bypass_readiness(self, tmp_path, monkeypatch):
         """Even with isolation succeeding, a no-readiness manifest still fails closed."""
         from qwen_train import f2_arm_worker as WORKER

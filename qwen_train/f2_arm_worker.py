@@ -287,6 +287,16 @@ def run_worker(argv: list[str] | None = None) -> int:
         execution_result: dict[str, Any]
         adapter_evidence: dict[str, Any] | None = None
         if structured_execute:
+            # An execution arm MUST carry a declared task identity: without an
+            # ``instance_id`` there is no pool ``base_commit`` and therefore no
+            # way to establish per-arm workspace isolation (design §13.5). Fail
+            # closed rather than execute against an unreset, shared workspace.
+            if not args.instance_id:
+                raise FreezeVerificationError(
+                    "F2 fail-closed: --execute requires --instance-id (a declared "
+                    "task identity). An undeclared task has no base_commit and its "
+                    "workspace cannot be isolated; refusing to execute."
+                )
             # Production path: invoke the F2 execution adapter directly and take
             # its structured evidence. No shell string, no unset env var.
             from qwen_train.f2_execution_adapter import (  # noqa: PLC0415

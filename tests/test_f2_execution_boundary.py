@@ -268,14 +268,23 @@ class TestWorkerRoute:
                         "serving_pid_source": "none", "backend_healthy": False}
 
         real = ADAPTER.F2ExecutionAdapter
+        real_bind = ADAPTER.bind_task_environment
+        import qwen_train.arm_workspace as AW
+
+        real_prep = AW.prepare_arm_workspace
         ADAPTER.F2ExecutionAdapter = _FakeAdapter  # type: ignore[assignment]
+        # --execute now requires a declared task (per-arm isolation); supply a
+        # synthetic binding + no-op isolation so the routing assertion is clean.
+        ADAPTER.bind_task_environment = lambda **k: {"base_commit": "deadbeef"}  # type: ignore[assignment]
+        AW.prepare_arm_workspace = lambda ws, bc: None  # type: ignore[assignment]
         try:
             manifest = _frozen(tmp_path, with_readiness=True)
             monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(REPO_ROOT))
             monkeypatch.setenv("SWARM_F2_TRAJECTORY_RUN_ID", "tr")
+            monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(tmp_path / "ws"))
             run_worker(argv=[
                 "--manifest", str(manifest), "--arm", "T", "--execute",
-                "--task-id", "TASK-1",
+                "--instance-id", "pypa__twine-1066", "--task-id", "TASK-1",
                 "--port", "8211",
             ])
             # ROUTING proof: the worker's ONLY execution route is the (gated)
@@ -284,6 +293,8 @@ class TestWorkerRoute:
             assert calls["constructed"] == 1 and calls["executed"] == 1
         finally:
             ADAPTER.F2ExecutionAdapter = real  # type: ignore[assignment]
+            ADAPTER.bind_task_environment = real_bind  # type: ignore[assignment]
+            AW.prepare_arm_workspace = real_prep  # type: ignore[assignment]
 
     def test_without_execute_records_delegated_no_execution(self, tmp_path):
         calls = {"constructed": 0, "executed": 0}
