@@ -189,6 +189,31 @@ class TestExecuteArmRealBoundary:
         assert calls == []
 
 
+class TestRunDryRunFalseBoundary:
+    """`run(dry_run=False)` drives a real task, so it is also gated."""
+
+    def test_without_readiness_fails_before_backend(self, tmp_path):
+        art = freeze_artifact(rendered_artifact="b", arm="T", task_id="TASK-1")  # no readiness
+        verify_manifest(art)
+        manifest = persist_manifest(art, tmp_path)
+        adapter = F2ExecutionAdapter(
+            arm="T", manifest_path=manifest, repo_root=REPO_ROOT,
+            workspace_root=tmp_path, port=8211,
+        )
+        calls: list[str] = []
+        real = F2ExecutionAdapter._start_fresh_backend
+        F2ExecutionAdapter._start_fresh_backend = lambda self: (calls.append("backend"), (None, None))[1]  # type: ignore[assignment]
+        try:
+            with pytest.raises(ReadinessGateError):
+                adapter.run(
+                    task_prompt="p", task_id="TASK-1", rollout_id="ro",
+                    trajectory_run_id="tr", dry_run=False,
+                )
+        finally:
+            F2ExecutionAdapter._start_fresh_backend = real  # type: ignore[assignment]
+        assert calls == []  # failed before any backend spawn
+
+
 class TestSpawnSeamBoundary:
     """The lowest trusted boundary before the actual Popen."""
 

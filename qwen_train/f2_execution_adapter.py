@@ -930,6 +930,15 @@ class F2ExecutionAdapter:
         except FreezeVerificationError:
             raise
 
+        if not dry_run:
+            # Real task execution (the CLI is driven) => readiness is an
+            # execution prerequisite, enforced from the verified manifest.
+            # ``dry_run=True`` is infrastructure verification (no task/model run)
+            # and is intentionally not gated.
+            enforce_readiness_from_manifest_payload(
+                artifact.task_readiness, task_id=artifact.task_id
+            )
+
         backend = None
         gate = None
         cli = None

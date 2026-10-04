@@ -66,6 +66,26 @@ def _clear_f2_env():
             os.environ.pop(k, None)
 
 
+def _readiness_payload(task_id: str = "task-1", base_commit: str = "deadbeef") -> dict:
+    from dataclasses import replace
+
+    from runtime_v2.services.task_readiness import (
+        READINESS_CONDITIONS,
+        ReadinessEvidence,
+        TaskReadiness,
+        endpoint_measurable,
+        evaluate_readiness,
+        manifest_readiness_payload,
+    )
+
+    tr = TaskReadiness(
+        task_id=task_id, base_commit=base_commit, relevant_file_set=("src/module.py",)
+    )
+    ev = ReadinessEvidence(**{c: True for c in READINESS_CONDITIONS})
+    verdict = evaluate_readiness(replace(ev, R8_endpoint_measurable=endpoint_measurable(tr)))
+    return manifest_readiness_payload(tr, ev, verdict)
+
+
 def _make_manifest(tmp_path: Path, *, arm: str = "T"):
     lessons = (LessonEntry("A", lesson_hash_of("use pathlib"), 1, "use pathlib"),)
     art = freeze_artifact(
@@ -78,6 +98,7 @@ def _make_manifest(tmp_path: Path, *, arm: str = "T"):
         model_name="test-model",
         git_sha="deadbeef",
         freeze_timestamp=1_700_000_000.0,
+        task_readiness=_readiness_payload(),
     )
     return persist_manifest(art, tmp_path), art
 
