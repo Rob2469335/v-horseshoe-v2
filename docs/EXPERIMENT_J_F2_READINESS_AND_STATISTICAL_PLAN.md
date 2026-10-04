@@ -266,6 +266,109 @@ is **Q1**.
 
 ---
 
+## 4b. Q8 delivered — governed endpoint derivation
+
+**Authorization:** operator, 2026-10-04 — *reference modified-file set, adopted as an
+oracle-style proxy for task edit scope*. Implementation authorized for Q8 only.
+
+**Module:** `qwen_train/f2_endpoint_derivation.py` · **Tests:** `tests/test_f2_endpoint_derivation.py` (29)
+**Frozen manifest:** `qwen_train/curriculum/f2_endpoints.json` (tracked, alongside `swe_pool.jsonl`)
+**Reproduce:** `python -m qwen_train.f2_endpoint_derivation --out qwen_train/curriculum/f2_endpoints.json`
+**Deterministic anchor:** each entry's `relevant_file_set_hash`. (The whole-file
+SHA-256 also covers a `derived_at` timestamp, so it identifies *this frozen
+artifact* rather than being byte-stable across re-derivations; equality of the
+per-entry hashes is what proves a re-derivation reproduced the same sets.)
+
+### Method
+
+`base_commit` is the parent of the reference fix commit, so the reference commit
+is a **child** of it. That is not unique — on `pypa__twine-1066` there are three
+children and two touch exactly one non-test file each, so file counts alone
+cannot disambiguate. The unique, governed discriminator is the **declared
+reference test patch** (an already-authorized artifact):
+
+> the reference fix commit is the **unique** child of `base_commit` whose
+> *test-file* diff set exactly equals the declared reference test patch's file
+> set; `relevant_file_set` is that commit's **non-test** diff paths.
+
+Two independent declared artifacts must agree or the derivation fails closed:
+the test-patch match (authoritative) plus a recorded `num_modified_files`
+diagnostic.
+
+### Operator controls — all satisfied
+
+| Control | Status |
+|---|---|
+| 1. Derived before any T/X/C0 trajectory | **PROVEN** — no arm has ever run |
+| 2. Derived outside every arm workspace | **PROVEN** — reads the clone in place; writes only to `data/experiment_j/` |
+| 3. Gold patch/reference solution never exposed to the worker | **PROVEN** — nothing here is delivered to a worker |
+| 4. Store task id, base commit, file set, method, timestamp, canonical hash, provenance identity | **PROVEN** — and reference identity is a **digest only**, never a resolvable pointer |
+| 5. Freeze before the first confirmatory trajectory | **PROVEN** — manifest written; no trajectory exists |
+| 6. Never altered after observing outcomes | **PROVEN** — no outcome has been observed |
+| 7. Do not call it semantic ground truth | **PROVEN** — `endpoint_semantics` field carries the caveat verbatim |
+| 8. Report as oracle-style proxy for edit scope | **PROVEN** — in module docstring, manifest, and this document |
+| 9. Sensitivity analysis may later compare against independent localization | **NOT YET DONE** — planned |
+
+### Additional controls implemented (beyond the operator list)
+
+* **Read-only enforcement.** Every `git` invocation is checked against an
+  allowlist of read-only subcommands (`rev-parse`, `rev-list`, `diff`, `log`,
+  `for-each-ref`, `cat-file`, `show`). `reset`, `checkout`, `gc`, `update-ref`
+  are refused at the call site. **PROVEN** by test.
+* **Clone non-mutation proof.** Each derivation fingerprints the clone
+  (`HEAD` + all refs + commit count) before and after; a change raises. All 8
+  successful derivations recorded `clone_unmutated: true`.
+* **No gold content read.** Only `--name-only` and `--numstat` are used: paths
+  and line counts, never a hunk or file body.
+
+### Result — 8 derived, 6 fail closed
+
+| Derived (8) | `relevant_file_set` |
+|---|---|
+| `pypa__twine-1066` | `twine/package.py` |
+| `aws-cloudformation__cfn-lint-3805` | `src/cfnlint/rules/resources/properties/StringLength.py` |
+| `meltano__sdk-1881` | `singer_sdk/helpers/capabilities.py`, `singer_sdk/target_base.py` |
+| `xknx__xknx-470` | `changelog.md`, `docs/sensor.md`, `…/xknx/factory.py`, `…/xknx/schema.py`, `xknx/devices/sensor.py` |
+| `pybamm-team__pybamm-4267` | `pybamm/util.py` |
+| `enthought__envisage-275` | `envisage/extension_registry.py`, `envisage/safeweakref.py`, `setup.cfg` |
+| `qiskit__qiskit-terra-5662` | 7 `.py` + `releasenotes/notes/*.yaml` |
+| `pyqtgraph__pyqtgraph-1845` | `pyqtgraph/colormap.py` |
+
+| Fail-closed (6) | Reason |
+|---|---|
+| `pytest-dev__pyfakefs-916` | no child matches the declared test patch |
+| `pallets__click-2380` | **AMBIGUOUS** — 2 children match the declared test patch |
+| `sinaptik-ai__pandas-ai-1099` | base has no child in the fetched refs |
+| `databricks__dbt-databricks-935` | base has no child in the fetched refs |
+| `pallets__werkzeug-2583` | base has no child in the fetched refs (base object present; 5181 commits) |
+| `qiskit__qiskit-ibm-runtime-367` | base has no child in the fetched refs (base object present; 884 commits) |
+
+### Two construct-validity observations for the operator
+
+**(a) Some derived sets include non-code files.** `xknx-470` includes
+`changelog.md` and `docs/sensor.md`; `envisage-275` includes `setup.cfg`;
+`qiskit-terra-5662` includes a release note. This is *faithful* to the authorized
+definition (the reference commit's non-test files) but it means the primary
+endpoint could be satisfied by editing a changelog. A code-extension filter
+would be a **methodology change beyond the Q8 authorization** and is therefore
+**not applied** — `REQUIRES AUTHORIZATION`.
+
+**(b) The 4 "no child" failures are a clone-completeness issue, not a data
+issue.** The base commit object is present but is the parent of nothing in the
+fetched refs, so the reference commit is not reachable. Resolving them needs a
+`git fetch` of the relevant history — a **network operation against the task
+repositories**, which is a decision for the operator, not an implementation
+detail. `REQUIRES AUTHORIZATION`.
+
+### Effect on admissibility
+
+`S6_relevant_file_set` now **passes for 8 of 14** tasks (was 0). Admitted count
+remains **0** because `S8_evidence_provenance` fails for all 14 — base/gold
+evidence digests require actual base and gold test runs, which is a separate
+authorization. **Q8 is delivered; R8/S8 evidence provenance is the next gate.**
+
+---
+
 ## 5. Clean room (R4) — what is now proven, and what is not
 
 **Closed and proven.** The untrusted-subprocess environment builder previously
@@ -301,7 +404,7 @@ task environment) — it is not a code change I can make unilaterally.
 | **Q5** | Ratify **block-level** exclusion (invalid arm ⇒ invalid pair) | Ratify. McNemar requires complete pairs. | Analysis undefined for partially-invalid blocks. |
 | **Q6** | Infrastructure-failure budget (proposed ≤ 30 %) | Authorize, with stop-and-diagnose on breach. | At F1's 50 % loss rate the design cannot hold together. |
 | **Q7** | Distiller model identity + weights digest | Fix both now; `SWARM_DISTILLER_MODEL` and `SWARM_DISTILLER_WEIGHTS_DIGEST` (or explicit unavailability). | Synthesis fails closed; no lesson can be produced. |
-| **Q8** | Per-task `relevant_file_set` (R8) | Designate per task from declared FAIL_TO_PASS provenance; hash-record before the first trajectory. | Primary endpoint uncomputable. |
+| **Q8** | Per-task `relevant_file_set` (R8) | **DELIVERED** — see §4b. Governed reference-modified-file derivation, hash-frozen before any trajectory. | 8/14 derived; 6 fail closed; S8 evidence digests still outstanding |
 | **Q9** | Shell network-egress isolation for the learning event | Authorize an operator-level control. | "Clean-room" remains an assumption. |
 | **Q10** | **No-lesson X/C0 calibration run** (run count, tasks, replicates, censoring convention) | Authorize — cheapest, highest-value measurement available. | δ and π_d stay unmeasured; N cannot be frozen. |
 | **Q11** | `SWARM_RECEIPT_KEY` provisioning | Only **after** Q7 and Q8. | Promotion stays fail-closed; no ACTIVE lesson. |

@@ -1,0 +1,259 @@
+{
+  "derivation_method": "reference_modified_file_set_v1",
+  "derived": 8,
+  "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+  "entries": [
+    {
+      "base_commit": "4a1fc064a7899872ee845df6a8810bb51a6845ac",
+      "candidates_considered": 3,
+      "clone_fingerprint_after": "f0eeee697fbf4c05",
+      "clone_fingerprint_before": "f0eeee697fbf4c05",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 1,
+      "declared_test_files": [
+        "tests/test_package.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:02.278206+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "pypa__twine-1066",
+      "reference_digest": "826534e0d04ca406e8dc297260732003e223fe44679c73a472e30b9c1c6009f0",
+      "relevant_file_set": [
+        "twine/package.py"
+      ],
+      "relevant_file_set_hash": "bcaec8ae3deecdb609dcfc125eb6c46e6a12c62bc456dcb69914c52d43feb956",
+      "repo": "pypa/twine",
+      "source_file_count": 1,
+      "source_line_count": 2,
+      "total_file_count": 2
+    },
+    {
+      "base_commit": "88efb088fba2669db30df083285c826ded400cae",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "c20d131f3aee535e",
+      "clone_fingerprint_before": "c20d131f3aee535e",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 1,
+      "declared_test_files": [
+        "test/unit/rules/resources/properties/test_string_length.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:04.299391+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "aws-cloudformation__cfn-lint-3805",
+      "reference_digest": "9225aaa1aaceca2904454075244059f5165b19c1c1bcf7b6c82493b08531d0f1",
+      "relevant_file_set": [
+        "src/cfnlint/rules/resources/properties/StringLength.py"
+      ],
+      "relevant_file_set_hash": "09c6e0728882adbd7c9c711883c46446e4ef150e4383aa2dc7b8d7bcd3a4eef6",
+      "repo": "aws-cloudformation/cfn-lint",
+      "source_file_count": 1,
+      "source_line_count": 15,
+      "total_file_count": 2
+    },
+    {
+      "base_commit": "c3a8f90ac4d79eb5c655740d0fd88f393af7f306",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "2913f78b51394fbd",
+      "clone_fingerprint_before": "2913f78b51394fbd",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 2,
+      "declared_test_files": [
+        "tests/core/test_target_base.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:04.989276+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "meltano__sdk-1881",
+      "reference_digest": "eab6c464237b0245836e7c5880782cae6050b1a1f3bf78e123a5ee4660359647",
+      "relevant_file_set": [
+        "singer_sdk/helpers/capabilities.py",
+        "singer_sdk/target_base.py"
+      ],
+      "relevant_file_set_hash": "ba4c75e4a1cdbe20d9b59d68f57cff722d8a58598f24a7b8221fba6c7518c530",
+      "repo": "meltano/sdk",
+      "source_file_count": 2,
+      "source_line_count": 10,
+      "total_file_count": 3
+    },
+    {
+      "base_commit": "715856fdb69deceba4d54afe4ccf3f7ad304c5ec",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "320866ce1922fb03",
+      "clone_fingerprint_before": "320866ce1922fb03",
+      "clone_unmutated": true,
+      "count_agreement": "matches_total_count",
+      "declared_file_count": 6,
+      "declared_test_files": [
+        "test/devices_tests/sensor_test.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:06.041212+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "xknx__xknx-470",
+      "reference_digest": "7e9b63f92babab67c7ddfb6bf49f9b7b3ae16c3b40bda57cc38336a270c2ac95",
+      "relevant_file_set": [
+        "changelog.md",
+        "docs/sensor.md",
+        "home-assistant-plugin/custom_components/xknx/factory.py",
+        "home-assistant-plugin/custom_components/xknx/schema.py",
+        "xknx/devices/sensor.py"
+      ],
+      "relevant_file_set_hash": "6d343a90fbb0491de1500e2e9b853071b07672920a6c3b7658cfbce14f8c7d5b",
+      "repo": "XKNX/xknx",
+      "source_file_count": 5,
+      "source_line_count": 19,
+      "total_file_count": 6
+    },
+    {
+      "base_commit": "668e563b01749bcbb55a017e39b0cf94d8256619",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "a167f518fd1ec820",
+      "clone_fingerprint_before": "a167f518fd1ec820",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 1,
+      "declared_test_files": [
+        "tests/unit/test_util.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:06.774561+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "pybamm-team__pybamm-4267",
+      "reference_digest": "e1baf549646f4bb2745a2817b6de7f1394aa200c0697f1bfda0bdac458fbaaa9",
+      "relevant_file_set": [
+        "pybamm/util.py"
+      ],
+      "relevant_file_set_hash": "e6430b90b923e78b021ea90e3d515857f9452f99afc52efdcfd667d60288a079",
+      "repo": "pybamm-team/PyBaMM",
+      "source_file_count": 1,
+      "source_line_count": 22,
+      "total_file_count": 2
+    },
+    {
+      "base_commit": "aa5c1ac5d6f558ad4ef3948c025da78361318827",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "ebc218b2cd347e01",
+      "clone_fingerprint_before": "ebc218b2cd347e01",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 3,
+      "declared_test_files": [
+        "envisage/tests/test_extension_registry.py",
+        "envisage/tests/test_safeweakref.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:07.960564+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "enthought__envisage-275",
+      "reference_digest": "f66f05379333bf47db5e6be3d19ff3bdaf43af510cd24725d7b8945781613bde",
+      "relevant_file_set": [
+        "envisage/extension_registry.py",
+        "envisage/safeweakref.py",
+        "setup.cfg"
+      ],
+      "relevant_file_set_hash": "f1f6d189901f04227bcc771b160d76081e4801a8aef4a393046085a100d4583a",
+      "repo": "enthought/envisage",
+      "source_file_count": 3,
+      "source_line_count": 140,
+      "total_file_count": 5
+    },
+    {
+      "base_commit": "3accb1bbbd11d3af1e92893f68493fc9fb3c5717",
+      "candidates_considered": 1,
+      "clone_fingerprint_after": "246d4b2edfd43f5e",
+      "clone_fingerprint_before": "246d4b2edfd43f5e",
+      "clone_unmutated": true,
+      "count_agreement": "matches_source_count",
+      "declared_file_count": 8,
+      "declared_test_files": [
+        "test/python/visualization/test_circuit_text_drawer.py",
+        "test/python/visualization/timeline/test_core.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:08.852808+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "qiskit__qiskit-terra-5662",
+      "reference_digest": "a18430a9e39b9f21b7b0f8c8b7819a0a5599229c792a71c24597a944bc05c08e",
+      "relevant_file_set": [
+        "qiskit/circuit/quantumcircuit.py",
+        "qiskit/visualization/circuit_visualization.py",
+        "qiskit/visualization/timeline/core.py",
+        "qiskit/visualization/timeline/interface.py",
+        "qiskit/visualization/timeline/plotters/matplotlib.py",
+        "qiskit/visualization/timeline/stylesheet.py",
+        "qiskit/visualization/utils.py",
+        "releasenotes/notes/idle-time-visualization-b5404ad875cbdae4.yaml"
+      ],
+      "relevant_file_set_hash": "dc57cefb87bcfe9cb91c13006ba81acdc2df007932b0706c7e4be8e66a554d32",
+      "repo": "Qiskit/qiskit-terra",
+      "source_file_count": 8,
+      "source_line_count": 59,
+      "total_file_count": 10
+    },
+    {
+      "base_commit": "ba517aba0e3dbddb925fcb47f9a0359432fd4a10",
+      "candidates_considered": 3,
+      "clone_fingerprint_after": "123b81a540a14edc",
+      "clone_fingerprint_before": "123b81a540a14edc",
+      "clone_unmutated": true,
+      "count_agreement": "mismatch",
+      "declared_file_count": 4,
+      "declared_test_files": [
+        "tests/test_colormap.py"
+      ],
+      "derivation_method": "reference_modified_file_set_v1",
+      "derived_at": "2026-10-04T05:37:09.597130+00:00",
+      "endpoint_semantics": "oracle-style proxy for task edit scope; NOT semantic ground truth",
+      "instance_id": "pyqtgraph__pyqtgraph-1845",
+      "reference_digest": "4bcda01fb92f6b16588a570b3c004e85e3da18f679e4b892d2768991bd47c094",
+      "relevant_file_set": [
+        "pyqtgraph/colormap.py"
+      ],
+      "relevant_file_set_hash": "19e17dc978660286f01b423906abf82d881b355ed4b9ba22c2f1a32fd39819af",
+      "repo": "pyqtgraph/pyqtgraph",
+      "source_file_count": 1,
+      "source_line_count": 46,
+      "total_file_count": 2
+    }
+  ],
+  "failed": 6,
+  "failures": [
+    {
+      "error": "DerivationError: no child of 95b2de37ae7ea2cde50b23dfd657938a4cf60d25 has a test-file diff equal to the declared reference test patch ['pyfakefs/tests/fake_pathlib_test.py']; refusing to guess the reference fix commit",
+      "instance_id": "pytest-dev__pyfakefs-916"
+    },
+    {
+      "error": "DerivationError: reference fix commit is AMBIGUOUS: 2 children of df9ad4085d60710b507b54c8fc369ee186eb1d64 match the declared test patch; refusing to guess",
+      "instance_id": "pallets__click-2380"
+    },
+    {
+      "error": "DerivationError: no child commit of base ad67fc66da24f4587c072b13bdaade357eeb6022 in C:\\Users\\rober\\Projects\\swe_probe_work\\sinaptik-ai__pandas-ai-1099\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
+      "instance_id": "sinaptik-ai__pandas-ai-1099"
+    },
+    {
+      "error": "DerivationError: no child commit of base 4b1d2d99b027ec3d88e8ef6ab5e89ba7a83fb15b in C:\\Users\\rober\\Projects\\swe_probe_work\\databricks__dbt-databricks-935\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
+      "instance_id": "databricks__dbt-databricks-935"
+    },
+    {
+      "error": "DerivationError: no child commit of base 1ce57f64c9fecb655856dd1f3098c7bf7a1d37fa in C:\\Users\\rober\\Projects\\swe_probe_work\\pallets__werkzeug-2583\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
+      "instance_id": "pallets__werkzeug-2583"
+    },
+    {
+      "error": "DerivationError: no child commit of base f1aac5bc4465e1ec622e4643e60ba38f8d2cea06 in C:\\Users\\rober\\Projects\\swe_probe_work\\qiskit__qiskit-ibm-runtime-367\\repo; the reference fix commit cannot be located, so edit scope cannot be derived",
+      "instance_id": "qiskit__qiskit-ibm-runtime-367"
+    }
+  ],
+  "operator_controls": [
+    "derived before any T/X/C0 trajectory",
+    "derived outside every arm workspace",
+    "reference solution never exposed to the worker",
+    "raw reference commit id never persisted; digest only",
+    "frozen before the first confirmatory trajectory",
+    "read-only git; clone fingerprint verified before and after"
+  ],
+  "schema": "f2_endpoint_manifest_v1"
+}
