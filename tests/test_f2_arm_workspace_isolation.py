@@ -181,6 +181,80 @@ class TestHistoryContaminationPrevention:
         # base tree still intact (patch applied) after stripping
         assert (repo / "target.txt").read_text(encoding="utf-8") == "patched\n"
 
+    def test_orig_head_pseudo_ref_is_removed(self, tmp_path):
+        """ORIG_HEAD is a plain file that for-each-ref never enumerates."""
+        inst, repo, base = _make_task(tmp_path)
+        future = _add_future_history(repo)
+        # Put HEAD ON the future commit, then reset away from it: `git reset`
+        # writes ORIG_HEAD naming the commit being reset FROM.
+        _git(repo, "checkout", "--detach", future)
+        _git(repo, "reset", "--hard", base)
+        orig = _git(repo, "rev-parse", "ORIG_HEAD")
+        assert orig == future  # pre-condition: the leak really exists
+        assert (Path(_git(repo, "rev-parse", "--absolute-git-dir")) / "ORIG_HEAD").exists()
+        prepare_arm_workspace(inst, base)
+        git_dir = Path(_git(repo, "rev-parse", "--absolute-git-dir"))
+        assert not (git_dir / "ORIG_HEAD").exists(), "ORIG_HEAD survived stripping"
+        # And the future commit it named is genuinely unreadable.
+        probe = subprocess.run(
+            ["git", "cat-file", "-e", future], cwd=str(repo),
+            capture_output=True, text=True, check=False,
+        )
+        assert probe.returncode != 0
+
+    def test_no_pseudo_ref_survives_stripping(self, tmp_path):
+        inst, repo, base = _make_task(tmp_path)
+        _add_future_history(repo)
+        git_dir = Path(_git(repo, "rev-parse", "--absolute-git-dir"))
+        for pseudo in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+                       "BISECT_HEAD", "AUTO_MERGE", "FETCH_HEAD", "ORIG_HEAD"):
+            (git_dir / pseudo).write_text("deadbeef\n", encoding="utf-8")
+        prepare_arm_workspace(inst, base)
+        survivors = [
+            p for p in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+                        "BISECT_HEAD", "AUTO_MERGE", "FETCH_HEAD", "ORIG_HEAD")
+            if (git_dir / p).exists()
+        ]
+        assert survivors == []
+
+    def test_dangling_blob_carrying_future_content_is_pruned(self, tmp_path):
+        """R10: the unreachable-object assertion must cover EVERY object type.
+
+        A surviving future TREE or BLOB carries the gold patch exactly as
+        effectively as a surviving commit, so a commit-only assertion leaves
+        the channel open. Here the future commit is made unreachable WITHOUT
+        relying on gc to collect its objects, then preparation must fail closed
+        or leave nothing behind.
+        """
+        inst, repo, base = _make_task(tmp_path)
+        future = _add_future_history(repo)
+        # Drop every ref so the future commit AND its tree/blob become
+        # unreachable, then confirm the objects really are present on disk.
+        for ref in _git(repo, "for-each-ref", "--format=%(refname)").split():
+            if ref != "HEAD":
+                _git(repo, "update-ref", "-d", ref)
+        fsck_before = _git(repo, "fsck", "--unreachable", "--no-reflogs")
+        # git reports an unreferenced TIP as "dangling", an interior object as
+        # "unreachable"; either proves future objects are present on disk.
+        assert ("unreachable commit" in fsck_before) or ("dangling commit" in fsck_before)
+        # prepare_arm_workspace must (a) succeed or (b) fail closed, and in
+        # neither case may a future object survive.
+        try:
+            prepare_arm_workspace(inst, base)
+        except FreshArmWorkspaceError:
+            pass
+        fsck_after = _git(repo, "fsck", "--unreachable", "--no-reflogs")
+        for kind in ("unreachable commit", "unreachable blob", "unreachable tree",
+                     "dangling commit", "dangling blob", "dangling tree"):
+            assert kind not in fsck_after, (
+                f"{kind} survived preparation; the gold patch would be readable"
+            )
+        probe = subprocess.run(
+            ["git", "cat-file", "-e", future], cwd=str(repo),
+            capture_output=True, text=True, check=False,
+        )
+        assert probe.returncode != 0
+
 
 class TestResolveLayout:
     def test_resolves_instance_dir_and_repo_dir(self, tmp_path):

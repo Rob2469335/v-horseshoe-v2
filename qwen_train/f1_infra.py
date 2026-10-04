@@ -145,17 +145,35 @@ F1_RELEVANT_FILE_SET = frozenset({"swarm_os/lib/paths.py"})
 F1_HORIZON_STEPS = 12
 
 
-def find_qualifying_first_edit(tool_calls: list) -> Optional[int]:
+def find_qualifying_first_edit(
+    tool_calls: list,
+    relevant_file_set: Optional[frozenset] = None,
+    horizon_steps: Optional[int] = None,
+) -> Optional[int]:
     """Scan ATIF tool-call records in ascending step order for the first
     qualifying edit: an edit-type filesystem action whose target resolves
-    to a file in F1_RELEVANT_FILE_SET.
+    to a file in ``relevant_file_set``.
 
     A qualifying edit is an action (write/patch/edit/create) targeting
     the relevant file. The patch does NOT need to be accepted or the
-    file mutated — the action itself is the endpoint per F1-OP-004a.
+    file mutated - the action itself is the endpoint per F1-OP-004a.
+
+    R11: the relevant file set and the horizon are PARAMETERS. Omitting them
+    preserves the F1 pilot behaviour byte-identically (F1_RELEVANT_FILE_SET /
+    F1_HORIZON_STEPS); a confirmatory F2 task MUST pass its own frozen set,
+    because the F1 constant names exactly one file in one repository and would
+    silently score every other task as "no qualifying edit". Prefer
+    :func:`qwen_train.f2_endpoint.qualifying_first_edit`, which additionally
+    binds the set to a SHA-256 and refuses treatment-derived provenance.
 
     Returns the ATIF step_id of the first qualifying edit, or None.
     """
+    relevant = (
+        F1_RELEVANT_FILE_SET
+        if relevant_file_set is None
+        else frozenset(relevant_file_set)
+    )
+    horizon = F1_HORIZON_STEPS if horizon_steps is None else int(horizon_steps)
     if not tool_calls:
         return None
     # Filter to only dict entries (ATIF step records), skip string tool names
@@ -175,13 +193,18 @@ def find_qualifying_first_edit(tool_calls: list) -> Optional[int]:
         target = args.get("path", "") or args.get("file_path", "")
         # Normalize: strip repo prefix if present, compare basename
         target_normalized = target.replace("\\", "/")
-        for rel_path in F1_RELEVANT_FILE_SET:
+        for rel_path in relevant:
             if target_normalized.endswith(rel_path):
                 extra = tc.get("extra", {})
                 # Prefer step_id (ATIF step ordinal) over turn (agent loop iteration)
                 step_id = extra.get("step_id") or extra.get("turn")
                 if step_id is not None:
-                    return int(step_id)
+                    step_id = int(step_id)
+                    # Respect the frozen horizon: an endpoint beyond it is not an
+                    # endpoint, and no later step can become one.
+                    if step_id > horizon:
+                        return None
+                    return step_id
     return None
 
 

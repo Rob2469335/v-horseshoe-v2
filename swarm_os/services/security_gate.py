@@ -485,45 +485,179 @@ class SecurityGate:
         return True
 
 
-def clean_sandbox_env(extra: dict | None = None) -> dict:
+#: Substrings that mark a variable name as credential-bearing regardless of
+#: where they appear (``DATABASE_URL``, ``X_API_KEY``, ``GITHUB_PAT``...).
+_CREDENTIAL_NAME_SUBSTRINGS = (
+    "API_KEY",
+    "API_TOKEN",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PRIVATE_KEY",
+    "AWS_ACCESS",
+    "AWS_SECRET",
+    # Specific enough not to collide with AUTHORS_FILE / AUTHOR: a bearer
+    # credential carried in an HTTP_AUTHORIZATION-style variable.
+    "AUTHORIZATION",
+    "GITHUB_PAT",
+    "DATABASE_URL",
+    "DB_URL",
+    "CONNECTION_STRING",
+    "DSN",
+    "CREDENTIAL",
+    "PEM",
+    "DEFAULT_PASSWORD",
+    "SESSION_KEY",
+    "SIGNING_KEY",
+    "SSH_KEY",
+    "ACCESS_KEY",
+    "ENCRYPTION_KEY",
+)
+
+#: Whole-word markers matched against the ``_``-separated segments of a variable
+#: name. Token matching is what closes the D-12 hole: the previous substring list
+#: had no bare ``KEY`` entry, so ``MY_KEY``, ``SIGNING_KEY`` and ``SSH_KEY`` all
+#: survived into the untrusted subprocess and were readable by LLM-generated code.
+#: Matching whole segments (not substrings) avoids collateral damage on innocent
+#: names that merely contain a key-ish substring, e.g. ``KEYBOARD_LAYOUT`` or
+#: ``MONKEY_COUNT``, which are not credentials.
+_CREDENTIAL_NAME_TOKENS = frozenset(
+    {
+        "KEY",
+        "KEYS",
+        "CREDENTIAL",
+        "CREDENTIALS",
+        "SECRET",
+        "SECRETS",
+        "TOKEN",
+        "TOKENS",
+        "PASSWORD",
+        "PASSWD",
+        "PASSPHRASE",
+        "AUTH",
+        "SESSION",
+        "SIGNATURE",
+    }
+)
+
+#: Variables the untrusted subprocess legitimately needs. Windows in particular
+#: cannot start a process without ``SystemRoot``/``COMSPEC``; ``PATH`` resolves
+#: the interpreter. This is an ALLOWLIST of names, never of values.
+_ENV_ALWAYS_KEEP = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "PYTHONNOUSERSITE",
+        "PYTHONIOENCODING",
+        "PYTHONUTF8",
+        # Windows process creation essentials.
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+    }
+)
+
+
+def is_credential_env_name(name: str) -> bool:
+    """True iff a variable NAME marks it as credential-bearing.
+
+    Two independent rules, because either alone is insufficient:
+
+    1. a credential-bearing substring anywhere in the name (catches
+       ``DATABASE_URL``, ``GITHUB_PAT``, ``X_API_KEY``); and
+    2. a whole ``_``-separated segment equal to a credential marker (catches
+       ``MY_KEY``, ``SIGNING_KEY``, ``SSH_KEY`` -- the D-12 gap).
+
+    Rule 2 is segment-exact rather than substring so unrelated names containing
+    those letters (``MONKEY_COUNT``, ``KEYBOARD``) are not stripped.
+    """
+    upper = (name or "").upper()
+    if not upper:
+        return False
+    if any(s in upper for s in _CREDENTIAL_NAME_SUBSTRINGS):
+        return True
+    segments = [seg for seg in upper.replace("-", "_").split("_") if seg]
+    return any(seg in _CREDENTIAL_NAME_TOKENS for seg in segments)
+
+
+def clean_sandbox_env(
+    extra: dict | None = None,
+    *,
+    allowlist: frozenset[str] | set[str] | None = None,
+) -> dict:
     """Build a subprocess env for untrusted (LLM-generated) code: no API keys,
     tokens, secrets, passwords, or SWARM_* feature gates, so a malicious script
     cannot exfiltrate credentials or trigger daemon loops. Keeps PATH and the
-    standard library. PYTHONNOUSERSITE=1 keeps -I isolated mode strict."""
+    standard library. PYTHONNOUSERSITE=1 keeps -I isolated mode strict.
+
+    ``allowlist`` (preferred for the Experiment-J learning actor) switches from
+    denylist-and-inherit to ALLOWLIST-AND-EXCLUDE: only the names in
+    ``allowlist`` (plus the always-keep essentials and anything credential-free
+    in ``extra``) survive. That is the stronger posture because a denylist can
+    only remove names someone thought of, whereas an allowlist removes every
+    name nobody thought of. Denying by default is fail-closed for both modes.
+    """
     import os
 
-    clean = {
-        k: v
-        for k, v in os.environ.items()
-        if not any(
-            s in k.upper()
-            for s in (
-                "API_KEY",
-                "API_TOKEN",
-                "TOKEN",
-                "SECRET",
-                "PASSWORD",
-                "PASSWD",
-                "PRIVATE_KEY",
-                "AUTH",
-                "AWS_ACCESS",
-                "AWS_SECRET",
-                "GITHUB_PAT",
-                "DATABASE_URL",
-                "DB_URL",
-                "CONNECTION_STRING",
-                "DSN",
-                "CREDENTIAL",
-                "PEM",
-                "DEFAULT_PASSWORD",
-            )
-        )
-        and not k.startswith("SWARM_")
-    }
+    if allowlist is not None:
+        allowed = {str(k).upper() for k in allowlist}
+        keep_names = _ENV_ALWAYS_KEEP | allowed
+        clean = {
+            k: v
+            for k, v in os.environ.items()
+            if k.upper() in keep_names
+            and not k.startswith("SWARM_")
+            # An allowlist entry must not be able to smuggle a credential-named
+            # variable through: the allowlist chooses WHICH names to consider,
+            # the credential rule still vetoes them.
+            and not is_credential_env_name(k)
+        }
+    else:
+        clean = {
+            k: v
+            for k, v in os.environ.items()
+            if not is_credential_env_name(k) and not k.startswith("SWARM_")
+        }
     clean["PYTHONNOUSERSITE"] = "1"
     if extra:
-        clean.update(extra)
+        # `extra` is caller-supplied and therefore trusted, but a credential in
+        # it would defeat the membrane, so it is filtered identically.
+        clean.update(
+            {k: v for k, v in extra.items() if not is_credential_env_name(k)}
+        )
     return clean
+
+
+def clean_learning_env(
+    extra: dict | None = None,
+    *,
+    allowlist: frozenset[str] | set[str] | None = None,
+) -> dict:
+    """The Experiment-J learning actor's environment membrane.
+
+    Stricter than :func:`clean_sandbox_env`'s default: allowlist-based, so a
+    credential variable whose name nobody anticipated cannot reach the shell
+    that distils the first ACTIVE lesson. Used by the F2 / learning path, NOT by
+    the interactive ``danger_room`` surface, which legitimately needs the
+    operator's broader environment.
+    """
+    return clean_sandbox_env(extra=extra, allowlist=allowlist)
 
 
 # L6 (2026 process-separated gate): the scanner runs in a SEPARATE process from

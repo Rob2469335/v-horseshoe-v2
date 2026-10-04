@@ -355,10 +355,16 @@ def _strip_future_history(repo: Path, base_commit: str) -> None:
     reachable from other branches, remote-tracking refs, tags or the reflog, and
     recoverable from unreachable objects via ``git fsck``/``cat-file``. That is
     an evaluation-time answer-leak channel (SWE-Bench Pro Verified, arXiv
-    2609.08149; "reconstruct the repository as a fresh single-commit"). Remove
-    every ref except HEAD at ``base_commit``, expire reflogs, prune unreachable
-    objects, then fail closed if any commit remains reachable beyond base or any
-    unreachable commit object survives.
+    2609.08149; "reconstruct the repository as a fresh single-commit"; and the
+    documented ``git reflog`` / ``git log --all`` agent exploits in
+    SWE-bench issue #465). Remove every ref except HEAD at ``base_commit``,
+    delete every git PSEUDO-ref, expire reflogs, prune unreachable objects, then
+    fail closed if any future object of ANY type survives.
+
+    Pseudo-refs matter because ``git for-each-ref`` does NOT enumerate them:
+    ``ORIG_HEAD`` (written by ``git reset``/``merge``/``rebase``) is a plain
+    file under ``$GIT_DIR`` and would otherwise survive this function while
+    still naming a future commit the worker could read with ``git show``.
     """
     base = repo_commit_id(base_commit, repo)
     _require(
@@ -372,17 +378,54 @@ def _strip_future_history(repo: Path, base_commit: str) -> None:
         ref = ref.strip()
         if ref and ref != "HEAD":
             _run(["git", "update-ref", "-d", ref], repo)
+    # Pseudo-refs are NOT in for-each-ref output. Delete the file-backed ones so
+    # no stale pointer names a future commit. ``update-ref -d`` also works for
+    # these and refuses silently when absent, which is the safe direction.
+    pseudo_refs = (
+        "ORIG_HEAD",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_HEAD",
+        "AUTO_MERGE",
+        "FETCH_HEAD",
+    )
+    for pseudo in pseudo_refs:
+        _run(["git", "update-ref", "-d", pseudo], repo)
+    # ``git gc`` writes a fresh ORIG_HEAD during packing in some versions; remove
+    # the file directly as a belt-and-braces step after gc, before verification.
     _run(["git", "reflog", "expire", "--expire=now", "--all"], repo)
     gc = _run(["git", "gc", "--prune=now", "--quiet"], repo)
     _require(gc.returncode == 0, f"git gc failed: {gc.stderr.strip()}")
-    # Fail closed: nothing reachable beyond base, and no unreachable commits.
+    git_dir = Path(_run(["git", "rev-parse", "--absolute-git-dir"], repo).stdout.strip())
+    for pseudo in pseudo_refs:
+        target = git_dir / pseudo
+        if target.exists():
+            target.unlink()
+    # Fail closed: nothing reachable beyond base ...
     reachable = _run(
         ["git", "rev-list", "HEAD", "--not", base, "--count"], repo
     ).stdout.strip()
     _require(reachable == "0", f"future history still reachable: {reachable} commit(s)")
+    # ... and no unreachable object of ANY type survives. A surviving future
+    # TREE or BLOB carries the gold patch just as effectively as a surviving
+    # commit, so restricting this check to commits would leave the channel open.
     fsck = _run(["git", "fsck", "--unreachable", "--no-reflogs"], repo).stdout
-    leaked = [ln for ln in fsck.splitlines() if "unreachable commit" in ln]
-    _require(not leaked, f"unreachable future commit objects remain: {leaked[:3]}")
+    leaked = [
+        ln for ln in fsck.splitlines() if "unreachable " in ln or "dangling " in ln
+    ]
+    _require(
+        not leaked,
+        "unreachable/dangling git objects remain (any type may carry the gold "
+        f"patch): {leaked[:3]}",
+    )
+    # Belt and braces: nothing on disk may still name a future commit.
+    for pseudo in pseudo_refs:
+        target = git_dir / pseudo
+        _require(
+            not target.exists(),
+            f"git pseudo-ref {pseudo} survived history stripping",
+        )
 
 
 def prepare_arm_workspace(workspace_root: Path | str, base_commit: str) -> Path:
