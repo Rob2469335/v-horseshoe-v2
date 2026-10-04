@@ -44,6 +44,7 @@ from qwen_train.f2_endpoint import (
     qualifying_first_edit,
 )
 from qwen_train.f2_evidence import (
+    STATE_ARTIFACT_MISSING,
     STATE_IDENTITY_MISMATCH,
     STATE_MALFORMED,
     STATE_PROVENANCE_NOT_ESTABLISHED,
@@ -59,7 +60,6 @@ from qwen_train.f2_governance import (
     EvaluatorAuthorization,
     EvaluatorRegistry,
     TrustedArtifactStore,
-    evaluator_bytes_proven,
 )
 
 __all__ = [
@@ -77,6 +77,9 @@ __all__ = [
     "regrade_f2_pair",
     "find_forbidden_gold",
     "FORBIDDEN_GOLD_KEYS",
+    "ROLE_LESSON_BLOCK",
+    "ROLE_DELIVERY_EVIDENCE",
+    "EXECUTION_STATE_BY_ARM",
 ]
 
 #: The single authorized F2 result protocol. Do NOT reuse the generic
@@ -87,6 +90,22 @@ F2_TREATMENT_ARM = "T"
 F2_CONTROL_ARM = "X"
 F2_C0_ARM = "C0"
 F2_ARMS = (F2_TREATMENT_ARM, F2_CONTROL_ARM, F2_C0_ARM)
+
+#: Artifact roles specific to the F2 protocol. Defined HERE, not in the frozen
+#: governance module, so the S8/governance role sets are untouched. A lesson
+#: artifact is NOT evaluator implementation; a delivery-evidence artifact is its
+#: own role.
+ROLE_LESSON_BLOCK = "lesson_block"
+ROLE_DELIVERY_EVIDENCE = "delivery_evidence"
+
+#: Scientifically correct execution-state identities. X is the CONTROL arm (the
+#: identical artifact with L removed), NOT the gold/reference state: gold is
+#: curator-side and never enters the worker-facing identity model.
+EXECUTION_STATE_BY_ARM = {
+    F2_TREATMENT_ARM: "treatment",
+    F2_CONTROL_ARM: "control",
+    F2_C0_ARM: "control_empty",
+}
 
 #: Keys that must never appear anywhere in an F2 bundle: gold material is
 #: curator-side only and must not cross into the worker-facing evidence path.
@@ -227,6 +246,9 @@ class F2Bundle:
     behavioral_artifact: ArtifactRef
     task_outcome_artifact: ArtifactRef
     treatment_artifact: ArtifactRef
+    #: RETAINED delivery evidence. The verifier authenticates the delivery event
+    #: from these bytes, never from a producer-declared field alone.
+    delivery_artifact: ArtifactRef
     evaluator: EvaluatorAuthorization
     implementation_artifact: ArtifactRef
     declared_endpoint: bool
@@ -254,6 +276,7 @@ class F2Bundle:
             "behavioral_artifact": self.behavioral_artifact.to_dict(),
             "task_outcome_artifact": self.task_outcome_artifact.to_dict(),
             "treatment_artifact": self.treatment_artifact.to_dict(),
+            "delivery_artifact": self.delivery_artifact.to_dict(),
             "evaluator": self.evaluator.to_dict(),
             "implementation_artifact": self.implementation_artifact.to_dict(),
             "declared_endpoint": self.declared_endpoint,
@@ -280,6 +303,7 @@ class F2Bundle:
             behavioral_artifact=ArtifactRef.from_dict(d.get("behavioral_artifact") or {}),
             task_outcome_artifact=ArtifactRef.from_dict(d.get("task_outcome_artifact") or {}),
             treatment_artifact=ArtifactRef.from_dict(d.get("treatment_artifact") or {}),
+            delivery_artifact=ArtifactRef.from_dict(d.get("delivery_artifact") or {}),
             evaluator=EvaluatorAuthorization.from_dict(d.get("evaluator") or {}),
             implementation_artifact=ArtifactRef.from_dict(d.get("implementation_artifact") or {}),
             declared_endpoint=bool(d.get("declared_endpoint")),
@@ -326,6 +350,7 @@ class F2Result:
     behavioral_artifact_digest: str
     task_outcome_artifact_digest: str
     treatment_artifact_digest: str
+    delivery_artifact_digest: str
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
@@ -347,6 +372,7 @@ class F2Result:
             "behavioral_artifact_digest": self.behavioral_artifact_digest,
             "task_outcome_artifact_digest": self.task_outcome_artifact_digest,
             "treatment_artifact_digest": self.treatment_artifact_digest,
+            "delivery_artifact_digest": self.delivery_artifact_digest,
         }
 
     def digest(self) -> str:
@@ -392,8 +418,48 @@ def _derive_task_outcome(store: TrustedArtifactStore, ref: ArtifactRef) -> tuple
     return statuses <= {"passed"}, "all declared FAIL_TO_PASS nodes passed" if statuses <= {"passed"} else f"statuses {sorted(statuses)}"
 
 
+def _verified_delivery(
+    bundle: F2Bundle, store: TrustedArtifactStore
+) -> tuple[F2DeliveryEvidence | None, str]:
+    """Authenticate the delivery event from RETAINED bytes (Finding A).
+
+    The producer's declared ``delivery`` is only a CLAIM. The retained
+    delivery-evidence artifact is authoritative: it is read from the trusted
+    store, its digest is verified, and its canonical content must equal the
+    declared delivery record EXACTLY. Endpoint ordering then uses the timestamp
+    from the verified artifact, so a producer cannot change which behavioural
+    records count by editing a declared field.
+
+    The verifier never substitutes its own wall-clock time.
+    """
+    data, why = store.read_bytes(bundle.delivery_artifact.name)
+    if data is None:
+        return None, f"delivery evidence: {why}"
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return None, f"delivery evidence is not parseable JSON: {exc}"
+    if not isinstance(payload, Mapping):
+        return None, "delivery evidence is not a JSON object"
+    try:
+        retained = F2DeliveryEvidence.from_dict(payload)
+    except Exception as exc:  # noqa: BLE001
+        return None, f"delivery evidence is malformed: {exc}"
+    if _canonical_bytes(retained.canonical_payload()) != _canonical_bytes(
+        bundle.delivery.canonical_payload()
+    ):
+        return None, (
+            "the producer-declared delivery record does not match the RETAINED "
+            "delivery evidence bytes; the delivery event cannot be authenticated"
+        )
+    return retained, ""
+
+
 def _reconstruct_endpoint(
-    bundle: F2Bundle, store: TrustedArtifactStore, relevant_file_set: Sequence[str]
+    bundle: F2Bundle,
+    store: TrustedArtifactStore,
+    relevant_file_set: Sequence[str],
+    delivery_timestamp: str,
 ) -> tuple[dict[str, Any] | None, str, str]:
     """Reconstruct the PRIMARY endpoint from RAW behavioral evidence.
 
@@ -423,7 +489,7 @@ def _reconstruct_endpoint(
                 return None, "insufficient", f"behavioral record {i} is missing {name!r}"
         records.append(r)
 
-    ts = bundle.delivery.delivery_timestamp
+    ts = delivery_timestamp
     post = [r for r in records if str(r["timestamp"]) > ts]
     if not post:
         return None, "insufficient", (
@@ -499,7 +565,15 @@ def derive_f2_result(
     if spec.relevant_file_set_hash != bundle.relevant_file_set_hash:
         return None, "relevant_file_set does not match the bundle's declared hash"
 
-    endpoint, status, why = _reconstruct_endpoint(bundle, store, relevant_file_set)
+    # The delivery event is authenticated from RETAINED bytes BEFORE it governs
+    # endpoint ordering (Finding A).
+    delivery, why = _verified_delivery(bundle, store)
+    if delivery is None:
+        return None, why
+
+    endpoint, status, why = _reconstruct_endpoint(
+        bundle, store, relevant_file_set, delivery.delivery_timestamp
+    )
     if status == "insufficient":
         return None, why
     task_success, task_why = _derive_task_outcome(store, bundle.task_outcome_artifact)
@@ -511,20 +585,21 @@ def derive_f2_result(
         instance_id=bundle.instance_id,
         arm=bundle.arm,
         execution_identity=_execution_identity(bundle),
-        delivery_evidence_identity=bundle.delivery.digest(),
+        delivery_evidence_identity=delivery.digest(),
         relevant_file_set_hash=spec.relevant_file_set_hash,
         horizon_k=bundle.horizon_k,
         qualifying_operations=tuple(sorted(bundle.qualifying_operations)),
         first_edit_step=(endpoint["step_id"] if endpoint else None),
         first_edit_path=(endpoint["path"] if endpoint else None),
         first_edit_operation=(endpoint["operation"] if endpoint else None),
-        delivery_timestamp=bundle.delivery.delivery_timestamp,
+        delivery_timestamp=delivery.delivery_timestamp,
         endpoint=status == "endpoint",
         censored=status == "censored",
         task_success=task_success,
         behavioral_artifact_digest=bundle.behavioral_artifact.digest,
         task_outcome_artifact_digest=bundle.task_outcome_artifact.digest,
         treatment_artifact_digest=bundle.treatment_artifact.digest,
+        delivery_artifact_digest=bundle.delivery_artifact.digest,
     ), ""
 
 
@@ -569,7 +644,17 @@ def regrade_f2(
         )
 
     # Evaluator authorization AND the exact authorized protocol.
-    ok, why = registry.authorize_identity(_identity_of(bundle))
+    #
+    # Authorization is looked up directly from the evaluator fields. It does NOT
+    # route through a governance ExecutionIdentity, because that identity's state
+    # vocabulary is base/gold and X is NOT gold (Finding B).
+    ok, why = registry.authorize(
+        evaluator_id=bundle.evaluator.evaluator_id,
+        version=bundle.evaluator.version,
+        implementation_digest=bundle.evaluator.implementation_digest,
+        procedure_id=bundle.evaluator.procedure_id,
+        protocol_version=bundle.evaluator.protocol_version,
+    )
     if not ok:
         return _fail(STATE_UNAUTHORIZED_PROCEDURE, why)
     if bundle.evaluator.protocol_version != F2_PROTOCOL_ID:
@@ -592,6 +677,7 @@ def regrade_f2(
         bundle.behavioral_artifact,
         bundle.task_outcome_artifact,
         bundle.treatment_artifact,
+        bundle.delivery_artifact,
         bundle.implementation_artifact,
     ]
     if bundle.lesson_block_artifact is not None:
@@ -601,11 +687,28 @@ def regrade_f2(
         if not ok:
             return _fail(_artifact_state(why), why)
 
-    if not evaluator_bytes_proven(_governance_view(bundle), store):
+    if not _f2_evaluator_bytes_proven(bundle, store):
         return _fail(
             STATE_UNAUTHORIZED_PROCEDURE,
             "the retained evaluator implementation bytes do not match the "
             "authorized implementation digest",
+        )
+
+    # Delivery event authenticated from retained bytes (Finding A).
+    delivery, why = _verified_delivery(bundle, store)
+    if delivery is None:
+        return _fail(STATE_PROVENANCE_NOT_ESTABLISHED, why)
+
+    # Treatment/lesson consistency is enforced by the clean room on the pair;
+    # here we require the retained treatment bytes to hash to the declared hash.
+    treatment_bytes, why = store.read_bytes(bundle.treatment_artifact.name)
+    if treatment_bytes is None:
+        return _fail(STATE_ARTIFACT_MISSING, f"treatment artifact: {why}")
+    if _sha256(treatment_bytes) != bundle.delivery.treatment_artifact_hash:
+        return _fail(
+            STATE_IDENTITY_MISMATCH,
+            "retained treatment bytes do not hash to the delivery record's "
+            "treatment_artifact_hash",
         )
 
     result, why = derive_f2_result(bundle, store=store, relevant_file_set=relevant_file_set)
@@ -644,40 +747,28 @@ def _artifact_state(why: str) -> str:
     return _gov_state(why)
 
 
-def _identity_of(bundle: F2Bundle):
-    """Build the governance identity view used for authorization lookup."""
-    from qwen_train.f2_governance import ExecutionIdentity
+def _f2_evaluator_bytes_proven(bundle: F2Bundle, store: TrustedArtifactStore) -> bool:
+    """Evaluator-BYTE provenance for F2, independent of the governance identity model.
 
-    return ExecutionIdentity(
-        instance_id=bundle.instance_id,
-        repository=bundle.repository,
-        base_commit=bundle.base_commit,
-        execution_state_identity=("base" if bundle.arm == F2_TREATMENT_ARM else "gold"),
-        execution_state_digest=bundle.delivery.digest(),
-        evaluator_id=bundle.evaluator.evaluator_id,
-        evaluator_version=bundle.evaluator.version,
-        evaluator_implementation_digest=bundle.evaluator.implementation_digest,
-        procedure_id=bundle.evaluator.procedure_id,
-        protocol_version=bundle.evaluator.protocol_version,
-        environment_identity="f2",
-        test_command="f2",
-        artifact_identities=(),
+    Registry authorization proves only that a declared identity matches an
+    authorized entry. Byte provenance additionally requires the retained
+    implementation artifact to be present in the trusted store and to hash to the
+    authorized implementation digest.
+
+    This deliberately does NOT route through a governance ``ExecutionIdentity``:
+    that vocabulary is base/gold and X is not gold (Finding B).
+    """
+    from qwen_train.f2_governance import ROLE_EVALUATOR_IMPLEMENTATION
+
+    if bundle.implementation_artifact is None or not bundle.implementation_artifact.name:
+        return False
+    ok, _ = store.verify_ref(
+        bundle.implementation_artifact, allowed_roles=(ROLE_EVALUATOR_IMPLEMENTATION,)
     )
-
-
-def _governance_view(bundle: F2Bundle):
-    """A minimal governance bundle view for :func:`evaluator_bytes_proven`."""
-    from qwen_train.f2_governance import ExecutionBundle
-
-    return ExecutionBundle(
-        identity=_identity_of(bundle),
-        declared_result="pass",
-        result_protocol_id=bundle.protocol_id,
-        test_output=bundle.behavioral_artifact,
-        run_log=bundle.task_outcome_artifact,
-        started_at=bundle.started_at,
-        finished_at=bundle.finished_at,
-        implementation_artifact=bundle.implementation_artifact,
+    return bool(
+        ok
+        and bundle.implementation_artifact.digest
+        == bundle.evaluator.implementation_digest
     )
 
 
@@ -688,7 +779,10 @@ def _roles_for(ref: ArtifactRef, bundle: F2Bundle) -> tuple[str, ...]:
     if ref is bundle.implementation_artifact:
         return (ROLE_EVALUATOR_IMPLEMENTATION,)
     if ref is bundle.lesson_block_artifact:
-        return (ROLE_EVALUATOR_IMPLEMENTATION,)  # curator-side artifact slot
+        # A lesson artifact is NOT evaluator implementation (Finding D).
+        return (ROLE_LESSON_BLOCK,)
+    if ref is bundle.delivery_artifact:
+        return (ROLE_DELIVERY_EVIDENCE,)
     return (ROLE_TEST_OUTPUT, ROLE_RUN_LOG)
 
 

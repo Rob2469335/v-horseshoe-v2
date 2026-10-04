@@ -43,6 +43,8 @@ from qwen_train.f2_governance import (
     TrustedArtifactStore,
 )
 from qwen_train.f2_protocol import (
+    ROLE_DELIVERY_EVIDENCE,
+    ROLE_LESSON_BLOCK,
     F2_CONTROL_ARM,
     F2_PROTOCOL_ID,
     F2_TREATMENT_ARM,
@@ -118,11 +120,22 @@ def _treatment(arm: str) -> tuple[ArtifactRef, ArtifactRef | None, str]:
         text = f"# treatment artifact\n{LESSON}tail\n"
         return (
             _write("treatment_T.txt", text.encode(), ROLE_TEST_OUTPUT),
-            _write("lesson_block.txt", LESSON.encode(), ROLE_EVALUATOR_IMPLEMENTATION),
+            _write("lesson_block.txt", LESSON.encode(), ROLE_LESSON_BLOCK),
             hashlib.sha256(LESSON.encode()).hexdigest(),
         )
     text = "# treatment artifact\ntail\n"  # L removed
     return _write("treatment_X.txt", text.encode(), ROLE_TEST_OUTPUT), None, ""
+
+
+def _delivery_artifact(arm, lesson_hash, final_prompt_hash, ts, treatment_hash):
+    payload = {
+        "arm": arm,
+        "lesson_block_hash": lesson_hash,
+        "final_prompt_hash": final_prompt_hash,
+        "delivery_timestamp": ts,
+        "treatment_artifact_hash": treatment_hash,
+    }
+    return _write("delivery.json", json.dumps(payload).encode(), ROLE_DELIVERY_EVIDENCE)
 
 
 def _bundle(
@@ -141,6 +154,7 @@ def _bundle(
     treatment=None,
     lesson_block=None,
     lesson_hash=None,
+    delivery_artifact=None,
 ):
     ta, lba, lh = treatment if treatment is not None else _treatment(arm)
     if lesson_block is not None:
@@ -170,6 +184,11 @@ def _bundle(
         behavioral_artifact=beh,
         task_outcome_artifact=rep,
         treatment_artifact=ta,
+        delivery_artifact=(
+            delivery_artifact
+            if delivery_artifact is not None
+            else _delivery_artifact(arm, lh, "f" * 64, delivery_ts, ta.digest)
+        ),
         evaluator=auth,
         implementation_artifact=implementation or _IMPL,
         declared_endpoint=declared_endpoint,
@@ -644,3 +663,199 @@ class TestAdmission:
         d["gold_diff"] = "diff --git a/x b/x"
         a = self._admit(t_bundle=d)
         assert a.admissible is False
+
+
+# --------------------------------------------------------------------------
+# Finding A - delivery provenance is independently authenticated
+# --------------------------------------------------------------------------
+class TestDeliveryProvenance:
+    def test_declared_delivery_must_match_retained_bytes(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        # Producer edits the DECLARED delivery timestamp only; the retained
+        # artifact still carries the original -> cannot be authenticated.
+        moved = replace(
+            b,
+            delivery=F2DeliveryEvidence(
+                arm=F2_TREATMENT_ARM,
+                lesson_block_hash=b.delivery.lesson_block_hash,
+                final_prompt_hash=b.delivery.final_prompt_hash,
+                delivery_timestamp="2026-10-04T00:00:03Z",
+                treatment_artifact_hash=b.delivery.treatment_artifact_hash,
+            ),
+        )
+        v = _regrade(moved)
+        assert v.state == STATE_PROVENANCE_NOT_ESTABLISHED
+        assert "RETAINED" in v.detail or "retained" in v.detail
+
+    def test_declared_delivery_earlier_cannot_manufacture_endpoint(self):
+        # Only a pre-delivery edit exists. Moving the DECLARED delivery earlier
+        # would make it qualify, but the retained bytes disagree -> fail closed.
+        b = _bundle(F2_TREATMENT_ARM, behavior=_steps(_PRE), declared_endpoint=False, declared_step=None)
+        moved = replace(
+            b,
+            delivery=F2DeliveryEvidence(
+                arm=F2_TREATMENT_ARM,
+                lesson_block_hash=b.delivery.lesson_block_hash,
+                final_prompt_hash=b.delivery.final_prompt_hash,
+                delivery_timestamp="2026-10-03T00:00:00Z",
+                treatment_artifact_hash=b.delivery.treatment_artifact_hash,
+            ),
+        )
+        assert _regrade(moved).state == STATE_PROVENANCE_NOT_ESTABLISHED
+
+    def test_declared_delivery_later_cannot_erase_endpoint(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        moved = replace(
+            b,
+            delivery=F2DeliveryEvidence(
+                arm=F2_TREATMENT_ARM,
+                lesson_block_hash=b.delivery.lesson_block_hash,
+                final_prompt_hash=b.delivery.final_prompt_hash,
+                delivery_timestamp="2026-10-05T00:00:00Z",
+                treatment_artifact_hash=b.delivery.treatment_artifact_hash,
+            ),
+        )
+        assert _regrade(moved).state == STATE_PROVENANCE_NOT_ESTABLISHED
+
+    def test_delivery_artifact_tampering_rejected(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        (_ROOT / b.delivery_artifact.name).write_bytes(b'{"arm":"T"}')
+        assert _regrade(b).state == STATE_ARTIFACT_DIGEST_MISMATCH
+
+    def test_missing_delivery_evidence_fails_closed(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        (_ROOT / b.delivery_artifact.name).unlink()
+        assert _regrade(b).state == STATE_ARTIFACT_MISSING
+
+    def test_malformed_delivery_evidence_fails_closed(self):
+        bad = _write("delivery_bad.json", b"not json", ROLE_DELIVERY_EVIDENCE)
+        assert _regrade(_bundle(F2_TREATMENT_ARM, delivery_artifact=bad)).state in (
+            STATE_ARTIFACT_MISSING, STATE_PROVENANCE_NOT_ESTABLISHED, STATE_SCIENTIFICALLY_INSUFFICIENT
+        )
+
+    def test_wrong_arm_delivery_evidence_fails_closed(self):
+        # Retained delivery says arm X while the bundle is arm T.
+        bad = _delivery_artifact("X", "", "f" * 64, DELIVERY_TS, "a" * 64)
+        v = _regrade(_bundle(F2_TREATMENT_ARM, delivery_artifact=bad))
+        assert v.state != STATE_VERIFIED
+
+    def test_final_prompt_hash_mismatch_fails_closed(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        bad = _delivery_artifact(
+            F2_TREATMENT_ARM, b.delivery.lesson_block_hash, "0" * 64,
+            DELIVERY_TS, b.delivery.treatment_artifact_hash,
+        )
+        assert _regrade(replace(b, delivery_artifact=bad)).state != STATE_VERIFIED
+
+    def test_treatment_artifact_identity_mismatch_fails_closed(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        other = _write("other_treatment.txt", b"# unrelated\n", ROLE_TEST_OUTPUT)
+        # Artifact integrity passes (digest matches the new bytes) but the
+        # delivery record's treatment hash no longer matches.
+        assert _regrade(replace(b, treatment_artifact=other)).state == STATE_IDENTITY_MISMATCH
+
+    def test_equal_timestamp_is_not_after(self):
+        # Delivery ts equals the only step ts -> strict-after excludes it.
+        b = _bundle(
+            F2_TREATMENT_ARM,
+            behavior=_steps(_step(4, DELIVERY_TS, "twine/package.py")),
+            declared_endpoint=False,
+            declared_step=None,
+        )
+        v = _regrade(b)
+        assert v.state == STATE_SCIENTIFICALLY_INSUFFICIENT
+
+    def test_delivery_ordering_uses_retained_bytes(self):
+        # A step exactly one second after the retained delivery counts.
+        b = _bundle(F2_TREATMENT_ARM, behavior=_steps(_step(4, "2026-10-04T00:00:01Z", "twine/package.py")))
+        res, why = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        assert res is not None, why
+        assert res.first_edit_step == 4 and res.endpoint is True
+
+
+# --------------------------------------------------------------------------
+# Finding B - T/X/C0 identity semantics (X is NOT gold)
+# --------------------------------------------------------------------------
+class TestIdentitySemantics:
+    def test_x_is_not_gold(self):
+        from qwen_train.f2_protocol import EXECUTION_STATE_BY_ARM
+
+        assert "gold" not in EXECUTION_STATE_BY_ARM.values()
+        assert EXECUTION_STATE_BY_ARM[F2_TREATMENT_ARM] == "treatment"
+        assert EXECUTION_STATE_BY_ARM[F2_CONTROL_ARM] == "control"
+
+    def test_t_and_x_have_distinct_states(self):
+        from qwen_train.f2_protocol import EXECUTION_STATE_BY_ARM
+
+        assert EXECUTION_STATE_BY_ARM[F2_TREATMENT_ARM] != EXECUTION_STATE_BY_ARM[F2_CONTROL_ARM]
+
+    def test_changing_arm_changes_the_result_identity(self):
+        t, _ = derive_f2_result(_bundle(F2_TREATMENT_ARM), store=_store(), relevant_file_set=RFS)
+        x, _ = derive_f2_result(_bundle(F2_CONTROL_ARM), store=_store(), relevant_file_set=RFS)
+        assert t.execution_identity != x.execution_identity
+        assert t.arm != x.arm
+
+    def test_no_gold_vocabulary_in_result(self):
+        res, _ = derive_f2_result(_bundle(F2_CONTROL_ARM), store=_store(), relevant_file_set=RFS)
+        blob = json.dumps(res.to_dict()).lower()
+        assert '"gold"' not in blob and "gold_" not in blob
+
+    def test_clean_room_still_works_after_identity_change(self):
+        ok, why = verify_f2_clean_room(
+            _bundle(F2_TREATMENT_ARM), _bundle(F2_CONTROL_ARM), store=_store()
+        )
+        assert ok, why
+
+
+# --------------------------------------------------------------------------
+# Finding C - audit timestamps vs the verified delivery event
+# --------------------------------------------------------------------------
+class TestTimestampSemantics:
+    def test_audit_timestamps_do_not_change_the_result(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        b2 = replace(b, started_at="2031-01-01T00:00:00Z", finished_at="2031-01-01T00:01:00Z")
+        r1, _ = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        r2, _ = derive_f2_result(b2, store=_store(), relevant_file_set=RFS)
+        assert r1.digest() == r2.digest()
+
+    def test_verified_delivery_event_is_part_of_the_result_identity(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        # A genuinely different retained delivery event changes the identity.
+        b2 = _bundle(F2_TREATMENT_ARM, delivery_ts="2026-10-04T00:00:02Z")
+        r1, _ = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        r2, _ = derive_f2_result(b2, store=_store(), relevant_file_set=RFS)
+        assert r1.delivery_timestamp != r2.delivery_timestamp
+        assert r1.digest() != r2.digest()
+
+
+# --------------------------------------------------------------------------
+# Finding D - artifact roles
+# --------------------------------------------------------------------------
+class TestArtifactRoles:
+    def test_lesson_with_evaluator_role_rejected(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        wrong = ArtifactRef(
+            b.lesson_block_artifact.name, b.lesson_block_artifact.digest,
+            b.lesson_block_artifact.size_bytes, ROLE_EVALUATOR_IMPLEMENTATION,
+        )
+        assert _regrade(replace(b, lesson_block_artifact=wrong)).state == STATE_MALFORMED
+
+    def test_implementation_with_lesson_role_rejected(self):
+        b = _bundle(F2_TREATMENT_ARM)
+        wrong = ArtifactRef(
+            b.implementation_artifact.name, b.implementation_artifact.digest,
+            b.implementation_artifact.size_bytes, ROLE_LESSON_BLOCK,
+        )
+        assert _regrade(replace(b, implementation_artifact=wrong)).state in (
+            STATE_MALFORMED, STATE_UNAUTHORIZED_PROCEDURE
+        )
+
+    def test_correct_lesson_role_is_accepted(self):
+        assert _regrade(_bundle(F2_TREATMENT_ARM)).state == STATE_VERIFIED
+
+    def test_lesson_role_is_not_evaluator_implementation(self):
+        from qwen_train.f2_protocol import ROLE_LESSON_BLOCK
+
+        from qwen_train.f2_governance import ROLE_EVALUATOR_IMPLEMENTATION
+
+        assert ROLE_LESSON_BLOCK != ROLE_EVALUATOR_IMPLEMENTATION

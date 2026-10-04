@@ -699,12 +699,51 @@ hashes to it; arm X carries none; and
 `T_treatment_text.replace(lesson_block_text, "", 1) == X_treatment_text`.
 Any unauthorized difference fails closed.
 
-### Delivery provenance
+### Delivery provenance (independently authenticated)
 
-The primary endpoint must be strictly after the verified delivery event.
-`lesson_block_hash · final_prompt_hash · delivery_timestamp · arm ·
-treatment_artifact_hash` are bound. Delivery cannot be inferred from the
-existence of an upstream lesson.
+The delivery event is established from a **retained delivery-evidence artifact**
+(`ROLE_DELIVERY_EVIDENCE`), not from a producer-declared field. The verifier reads
+the artifact from the trusted store, verifies its digest, parses it, and requires
+its canonical content to equal the bundle's declared delivery record **exactly**.
+Endpoint ordering then uses the timestamp from the **verified** artifact. The
+verifier never substitutes its own wall-clock time.
+
+Bound in the delivery record: `arm · lesson_block_hash · final_prompt_hash ·
+delivery_timestamp · treatment_artifact_hash`. The retained treatment bytes must
+also hash to `treatment_artifact_hash`. Delivery cannot be inferred from the
+existence of an upstream lesson. A producer that edits a declared field without
+editing the retained bytes fails closed (`PROVENANCE_NOT_ESTABLISHED`).
+
+### Identity semantics (T / X / C0)
+
+`EXECUTION_STATE_BY_ARM`: **T → `treatment`**, **X → `control`**, **C0 →
+`control_empty`**. X is the control arm (the identical artifact with L removed) and
+is **not** the gold/reference state; gold is curator-side and never enters the
+worker-facing identity model. Changing the arm changes the execution identity.
+
+### Timestamp semantics
+
+Two kinds of time are distinguished:
+
+* **Audit timestamps** (`started_at`, `finished_at`) are excluded from the
+  scientific identity: changing them does not change the derived result.
+* **The verified delivery event** IS scientifically relevant and cryptographically
+  bound: the endpoint is defined as the first qualifying edit *strictly after*
+  delivery, so the authenticated delivery artifact's digest and timestamp
+  participate in the execution and result identity. A genuinely different
+  retained delivery event changes the result identity.
+
+The earlier blanket statement that "timestamps never affect scientific identity"
+is **superseded** by this distinction.
+
+### Artifact roles
+
+`ROLE_TEST_OUTPUT` / `ROLE_RUN_LOG` (behavioral and task-outcome evidence, and the
+treatment artifact) · `ROLE_DELIVERY_EVIDENCE` (delivery evidence) ·
+`ROLE_LESSON_BLOCK` (the lesson block; **not** evaluator implementation) ·
+`ROLE_EVALUATOR_IMPLEMENTATION` (the evaluator implementation, F2-required). Roles
+are bound per slot, so a lesson artifact cannot masquerade as evaluator code, or
+vice versa.
 
 ### Gold boundary
 
@@ -732,10 +771,14 @@ guarantee.
 
 ### Classification
 
-**PROVEN:** evaluator authorization and byte provenance (when supplied);
-execution identity; artifact containment/integrity/role; delivery ordering;
-endpoint reconstruction from raw evidence; independent task-outcome derivation;
-declaration rejection; T/X clean room; gold boundary; deterministic,
+**PROVEN:** evaluator authorization and byte provenance; execution identity
+(arm-aware, `treatment`/`control`/`control_empty` — X is not gold); artifact
+containment/integrity/**role** (lesson ≠ evaluator implementation; delivery
+evidence has its own role); **delivery provenance authenticated from retained
+bytes**, not from a producer field; delivery ordering enforced from the verified
+event (audit timestamps excluded from identity, the verified delivery event
+included); endpoint reconstruction from raw evidence; independent task-outcome
+derivation; declaration rejection; T/X clean room; gold boundary; deterministic,
 side-effect-free verification; fail-closed taxonomy.
 
 **SUPPORTED:** the pipeline's sufficiency once a real executor emits conforming
