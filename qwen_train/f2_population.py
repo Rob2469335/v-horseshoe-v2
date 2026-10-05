@@ -28,6 +28,9 @@ S7  the relevant file set is NOT a test file - the endpoint must be a SOURCE
 S8  provenance evidence recorded for base and gold states (R5/R8), addressed
     outside the workspace with a digest
 S9  the task is flagged usable by the probe that discovered it
+S10 contamination provenance - when a ``model_cutoff`` is declared, the task's
+    ``created_at`` must exist and be at or after it (a PROXY for freshness, per
+    the refreshed-benchmark literature; NOT proof, and the disclosure below stands)
 
 Deliberate NON-rules
 --------------------
@@ -120,6 +123,9 @@ class PopulationEntry:
     language: str = ""
     usable: bool = True
     notes: str = ""
+    # S10: task publication timestamp and the contamination-provenance verdict.
+    created_at: str = ""
+    contamination_state: str = ""
     screens: tuple[ScreenResult, ...] = field(default_factory=tuple)
     _proof: object = field(default=None, repr=False, compare=False)
 
@@ -216,6 +222,8 @@ def screen_entry(
     language: str = "",
     usable: bool = True,
     derivation_evidence: Sequence[str] = (),
+    created_at: str = "",
+    model_cutoff: str = "",
 ) -> PopulationEntry:
     """Apply every screening rule and return the entry with its decisions.
 
@@ -340,6 +348,50 @@ def screen_entry(
         ScreenResult("S9_probe_usable", bool(usable), f"usable={usable}")
     )
 
+    # S10: contamination provenance. A declared model cutoff makes the temporal
+    # rule binding and fail-closed; an undeclared cutoff leaves the existing
+    # disclosed-limitation behaviour unchanged.
+    _created = str(created_at or "").strip()
+    _cutoff = str(model_cutoff or "").strip()
+    if not _cutoff:
+        contamination_state = "NOT_DECLARED"
+        screens.append(
+            ScreenResult(
+                "S10_contamination_provenance",
+                True,
+                "no model cutoff declared; contamination provenance remains a "
+                "DISCLOSED limitation (a temporal cutoff is a proxy, not proof)",
+            )
+        )
+    elif not _created:
+        contamination_state = "NO_DATE"
+        screens.append(
+            ScreenResult(
+                "S10_contamination_provenance",
+                False,
+                f"a model cutoff {_cutoff!r} is in force but the task declares no "
+                "created_at, so freshness cannot be established",
+            )
+        )
+    elif _created < _cutoff:
+        contamination_state = "PRE_CUTOFF"
+        screens.append(
+            ScreenResult(
+                "S10_contamination_provenance",
+                False,
+                f"created_at {_created!r} precedes the model cutoff {_cutoff!r}",
+            )
+        )
+    else:
+        contamination_state = "POST_CUTOFF"
+        screens.append(
+            ScreenResult(
+                "S10_contamination_provenance",
+                True,
+                f"created_at {_created!r} is at or after the model cutoff {_cutoff!r}",
+            )
+        )
+
     if endpoint is None:
         # Keep the dataclass total: an inadmissible entry still needs an
         # endpoint object, so carry the declared (possibly empty) set through a
@@ -369,6 +421,8 @@ def screen_entry(
         ),
         language=str(language or ""),
         usable=bool(usable),
+        created_at=_created,
+        contamination_state=contamination_state,
         screens=tuple(screens),
         _proof=_ENTRY_PROOF,
     )
@@ -482,6 +536,7 @@ def screen_pool_rows(
     artifact_root: Any = None,
     authorized_evaluators: Mapping[str, tuple[str, ...]] | None = None,
     expected_gold_state_digests: Mapping[str, str] | None = None,
+    model_cutoff: str = "",
 ) -> PopulationManifest:
     """Screen raw pool rows into a manifest.
 
@@ -489,6 +544,9 @@ def screen_pool_rows(
     is derivable offline: designating a relevant file set is a scientific act (R8)
     and evidence comes from an actual base/gold run (R5). Absence is recorded as a
     FAILING rule, never silently defaulted.
+
+    ``model_cutoff`` (S10) activates the temporal contamination-provenance proxy;
+    when empty, contamination provenance stays a disclosed limitation.
 
     ``evidence_digests`` are compact manifest identities only. Admission requires
     ``evidence_records`` (a mapping ``instance_id -> (base_record, gold_record)``)
@@ -520,6 +578,8 @@ def screen_pool_rows(
                 expected_gold_state_digest=expected_gold_state_digests.get(iid),
                 language=str(row.get("language") or ""),
                 usable=bool(row.get("usable", True)),
+                created_at=str(row.get("created_at") or ""),
+                model_cutoff=model_cutoff,
             )
         )
     return PopulationManifest(entries=tuple(entries))

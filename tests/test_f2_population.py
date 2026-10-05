@@ -147,6 +147,7 @@ class TestHappyPath:
             "S7_source_not_test",
             "S8_evidence_provenance",
             "S9_probe_usable",
+            "S10_contamination_provenance",
         }
 
 
@@ -331,3 +332,46 @@ class TestRealPoolScreening:
         assert entry.fail_to_pass == ("tests/t.py::a",)
         assert entry.pass_to_pass == ("tests/t.py::b",)
         assert entry.admitted is True
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-012 - contamination provenance (S10)
+# ---------------------------------------------------------------------------
+
+
+class TestContaminationProvenance:
+    """S10 is a PROXY (temporal cutoff), not proof; the disclosure at
+    f2_population.py:34-37 continues to state that contamination of the gold patch
+    is unclosable by any engineering control."""
+
+    def test_undeclared_cutoff_preserves_disclosed_limitation(self):
+        e = _entry()
+        assert _rule(e, "S10_contamination_provenance") is True
+        assert e.contamination_state == "NOT_DECLARED"
+
+    def test_declared_cutoff_without_a_date_fails_closed(self):
+        e = _entry(model_cutoff="2025-01-01")
+        assert _rule(e, "S10_contamination_provenance") is False
+        assert e.contamination_state == "NO_DATE"
+
+    def test_pre_cutoff_task_fails_closed(self):
+        e = _entry(created_at="2024-06-01", model_cutoff="2025-01-01")
+        assert _rule(e, "S10_contamination_provenance") is False
+        assert e.contamination_state == "PRE_CUTOFF"
+
+    def test_post_cutoff_task_passes(self):
+        e = _entry(created_at="2025-06-01", model_cutoff="2025-01-01")
+        assert _rule(e, "S10_contamination_provenance") is True
+        assert e.contamination_state == "POST_CUTOFF"
+
+    def test_task_exactly_at_cutoff_passes(self):
+        e = _entry(created_at="2025-01-01", model_cutoff="2025-01-01")
+        assert _rule(e, "S10_contamination_provenance") is True
+        assert e.contamination_state == "POST_CUTOFF"
+
+    def test_pre_cutoff_task_is_not_admitted(self):
+        e = _entry(created_at="2024-06-01", model_cutoff="2025-01-01")
+        assert e.admitted is False
+
+    def test_created_at_is_recorded_on_the_entry(self):
+        e = _entry(created_at="2025-06-01")
+        assert e.created_at == "2025-06-01"

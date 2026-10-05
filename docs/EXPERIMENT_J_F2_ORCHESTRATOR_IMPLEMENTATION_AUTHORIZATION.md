@@ -285,6 +285,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-009 | Step 8 - workspace-mutation classification (engineering assessment) and the operator execution contracts | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file; observation and classification only, adds no exclusion rule; does not modify F0 |
 | F2-IMPL-AUTH-010 | Step 9 - calibration execution layer (runner + authorization gate) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; code only, execution gated on Q10; does not modify F0 |
 | F2-IMPL-AUTH-011 | Step 10 - calibration production adapter (membrane -> runner) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; wiring only, no authority; does not modify F0 |
+| F2-IMPL-AUTH-012 | Step 11 - contamination-provenance screen (S10, temporal-cutoff proxy) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; adds a screen, selects no parameter; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -698,6 +699,32 @@ REFERENCE TRUTH (sequestering). Stored outside every workspace, evaluator-only, 
 **Explicit non-authorization.** This entry does NOT authorize EXECUTING calibration (Q10), nor any change to the endpoint, `alpha`, `power`, `delta`, the statistical test, the population rule, the exclusion rule, the `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; nor F2 execution, real evidence generation, or provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q11 or Q12.
 
 **Implementation status.** Implemented by this entry: the adapter and its 10 tests. Execution remains gated on Q10.
+
+### F2-IMPL-AUTH-012 - Step 11: contamination-provenance screen (S10)
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-05, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue.** `qwen_train/f2_population.py` screens S1-S9 but has NO contamination-provenance screen, and it explicitly discloses at `:34-37` that training-set contamination of the gold patch is *"real and unclosable by any engineering control"* (citing arXiv 2512.10218 and OpenAI's 2026 SWE-bench Verified audit). That disclosure is correct and is preserved. What was missing is the standard PROXY control the refreshed-benchmark literature uses (SWE-bench-Live, SWE-rebench): a temporal cutoff. A task whose issue/PR predates the model's knowledge cutoff is far more likely to have its solution memorised.
+
+**Decision.** Add screen **S10_contamination_provenance**:
+- no `model_cutoff` declared -> state `NOT_DECLARED`, the screen PASSES, and the existing disclosed-limitation behaviour is unchanged (so today's pool is unaffected);
+- `model_cutoff` declared but the task declares no `created_at` -> **FAIL CLOSED** (`NO_DATE`);
+- `created_at` precedes `model_cutoff` -> **FAIL CLOSED** (`PRE_CUTOFF`);
+- `created_at` at or after `model_cutoff` -> `POST_CUTOFF`, PASSES.
+
+`PopulationEntry` gains `created_at` and `contamination_state`; `screen_entry` gains `created_at` and `model_cutoff`; `screen_pool_rows` gains `model_cutoff` and reads `created_at` from each row.
+
+**This is a PROXY, not proof.** It does not establish that a post-cutoff task is uncontaminated, and the disclosure at `:34-37` continues to say so. No cutoff value, no model identity and no statistical parameter is selected by this entry.
+
+**File boundary.** One production file: `qwen_train/f2_population.py` (plus its tests in `tests/test_f2_population.py`). No other file.
+
+**Explicit non-authorization.** This entry does not authorize selecting a model cutoff, a model identity, a task population, or any of delta / alpha / power / sidedness / the statistical test / the pi_d planning value / final n; nor any change to F0, the endpoint, `_reconstruct_endpoint`, the `F2Result` schema, the delivery seam, or any frozen artifact; nor F2 or calibration execution; nor provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
+
+**Implementation status.** Implemented by this entry, with 7 tests (RED->GREEN proven).
 
 ---
 
