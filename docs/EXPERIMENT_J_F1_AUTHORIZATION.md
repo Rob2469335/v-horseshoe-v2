@@ -149,7 +149,7 @@ No-lesson control with ActiveLessons empty/absent.
 
 > The repository/history contained no recoverable Experiment-J pilot horizon or censored-observation estimator. The 12-step horizon and horizon-value treatment of right-censored observations are NEW F1 operational authorizations. They were not inferred from MAX_TURNS, wall-clock timeouts, historical trajectory lengths, or the frozen k-cap.
 
-**F1-OP-004 is now fully authorized.** With F1-OP-001 through F1-OP-004 complete, the no-lesson pilot's operational parameters are all recorded; the pilot itself remains NOT RUN, and F1 (freezing `k`, `n`, and the practical-effect criterion) remains pending until the pilot executes.
+**F1-OP-004 is now fully authorized.** With F1-OP-001 through F1-OP-004 complete, the no-lesson pilot's operational parameters are all recorded. **Correction (2026-10-05): the pilot has RUN** - 20/20 official observations were reconciled in `docs/F1_FINAL_RECONCILIATION.md` (10 VALID endpoint observations, all at ATEP Step 4; 10 infrastructure-invalid contributing the horizon value 12), giving `P95 = 12` and therefore **`k` is frozen at 12** (`k = min(12, max(8, 12))`). The earlier sentence here stating the pilot "remains NOT RUN" was STALE and is superseded by that reconciliation. `n` and the practical-effect criterion were subsequently authorized (see the F2 implementation-authorization log, entry F2-IMPL-AUTH-013).
 
 ---
 

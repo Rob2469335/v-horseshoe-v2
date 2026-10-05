@@ -286,6 +286,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-010 | Step 9 - calibration execution layer (runner + authorization gate) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; code only, execution gated on Q10; does not modify F0 |
 | F2-IMPL-AUTH-011 | Step 10 - calibration production adapter (membrane -> runner) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; wiring only, no authority; does not modify F0 |
 | F2-IMPL-AUTH-012 | Step 11 - contamination-provenance screen (S10, temporal-cutoff proxy) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; adds a screen, selects no parameter; does not modify F0 |
+| F2-IMPL-AUTH-013 | Statistical design authorization: F1 freeze, exact McNemar, pi_d=0.50, n=300 | AUTHORIZED | 2026-10-05 | Operator-authorized scientific parameters per this mission; documentation only; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -725,6 +726,55 @@ REFERENCE TRUTH (sequestering). Stored outside every workspace, evaluator-only, 
 **Explicit non-authorization.** This entry does not authorize selecting a model cutoff, a model identity, a task population, or any of delta / alpha / power / sidedness / the statistical test / the pi_d planning value / final n; nor any change to F0, the endpoint, `_reconstruct_endpoint`, the `F2Result` schema, the delivery seam, or any frozen artifact; nor F2 or calibration execution; nor provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
 
 **Implementation status.** Implemented by this entry, with 7 tests (RED->GREEN proven).
+
+### F2-IMPL-AUTH-013 - Statistical design authorization (operator-granted)
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-05, which granted the scientific parameters below. This entry RECORDS operator-authorized decisions; the release agent selected none of them.
+
+**F1 freeze.** F1 is FROZEN. `docs/F1_FINAL_RECONCILIATION.md` is the authoritative record: 20/20 official observations, 10 VALID endpoint observations (all at ATIF Step 4), 10 infrastructure-invalid (contributing the horizon value 12). `P95 = 12`; **`k = 12`** frozen (`k = min(12, max(8, 12))`). No F1 rerun. The stale "pilot NOT RUN" sentence at `EXPERIMENT_J_F1_AUTHORIZATION.md:152` is corrected.
+
+**Primary comparison.** T vs X, paired by task x rollout seed; C0 remains an independent reference arm and is never substituted for X. Endpoint = the first ATIF decision step with `function=filesystem`, `operation in {write, patch, edit, create}`, target path in the frozen `relevant_file_set`. The endpoint is an ATTEMPTED qualifying edit; it does not require tool acceptance, mutation, or test passage.
+
+**Authorized statistical parameters.**
+
+| Parameter | Authorized value |
+|---|---|
+| Primary test | exact two-sided McNemar |
+| alpha | 0.05 |
+| target power | 0.90 |
+| practical effect | delta = 0.20 (absolute paired marginal difference) |
+| sidedness | two-sided |
+| CI | 95% for the paired marginal difference, discordant cells reported |
+| multiplicity | none (single preregistered primary endpoint) |
+| pi_d planning value | 0.50 (a conservative planning nuisance value, NOT an empirical estimate) |
+| n | 300 analyzable paired task x seed units |
+
+**Why pi_d is a planning value, not an estimate.** `pi_d = P(T xor X) = p10 + p01` requires BOTH arms. The no-lesson pilot has no T arm, so it cannot identify `pi_d`; deriving it from marginal `p_T`/`p_X` assumes independence and is rejected.
+
+**Exact sample-size calculation (authorized rule: n = max(300, smallest n with power >= 0.90)).** Using the repository's own `qwen_train.f2_statistics.required_pairs` (exact conditional McNemar with the doubling two-sided correction): `required_pairs(delta=0.20, discordance=0.50, alpha=0.05, power=0.90, sided="two-sided") = **116**`. Therefore **n = max(300, 116) = 300**.
+
+**Sensitivity table (planning transparency only; the frozen planning value is NOT changed by it).** At delta=0.20, alpha=0.05, power=0.90, two-sided:
+
+| pi_d | required n | n = max(300, required) |
+|---|---|---|
+| 0.10 | not attainable (delta > pi_d) | - |
+| 0.20 | 28 | 300 |
+| 0.30 | 66 | 300 |
+| 0.50 | 116 | 300 |
+| 0.75 | 191 | 300 |
+| 1.00 | 261 | 300 |
+
+**Consequence: n = 300 exceeds the requirement at every point of the authorized sensitivity range** (the worst case, pi_d = 1.00, needs 261).
+
+**File boundary.** Documentation only: `docs/EXPERIMENT_J_F1_AUTHORIZATION.md` (the one factual correction) and this document. No code and no test is changed by this entry.
+
+**Explicit non-authorization.** This entry does not authorize modifying F0, changing `k`, changing the endpoint, changing T/X/C0 definitions, rerunning F1, acquiring the task population, recovering gold patches, provisioning any credential, establishing host security, or executing confirmatory F2. Those remain BLOCKED or REQUIRES EXTERNAL PROVISIONING as recorded elsewhere.
+
+**Implementation status.** Recorded. It implements no code.
 
 ---
 
