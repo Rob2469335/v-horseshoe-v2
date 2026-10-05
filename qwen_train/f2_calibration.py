@@ -325,6 +325,10 @@ class CalibrationAuthorization:
     replicates: int
     horizon_steps: int
     censoring_convention: str
+    #: The frozen endpoint specification the authorized run must use. Q4 freezes
+    #: the endpoint, so pinning its hash here makes "calibration measured by the
+    #: same detector as confirmatory data" an authorized fact, not a hope.
+    endpoint_hash: str = ""
     arm: str = "X"
 
     def __post_init__(self) -> None:
@@ -343,6 +347,11 @@ class CalibrationAuthorization:
         if not str(self.censoring_convention or "").strip():
             raise CalibrationAuthorizationError(
                 "a censoring convention must be authorized, not assumed"
+            )
+        if not str(self.endpoint_hash or "").strip():
+            raise CalibrationAuthorizationError(
+                "an endpoint specification hash must be authorized: calibration must "
+                "be measured by the same frozen detector as the confirmatory data"
             )
         if self.arm not in CALIBRATION_ARMS:
             raise CalibrationAuthorizationError(
@@ -381,6 +390,7 @@ class CalibrationPlan:
     replicates: int
     horizon_steps: int
     endpoint_hash: str
+    censoring_convention: str = ""
     arm: str = "X"
 
 
@@ -416,6 +426,25 @@ def _check_authorization(
     if not str(plan.endpoint_hash or "").strip():
         raise CalibrationAuthorizationError(
             "plan must carry the endpoint specification hash"
+        )
+    if plan.endpoint_hash != authorization.endpoint_hash:
+        raise CalibrationAuthorizationError(
+            f"plan endpoint hash {plan.endpoint_hash!r} != authorized "
+            f"{authorization.endpoint_hash!r}; calibration must use the frozen "
+            "endpoint the authorization pinned"
+        )
+    # Q10 names the censoring convention explicitly, so a plan without one cannot
+    # be checked against the authorization at all, and a different one is a
+    # different measurement.
+    if not str(plan.censoring_convention or "").strip():
+        raise CalibrationAuthorizationError(
+            "plan must carry the authorized censoring convention; a plan without "
+            "one cannot be verified against the authorization"
+        )
+    if plan.censoring_convention != authorization.censoring_convention:
+        raise CalibrationAuthorizationError(
+            f"plan censoring convention {plan.censoring_convention!r} != authorized "
+            f"{authorization.censoring_convention!r}"
         )
 
 

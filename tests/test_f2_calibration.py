@@ -221,6 +221,7 @@ def _auth(**kw):
         replicates=1,
         horizon_steps=12,
         censoring_convention="endpoint_not_reached_within_horizon",
+        endpoint_hash="e" * 64,
         arm="X",
     )
     base.update(kw)
@@ -233,6 +234,7 @@ def _plan(**kw):
         replicates=1,
         horizon_steps=12,
         endpoint_hash="e" * 64,
+        censoring_convention="endpoint_not_reached_within_horizon",
         arm="X",
     )
     base.update(kw)
@@ -291,6 +293,62 @@ class TestCalibrationRunnerAuthorizationGate:
 
     def test_run_count_is_task_times_replicates(self):
         assert _auth(task_ids=("a", "b", "c"), replicates=4).run_count == 12
+
+    # -- censoring convention: the field Q10 names explicitly ---------------
+
+    def test_missing_plan_censoring_convention_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError) as e:
+            run_calibration(
+                _plan(censoring_convention=""),
+                authorization=_auth(),
+                runner=_fake(),
+            )
+        assert "censoring convention" in str(e.value)
+
+    def test_mismatched_censoring_convention_fails_closed(self):
+        with pytest.raises(CalibrationAuthorizationError) as e:
+            run_calibration(
+                _plan(censoring_convention="right_censored_at_step_12"),
+                authorization=_auth(
+                    censoring_convention="endpoint_not_reached_within_horizon"
+                ),
+                runner=_fake(),
+            )
+        assert "censoring convention" in str(e.value)
+
+    def test_matching_censoring_convention_executes(self):
+        recs, summary = run_calibration(
+            _plan(censoring_convention="right_censored_at_step_12"),
+            authorization=_auth(censoring_convention="right_censored_at_step_12"),
+            runner=_fake(),
+        )
+        assert len(recs) == 2
+        assert summary.n_valid == 2
+
+    def test_missing_authorized_censoring_convention_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError):
+            _auth(censoring_convention="")
+
+    # -- endpoint specification must be MATCHED, not merely non-empty -------
+
+    def test_endpoint_hash_mismatch_fails_closed(self):
+        with pytest.raises(CalibrationAuthorizationError) as e:
+            run_calibration(
+                _plan(endpoint_hash="f" * 64),
+                authorization=_auth(endpoint_hash="e" * 64),
+                runner=_fake(),
+            )
+        assert "endpoint hash" in str(e.value)
+
+    def test_missing_authorized_endpoint_hash_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError):
+            _auth(endpoint_hash="")
+
+    def test_empty_plan_endpoint_hash_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError):
+            run_calibration(
+                _plan(endpoint_hash=""), authorization=_auth(), runner=_fake()
+            )
 
 
 class TestCalibrationRunnerRecords:
