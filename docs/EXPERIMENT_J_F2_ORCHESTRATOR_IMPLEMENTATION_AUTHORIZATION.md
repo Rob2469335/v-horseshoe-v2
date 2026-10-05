@@ -279,6 +279,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-CLARIFICATION-003 | Rediscovery reads the UN-FLOORED delivery instant; the endpoint window keeps the floored second | CLARIFICATION | 2026-10-04 | Dated F2 authorial interpretation per 13; resolves which delivery reading F0 6 uses; does not modify F0 |
 | F2-IMPL-AUTH-004 | Step 3 - F0 6 rediscovery integration, test-isolation fix and op_infra_004 workspace fixture | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names four files explicitly; does not modify F0 |
 | F2-IMPL-AUTH-005 | Step 4 - persist the distiller provenance block and keep F2 arms out of the learning pipeline | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names two files explicitly; does not modify F0 |
+| F2-IMPL-AUTH-006 | Step 5 - record post-run workspace-mutation integrity evidence | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -541,6 +542,24 @@ authorization. Implementation remains a separate, subsequent step.
 **File boundary.** Exactly four files, named here and by no others. Production (items 1-2): `swarm_os/services/lesson_synthesis.py` (item 1); `runtime_v2/services/stream_runner.py` (item 2). Tests (item 3): `tests/test_distiller_reproducibility.py` (the populated round-trip regression test, added to the existing `TestAttestationCarriesTheRecord` class); `tests/test_f2_delivery_seam.py` (the replay-suppression test and its non-F2 control, added to the existing module that already owns the replay monkeypatch infrastructure).
 
 **Explicit non-authorization.** This entry does not authorize any other change to `swarm_os/services/*` or `runtime_v2/services/stream_runner.py`, and it does not reopen OP_INFRA_004:130/:133 except to the exact extent of items 1 and 2. It does not authorize: rediscovery persistence, ambiguity recording, the `F2Result` schema, `_reconstruct_endpoint`, `f2_rediscovery.py`, `qwen_train/arm_workspace.py`, `qwen_train/f2_arm_orchestrator.py`, frozen F0/F1, `organism_console/*`, `.github/*`, F2 execution, real F2 evidence generation, or provisioning `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
+
+**Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
+
+### F2-IMPL-AUTH-006 - Step 5: post-run workspace-mutation integrity evidence
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue.** The F2 endpoint is measured from the ordered behavioral TRAJECTORY, and the task outcome from the evaluator run over the retained workspace. Nothing therefore observes WHICH repository paths an arm actually touched. `qwen_train/arm_workspace.verify_patch_state` is called only BEFORE the arm runs (`arm_workspace.py:253`, `:490`); there is no post-run observation. An arm that edited the evaluator's own test files, or any path outside the authorized surface, would leave no persisted trace, and a reviewer would have to trust the agent's self-report. This is an evaluation-integrity observation gap, not a scoring bug.
+
+**Decision.** `qwen_train/f2_arm_worker.py` (already inside the Section 10 file boundary) gains a post-run `_capture_workspace_mutation(workspace_root)` helper that records the observed dirty-path set via the existing `arm_workspace` helpers, and the arm receipt carries it as `workspace_mutation_evidence`. This is OBSERVATION ONLY: it adds no exclusion rule, changes no endpoint, changes no outcome, and fails soft (an uninspectable workspace is recorded as `captured: false` with the error, never as clean).
+
+**File boundary.** Exactly one file: `qwen_train/f2_arm_worker.py` (plus its regression tests in `tests/test_f2_op_infra_004.py`, which already owns the worker tests and is named in F2-IMPL-AUTH-004).
+
+**Explicit non-authorization.** This entry does not authorize any other change to `qwen_train/f2_arm_worker.py` or to `qwen_train/arm_workspace.py`; no new exclusion or invalidation rule; no change to the endpoint, the outcome, the `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; no F2 execution; no real F2 evidence generation; and no provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
 
 **Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
 

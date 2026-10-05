@@ -471,3 +471,72 @@ class TestProductionWiring:
         body = src[i: src.find("def run_worker")]
         assert "manifest_content_address" in body
         assert 'not in (None, artifact.arm)' not in body
+
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-006 - post-run workspace-mutation integrity evidence
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceMutationEvidence:
+    """The worker records which repository paths the arm touched.
+
+    Integrity evidence, not a gate: the endpoint is measured from the trajectory
+    and the outcome from the evaluator, so an arm editing the evaluator's own
+    test files would otherwise go unnoticed. This makes that detectable from
+    persisted evidence rather than the agent's self-report.
+    """
+
+    @staticmethod
+    def _make_task(tmp_path):
+        import subprocess as _sp
+
+        inst = tmp_path / "instance"
+        repo = inst / "repo"
+        repo.mkdir(parents=True)
+
+        def _g(*a):
+            r = _sp.run(["git", *a], cwd=str(repo), capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr
+            return r.stdout.strip()
+
+        _g("init", "-q")
+        _g("config", "user.email", "t@example.invalid")
+        _g("config", "user.name", "t")
+        (repo / "target.txt").write_text("orig\n", encoding="utf-8")
+        (repo / "suite_test.py").write_text("assert True\n", encoding="utf-8")
+        _g("add", "-A")
+        _g("commit", "-q", "-m", "base")
+        (inst / "test_patch.diff").write_text(
+            "diff --git a/target.txt b/target.txt\n"
+            "--- a/target.txt\n"
+            "+++ b/target.txt\n"
+            "@@ -1 +1 @@\n"
+            "-orig\n"
+            "+patched\n",
+            encoding="utf-8",
+        )
+        return inst, repo
+
+    def test_captures_paths_the_arm_touched(self, tmp_path):
+        inst, repo = self._make_task(tmp_path)
+        (repo / "target.txt").write_text("fixed\n", encoding="utf-8")
+        (repo / "suite_test.py").write_text("assert True  # tampered\n", encoding="utf-8")
+
+        ev = WORKER._capture_workspace_mutation(inst)
+        assert ev["captured"] is True
+        assert "target.txt" in ev["touched_paths"]
+        assert "suite_test.py" in ev["touched_paths"], (
+            "a tampered evaluator test file must be visible in the evidence"
+        )
+        assert ev["touched_count"] == len(ev["touched_paths"])
+
+    def test_fails_soft_with_explicit_un_captured_marker(self, tmp_path):
+        ev = WORKER._capture_workspace_mutation(tmp_path / "does-not-exist")
+        assert ev["captured"] is False
+        assert "error_type" in ev
+
+    def test_receipt_carries_the_evidence_field(self):
+        src = (REPO_ROOT / "qwen_train" / "f2_arm_worker.py").read_text("utf-8")
+        assert "workspace_mutation_evidence" in src
+        assert "_capture_workspace_mutation(workspace_root)" in src

@@ -115,6 +115,40 @@ def _resolve_traj_dir(workspace_root: Path) -> Path:
     return Path(workspace_root) / "data" / "trajectories"
 
 
+def _capture_workspace_mutation(workspace_root: "Path | str") -> dict[str, Any]:
+    """Post-run: record the repository paths the arm actually touched.
+
+    Integrity evidence, not a gate. The F2 endpoint is measured from the
+    TRAJECTORY (ordered behavioral records), and the task outcome comes from the
+    evaluator run over the retained workspace, so nothing else notices a write
+    outside the authorized surface - for example an arm editing the evaluator's
+    own test files to manufacture a pass. Recording the observed dirty-path set
+    lets an independent reviewer detect that from persisted evidence instead of
+    trusting the agent's self-report.
+
+    Fail-soft by design: this is an OBSERVATION. If the workspace cannot be
+    inspected the receipt says so explicitly (``captured: False``) rather than
+    implying the workspace was clean.
+    """
+    from qwen_train.arm_workspace import _observed_dirty_paths, resolve_task_repo
+
+    try:
+        repo = resolve_task_repo(workspace_root)
+        touched = sorted(_observed_dirty_paths(repo))
+    except Exception as exc:  # noqa: BLE001 - evidence capture never fails the arm
+        return {
+            "captured": False,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:300],
+        }
+    return {
+        "captured": True,
+        "repository": str(repo),
+        "touched_paths": touched,
+        "touched_count": len(touched),
+    }
+
+
 def _read_p2_delivery_evidence(
     workspace_root: Path, rollout_id: str | None = None
 ) -> dict[str, Any] | None:
@@ -450,6 +484,10 @@ def run_worker(argv: list[str] | None = None) -> int:
             p2_serving_start_time = ""
             evidence_source = "p1_computed_delegated"
 
+        # Post-run workspace-mutation evidence. Observation only: recorded on the
+        # receipt so an independent reviewer can see every path the arm touched.
+        workspace_mutation = _capture_workspace_mutation(workspace_root)
+
         receipt: dict[str, Any] = {
             "experiment_id": artifact.experiment_id,
             "protocol_version": artifact.protocol_version,
@@ -500,6 +538,8 @@ def run_worker(argv: list[str] | None = None) -> int:
             "exit_status": 0,
             "outcome_evidence": execution_result,
             "delivered_artifact": delivered_actual,
+            # Integrity evidence: which repository paths this arm touched.
+            "workspace_mutation_evidence": workspace_mutation,
         }
         print(_arm_report(receipt))
         return 0
