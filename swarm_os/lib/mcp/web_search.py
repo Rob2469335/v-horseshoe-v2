@@ -30,12 +30,76 @@ logger = logging.getLogger(__name__)
 # SSRF guard: hosts that web_fetch must never read — the swarm's own loopback
 # services (Qdrant 6333, llama.cpp 8080-8084, backend), private/link-local
 # networks, and cloud-metadata endpoints.
-def _ssrf_check(url: str) -> str | None:
-    """Return a human-readable reason if url is an SSRF target, else None."""
+def _is_blocked_ip(ip) -> bool:
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    return bool(
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def _numeric_ipv4(host: str):
+    """Resolve the alternate IPv4 literal forms a browser honours but a naive
+    check misses: decimal (2130706433), hex (0x7f000001), octal, and short
+    (127.1 / 0). Returns an IPv4Address, or None if not a numeric literal."""
+    h = (host or "").strip().lower()
+    if h in ("localhost",):
+        return ipaddress.ip_address("127.0.0.1")
     try:
-        host = urlparse(url).hostname or ""
-        host = host.strip("[]")
-        # Cloud metadata / reserved link-local
+        return ipaddress.ip_address(h)
+    except ValueError:
+        pass
+    if not h or any(c not in "0123456789abcdefx." for c in h):
+        return None
+    parts = h.split(".")
+    if not parts or any(p == "" for p in parts) or len(parts) > 4:
+        return None
+    vals = []
+    for p in parts:
+        try:
+            if p.startswith("0x"):
+                vals.append(int(p, 16))
+            elif len(p) > 1 and p.startswith("0"):
+                vals.append(int(p, 8))
+            else:
+                vals.append(int(p, 10))
+        except ValueError:
+            return None
+    if any(v < 0 for v in vals):
+        return None
+    if len(vals) == 1:
+        n = vals[0]
+    else:
+        if any(v > 255 for v in vals[:-1]):
+            return None
+        n = 0
+        for i, v in enumerate(vals):
+            n |= v << (8 * (3 - i))
+    if n < 0 or n > 0xFFFFFFFF:
+        return None
+    return ipaddress.IPv4Address(n)
+
+
+def _ssrf_check(url: str) -> str | None:
+    """Return a human-readable reason if url is an SSRF target, else None.
+
+    FAIL CLOSED: an unparseable URL, unsupported scheme, or resolution failure
+    is a reason to BLOCK, not to allow. Alternate IPv4 literal forms (decimal,
+    hex, octal, short) are normalized before the private/loopback test.
+    """
+    try:
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "").lower()
+        if scheme not in ("http", "https"):
+            return f"scheme '{scheme or '<none>'}' is not allowed (http/https only)"
+        host = (parsed.hostname or "").strip().strip("[]")
+        if not host:
+            return "empty host is not allowed"
         if host in (
             "169.254.169.254",
             "metadata.google.internal",
@@ -44,39 +108,30 @@ def _ssrf_check(url: str) -> str | None:
         ):
             return f"cloud-metadata host '{host}' is not allowed"
 
-        def is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-            if getattr(ip, "ipv4_mapped", None):
-                ip = ip.ipv4_mapped
-            return bool(
-                ip.is_loopback
-                or ip.is_private
-                or ip.is_link_local
-                or ip.is_reserved
-                or ip.is_multicast
-            )
-
-        try:
-            ip = ipaddress.ip_address(host)
-            if is_blocked_ip(ip):
+        ip = _numeric_ipv4(host)
+        if ip is not None:
+            if _is_blocked_ip(ip):
                 return f"private/loopback/link-local address '{host}' is not allowed"
-        except ValueError:
-            pass  # hostname — resolve below
+            return None
+
         import socket
 
         try:
             resolved = socket.getaddrinfo(host, None)
         except socket.gaierror:
-            return None  # unresolvable host — let the fetch fail naturally
-        for family, _, _, _, sockaddr in resolved:
+            # Unresolvable: not reachable, so not an SSRF path. (URL/scheme
+            # parse failures above still fail closed.)
+            return None
+        for _family, _t, _p, _c, sockaddr in resolved:
             try:
                 ip = ipaddress.ip_address(sockaddr[0])
             except ValueError:
                 continue
-            if is_blocked_ip(ip):
+            if _is_blocked_ip(ip):
                 return f"host '{host}' resolves to non-public address {sockaddr[0]}"
-    except Exception:
-        pass
-    return None
+        return None
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return f"URL could not be validated: {type(exc).__name__}"
 
 
 def _strip_memory_blocks(query: str) -> str:

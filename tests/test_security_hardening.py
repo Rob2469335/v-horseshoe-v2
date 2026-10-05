@@ -482,6 +482,30 @@ def test_ssrf_allows_public():
     assert _ssrf_check("https://example.com/docs") is None
 
 
+def test_ssrf_blocks_alternate_ip_literals():
+    """HC-5: decimal/hex/octal/short IPv4 forms a browser honours must be
+    normalized and blocked, not treated as an unknown hostname."""
+    from swarm_os.lib.mcp.web_search import _ssrf_check
+
+    for url in (
+        "http://2130706433/",          # decimal 127.0.0.1
+        "http://0x7f000001/",          # hex 127.0.0.1
+        "http://017700000001/",        # octal 127.0.0.1
+        "http://127.1/",               # short 127.0.0.1
+        "http://0/",                   # 0.0.0.0
+        "http://[::ffff:127.0.0.1]/",  # IPv4-mapped IPv6
+    ):
+        assert _ssrf_check(url) is not None, url
+
+
+def test_ssrf_rejects_non_http_schemes():
+    """HC-5: only http/https are fetchable; file/data/ftp fail closed."""
+    from swarm_os.lib.mcp.web_search import _ssrf_check
+
+    for url in ("file:///etc/passwd", "data:text/html,x", "ftp://example.com"):
+        assert _ssrf_check(url) is not None, url
+
+
 # ── developer: cooldown keys are per-model ──────────────────────────────────
 def test_cooldown_keys_are_per_model(monkeypatch):
     from runtime_v2.services import fallback_manager as fm
