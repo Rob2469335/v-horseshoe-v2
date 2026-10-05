@@ -32,11 +32,21 @@ from dataclasses import dataclass, field
 from math import comb
 from typing import Any, Iterable, Mapping
 
+# The authorized, pre-declared infrastructure-failure taxonomy lives with the
+# calibration layer that introduced it. Importing it here (rather than
+# re-declaring it) guarantees the Q6 gate and the rerun policy can never drift
+# into disagreeing about what counts as an infrastructure fault.
+from qwen_train.f2_calibration import INFRASTRUCTURE_RERUN_CAUSES
+
 __all__ = [
     "F2_ALPHA",
     "F2_CONFIDENCE",
+    "F2_INFRA_MAX_FRACTION",
     "PairedObservation",
     "F2ConfirmatoryResult",
+    "InfrastructureGate",
+    "classify_missing_reason",
+    "evaluate_infrastructure_gate",
     "finalize_f2",
     "independent_reconstruction",
 ]
@@ -44,6 +54,142 @@ __all__ = [
 #: Frozen F2 design constants (AUTH-013). Not parameters of this module.
 F2_ALPHA = 0.05
 F2_CONFIDENCE = 0.95
+
+#: Q6 (F2-IMPL-AUTH-018): the authorized ceiling on the fraction of the frozen
+#: population lost to PRE-DECLARED infrastructure failure. Exceeding it is a
+#: STOP-AND-DIAGNOSE condition, not a scientific result. The ledger already
+#: recorded missingness; what was missing was the gate itself.
+F2_INFRA_MAX_FRACTION = 0.30
+
+#: Marker prefix the authorized calibration/admission layers use when they record
+#: an infrastructure cause (``invalid_reason=f"infrastructure:{cause}"``).
+_INFRA_PREFIX = "infrastructure:"
+
+#: Reasons that are missingness but NOT infrastructure failure. These are
+#: scientific/administrative exclusions (pre-declared Q5 reasons) and are
+#: reported separately so an infrastructure outage can never be laundered into a
+#: scientific exclusion, or vice versa.
+_SCIENTIFIC_MISSING_REASONS = frozenset(
+    {
+        "missing_required_provenance",
+        "failed_base_gold_verification",
+        "contamination_classification",
+        "malformed_task",
+        "reproducibility_failure",
+        "missing_required_artifact",
+        "endpoint_unmeasurable",
+        "censored",
+        "unspecified",
+        "",
+    }
+)
+
+
+def classify_missing_reason(reason: str) -> str:
+    """Classify a ledger ``missing_reason`` as infrastructure / scientific / unknown.
+
+    The classification is a closed, pre-declared taxonomy. An unrecognised
+    non-empty reason is ``"unknown"`` rather than being optimistically filed as
+    scientific: an unknown reason must never be used to shrink the measured
+    infrastructure-failure rate.
+    """
+    text = str(reason or "").strip()
+    if not text:
+        return "scientific"
+    if text.startswith(_INFRA_PREFIX):
+        cause = text[len(_INFRA_PREFIX):]
+        if cause in INFRASTRUCTURE_RERUN_CAUSES:
+            return "infrastructure"
+        return "unknown"
+    if text in _SCIENTIFIC_MISSING_REASONS:
+        return "scientific"
+    return "unknown"
+
+
+@dataclass(frozen=True)
+class InfrastructureGate:
+    """Outcome of the Q6 infrastructure-failure gate.
+
+    ``satisfied`` is ``True`` only when the measured infrastructure-failure
+    fraction is at or below :data:`F2_INFRA_MAX_FRACTION`. It never alters the
+    frozen statistics: it is an additional, separately reported verdict.
+    """
+
+    n_total: int
+    n_missing: int
+    n_infrastructure: int
+    n_scientific_missing: int
+    n_unknown_missing: int
+    infrastructure_fraction: float
+    max_fraction: float
+    satisfied: bool
+    detail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "n_total": self.n_total,
+            "n_missing": self.n_missing,
+            "n_infrastructure": self.n_infrastructure,
+            "n_scientific_missing": self.n_scientific_missing,
+            "n_unknown_missing": self.n_unknown_missing,
+            "infrastructure_fraction": self.infrastructure_fraction,
+            "max_fraction": self.max_fraction,
+            "satisfied": self.satisfied,
+            "detail": self.detail,
+        }
+
+
+def evaluate_infrastructure_gate(
+    n_total: int,
+    missing_by_reason: Mapping[str, int],
+    *,
+    max_fraction: float = F2_INFRA_MAX_FRACTION,
+) -> InfrastructureGate:
+    """Apply the Q6 stop-and-diagnose gate to a recorded missingness ledger.
+
+    The denominator is the whole frozen observation window (``n_total``), not the
+    complete-pair count, so a large infrastructure outage cannot hide by also
+    shrinking N. ``unknown`` reasons are surfaced separately and never counted as
+    scientific exclusions.
+    """
+    total = max(0, int(n_total))
+    n_infra = n_sci = n_unknown = 0
+    for reason, count in (missing_by_reason or {}).items():
+        n = max(0, int(count))
+        if n == 0:
+            continue
+        kind = classify_missing_reason(reason)
+        if kind == "infrastructure":
+            n_infra += n
+        elif kind == "scientific":
+            n_sci += n
+        else:
+            n_unknown += n
+
+    n_missing = n_infra + n_sci + n_unknown
+    fraction = (n_infra / total) if total else 0.0
+    satisfied = fraction <= max_fraction
+    if satisfied:
+        detail = (
+            f"infrastructure failures {n_infra}/{total} = {fraction:.4f} "
+            f"<= {max_fraction:.2f} threshold"
+        )
+    else:
+        detail = (
+            f"STOP-AND-DIAGNOSE: infrastructure failures {n_infra}/{total} = "
+            f"{fraction:.4f} EXCEEDS the {max_fraction:.2f} Q6 threshold"
+        )
+    return InfrastructureGate(
+        n_total=total,
+        n_missing=n_missing,
+        n_infrastructure=n_infra,
+        n_scientific_missing=n_sci,
+        n_unknown_missing=n_unknown,
+        infrastructure_fraction=fraction,
+        max_fraction=max_fraction,
+        satisfied=satisfied,
+        detail=detail,
+    )
 
 
 @dataclass(frozen=True)
@@ -114,6 +260,12 @@ class F2ConfirmatoryResult:
     confidence: float = F2_CONFIDENCE
     sid: str = "two-sided"
     missing_by_reason: dict[str, int] = field(default_factory=dict)
+    infrastructure_gate: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def infrastructure_gate_satisfied(self) -> bool:
+        """Q6 verdict. ``False`` means STOP-AND-DIAGNOSE, not a valid run."""
+        return bool(self.infrastructure_gate.get("satisfied", False))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -137,6 +289,7 @@ class F2ConfirmatoryResult:
             "confidence": self.confidence,
             "sided": self.sid,
             "missing_by_reason": dict(self.missing_by_reason),
+            "infrastructure_gate": dict(self.infrastructure_gate),
         }
 
 
@@ -174,9 +327,12 @@ def finalize_f2(
         key = o.missing_reason or "unspecified"
         missing_by_reason[key] = missing_by_reason.get(key, 0) + 1
 
+    n_total = len(complete) + len(missing)
+    gate = evaluate_infrastructure_gate(n_total, missing_by_reason)
+
     return F2ConfirmatoryResult(
         observation_window=dict(observation_window or {}),
-        n_total=len(complete) + len(missing),
+        n_total=n_total,
         n_complete=len(complete),
         n_missing=len(missing),
         n00=res.n_concordant_x,
@@ -195,6 +351,7 @@ def finalize_f2(
         confidence=confidence,
         sid=res.sided,
         missing_by_reason=missing_by_reason,
+        infrastructure_gate=gate.to_dict(),
     )
 
 
@@ -296,6 +453,12 @@ def independent_reconstruction(
     else:
         direction = "null"
 
+    missing_by_reason: dict[str, int] = {}
+    for o in missing:
+        key = o.missing_reason or "unspecified"
+        missing_by_reason[key] = missing_by_reason.get(key, 0) + 1
+    gate = evaluate_infrastructure_gate(n_total, missing_by_reason)
+
     return {
         "N": n,
         "n_total": n_total,
@@ -314,4 +477,6 @@ def independent_reconstruction(
         "direction": direction,
         "alpha": alpha,
         "confidence": confidence,
+        "missing_by_reason": missing_by_reason,
+        "infrastructure_gate": gate.to_dict(),
     }

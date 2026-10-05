@@ -631,6 +631,34 @@ def _derive_json_test_report_v1(
 register_result_protocol("json_test_report_v1", _derive_json_test_report_v1)
 
 
+def _register_authoritative_evaluator_protocol() -> None:
+    """Register the AUTHORITATIVE F2 result protocol.
+
+    ``json_test_report_v1`` above is a REFERENCE deriver kept for the existing
+    governance tests. The protocol registered here is the one the F2 execution
+    path actually uses: ``qwen_train.f2_evaluator`` is a real producer that
+    turns retained pytest/JUnit evidence plus the declared FAIL_TO_PASS /
+    PASS_TO_PASS contract into a deterministic report, and this deriver re-derives
+    the verdict from that retained report instead of trusting any producer
+    declaration.
+
+    Registration is lazy and failure-tolerant only in the sense that an import
+    error must not leave a half-registered protocol behind: a missing evaluator
+    means the protocol is absent, and an absent protocol already fails closed in
+    ``derive_result``.
+    """
+    try:
+        from qwen_train import f2_evaluator
+    except Exception:  # pragma: no cover - evaluator is a hard dependency
+        return
+    register_result_protocol(
+        f2_evaluator.RESULT_PROTOCOL_ID, f2_evaluator.derive_result_protocol
+    )
+
+
+_register_authoritative_evaluator_protocol()
+
+
 def derive_result(
     bundle: ExecutionBundle, store: TrustedArtifactStore
 ) -> tuple[str | None, str]:

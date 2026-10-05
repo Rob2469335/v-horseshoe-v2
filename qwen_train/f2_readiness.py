@@ -149,18 +149,31 @@ def _check_weights_digest(env: Mapping[str, str]):
 def _check_evaluator_identity(env: Mapping[str, str]):
     eid = _env(env, "SWARM_F2_EVALUATOR_ID")
     ver = _env(env, "SWARM_F2_EVALUATOR_VERSION")
-    if eid and ver:
-        return True, f"evaluator id/version set ({eid} / {ver})", ""
+    proc = _env(env, "SWARM_F2_EVALUATOR_PROCEDURE")
+    # The authorized evaluator identity is FIVE fields (f2_governance
+    # .EvaluatorAuthorization): id, version, implementation_digest, procedure_id
+    # and protocol_version. `protocol_version` is the repository constant
+    # F2_PROTOCOL_ID, so three of the five are operator-supplied. Requiring only
+    # two of them let READY=True coexist with a bundle path that fails closed at
+    # f2_arm_worker._load_bundle_governance, because that loader demands
+    # SWARM_F2_EVALUATOR_PROCEDURE. This check now covers every operator-supplied
+    # identity field rather than expanding the authorized 18-item contract.
+    if eid and ver and proc:
+        return True, (
+            f"evaluator id/version/procedure set ({eid} / {ver} / {proc})"
+        ), ""
     missing = [
         k
         for k, val in (
             ("SWARM_F2_EVALUATOR_ID", eid),
             ("SWARM_F2_EVALUATOR_VERSION", ver),
+            ("SWARM_F2_EVALUATOR_PROCEDURE", proc),
         )
         if not val
     ]
     return False, "missing " + ", ".join(missing), (
-        "Authorize and set the evaluator id and version"
+        "Authorize and set the evaluator id, version and procedure id "
+        "(protocol_version is the repository constant F2_PROTOCOL_ID)"
     )
 
 
@@ -177,6 +190,49 @@ def _check_evaluator_impl(env: Mapping[str, str]):
         )
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     return True, f"implementation digest computed from bytes ({digest[:12]}...)", ""
+
+
+def _check_delivery_instrumentation(env: Mapping[str, str]):
+    """Delivery capability must EXIST **and** be enabled.
+
+    Capability presence alone was insufficient. ``f2_arm_worker`` gates governed
+    bundle emission on ``SWARM_F2_EMIT_BUNDLE`` and refuses to start without
+    ``SWARM_F2_TASK_OUTCOME_REPORT``; with either unset the arm runs, produces
+    no evidence chain, and the run cannot be regraded. A readiness gate that
+    reported READY=True in that state was reporting on a capability the execution
+    path would never use.
+
+    The outcome report is required to be *configured*, not to exist: it is a
+    per-arm product of the run, so demanding the file at readiness time would be
+    a category error. The authoritative evaluator
+    (``qwen_train.f2_evaluator.produce_report``) is what writes it during the run.
+    """
+    ok, detail, remedy = _check_code_presence(
+        "qwen_train.f2_arm_worker", "emit_worker_bundle", "delivery/bundle"
+    )
+    if not ok:
+        return False, detail, remedy
+
+    emit = _env(env, "SWARM_F2_EMIT_BUNDLE")
+    if emit.strip().lower() not in ("1", "true", "yes", "on"):
+        return False, "SWARM_F2_EMIT_BUNDLE is not enabled", (
+            "Set SWARM_F2_EMIT_BUNDLE=1 so governed bundles and receipts are emitted"
+        )
+
+    outcome = _env(env, "SWARM_F2_TASK_OUTCOME_REPORT")
+    if not outcome:
+        return False, "SWARM_F2_TASK_OUTCOME_REPORT is absent", (
+            "Designate the path the authoritative evaluator writes the "
+            "task-outcome report to (qwen_train.f2_evaluator.produce_report)"
+        )
+
+    try:
+        from qwen_train import f2_evaluator  # noqa: F401
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return False, f"authoritative evaluator is not importable: {exc}", (
+            "Restore qwen_train/f2_evaluator.py"
+        )
+    return True, f"delivery capability present and enabled ({detail})", ""
 
 
 def _check_trusted_store(env: Mapping[str, str]):
@@ -333,9 +389,7 @@ def evaluate_f2_readiness(
         "clean_room_isolation": _check_clean_room(supplied),
         "q9_no_egress": _check_no_egress(supplied),
         "q10_q12_q13_authorization": _check_authorizations(supplied),
-        "delivery_instrumentation": _check_code_presence(
-            "qwen_train.f2_arm_worker", "emit_worker_bundle", "delivery/bundle"
-        ),
+        "delivery_instrumentation": _check_delivery_instrumentation(env),
         "regrade_bundle_verification": _check_code_presence(
             "qwen_train.f2_protocol", "regrade_f2", "independent regrade"
         ),
@@ -356,8 +410,9 @@ def evaluate_f2_readiness(
             "reproducibility unproven; fail closed",
         ),
         "evaluator_identity": (
-            "authorized evaluator id + version",
-            "SWARM_F2_EVALUATOR_ID / _VERSION",
+            "authorized evaluator id + version + procedure id "
+            "(protocol_version is the repository constant)",
+            "SWARM_F2_EVALUATOR_ID / _VERSION / _PROCEDURE",
             "no trusted evaluator; fail closed",
         ),
         "evaluator_implementation_digest": (
@@ -421,8 +476,10 @@ def evaluate_f2_readiness(
             "unauthorized run; forbid execution",
         ),
         "delivery_instrumentation": (
-            "worker->bundle delivery + receipt instrumentation",
-            "qwen_train.f2_arm_worker.emit_worker_bundle",
+            "worker->bundle delivery capability, with governed emission "
+            "ENABLED and the evaluator report destination configured",
+            "qwen_train.f2_arm_worker.emit_worker_bundle + "
+            "SWARM_F2_EMIT_BUNDLE + SWARM_F2_TASK_OUTCOME_REPORT",
             "no evidence chain; fail closed",
         ),
         "regrade_bundle_verification": (

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from qwen_train.f2_arm_primitives import render_block_from_records
 from qwen_train.f2_readiness import (
     FROZEN_MIN_PAIRS,
@@ -58,6 +60,10 @@ def _all_env(tmp_path=None):
         "SWARM_F2_ARTIFACT_ROOT": "C:\\trusted\\f2_store",
         "SWARM_F2_ARTIFACT_RETENTION_DAYS": "365",
         "SWARM_RECEIPT_KEY": "test-scoped-receipt-key",
+        # Governed bundle emission must be ENABLED and the evaluator's report
+        # destination CONFIGURED, otherwise the arm produces no evidence chain.
+        "SWARM_F2_EMIT_BUNDLE": "1",
+        "SWARM_F2_TASK_OUTCOME_REPORT": "C:\\trusted\\f2_store\\task_outcome.json",
     }
     if tmp_path is not None:
         impl = tmp_path / "evaluator_impl.py"
@@ -92,7 +98,12 @@ class TestFailClosed:
     def test_empty_environment_is_not_ready(self):
         rep = evaluate_f2_readiness(env={}, supplied={})
         assert rep.ready is False
-        assert len(rep.blockers) == len(READINESS_ITEMS) - 3  # 3 code-presence checks pass
+        # Two items are now pure capability-presence checks. The third former
+        # capability item, delivery_instrumentation, additionally requires the
+        # emission gate and the evaluator report destination to be configured,
+        # so it fails closed on an empty environment like every other
+        # evidence-producing item.
+        assert len(rep.blockers) == len(READINESS_ITEMS) - 2
         for c in rep.checks:
             if not c.satisfied:
                 assert c.failure_behavior  # every blocker states its failure behavior
@@ -100,9 +111,11 @@ class TestFailClosed:
     def test_code_presence_is_satisfied_locally(self):
         rep = evaluate_f2_readiness(env={}, supplied={})
         by = {c.item: c for c in rep.checks}
-        assert by["delivery_instrumentation"].satisfied
         assert by["regrade_bundle_verification"].satisfied
         assert by["statistical_analysis"].satisfied
+        # Capability exists but is not ENABLED, so it must not report satisfied.
+        assert not by["delivery_instrumentation"].satisfied
+        assert "SWARM_F2_EMIT_BUNDLE" in by["delivery_instrumentation"].operator_action
 
     def test_operator_only_items_are_classified(self):
         rep = evaluate_f2_readiness(env={}, supplied={})
@@ -166,3 +179,113 @@ class TestFullySupplied:
         rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied())
         blob = str(rep.to_dict())
         assert "test-scoped-receipt-key" not in blob
+
+
+class TestStrengthenedPrerequisites:
+    """F-1: prerequisites that deterministically fail the execution path AFTER
+    READY=True are now covered by existing items rather than a new item, so the
+    authorized 18-item contract is unchanged."""
+
+    def _item(self, env, item):
+        rep = evaluate_f2_readiness(env=env, supplied=_all_supplied())
+        return {c.item: c for c in rep.checks}[item]
+
+    def test_evaluator_procedure_is_now_required(self, tmp_path):
+        env = _all_env(tmp_path)
+        env.pop("SWARM_F2_EVALUATOR_PROCEDURE")
+        c = self._item(env, "evaluator_identity")
+        assert not c.satisfied
+        assert "SWARM_F2_EVALUATOR_PROCEDURE" in c.detail
+        assert c.failure_behavior
+
+    def test_evaluator_identity_satisfied_with_all_three(self, tmp_path):
+        c = self._item(_all_env(tmp_path), "evaluator_identity")
+        assert c.satisfied
+        assert "procedure" in c.detail
+
+    def test_emit_bundle_disabled_blocks_readiness(self, tmp_path):
+        env = _all_env(tmp_path)
+        env["SWARM_F2_EMIT_BUNDLE"] = "0"
+        c = self._item(env, "delivery_instrumentation")
+        assert not c.satisfied
+        assert "SWARM_F2_EMIT_BUNDLE" in c.detail
+
+    @pytest.mark.parametrize("val", ["", "  ", "false", "no", "off", "maybe"])
+    def test_emit_bundle_truthiness_is_strict(self, tmp_path, val):
+        env = _all_env(tmp_path)
+        env["SWARM_F2_EMIT_BUNDLE"] = val
+        assert not self._item(env, "delivery_instrumentation").satisfied
+
+    @pytest.mark.parametrize("val", ["1", "true", "TRUE", "yes", "on"])
+    def test_emit_bundle_accepts_documented_truthy(self, tmp_path, val):
+        env = _all_env(tmp_path)
+        env["SWARM_F2_EMIT_BUNDLE"] = val
+        assert self._item(env, "delivery_instrumentation").satisfied
+
+    def test_missing_outcome_report_path_blocks_readiness(self, tmp_path):
+        env = _all_env(tmp_path)
+        env.pop("SWARM_F2_TASK_OUTCOME_REPORT")
+        c = self._item(env, "delivery_instrumentation")
+        assert not c.satisfied
+        assert "SWARM_F2_TASK_OUTCOME_REPORT" in c.detail
+
+    def test_outcome_report_only_need_be_configured_not_present(self, tmp_path):
+        """The report is a per-arm RUN product; demanding the file now would be
+        a category error. Only its destination must be designated."""
+        env = _all_env(tmp_path)
+        env["SWARM_F2_TASK_OUTCOME_REPORT"] = str(tmp_path / "not_created_yet.json")
+        assert self._item(env, "delivery_instrumentation").satisfied
+
+    def test_ready_becomes_false_when_emit_bundle_is_off(self, tmp_path):
+        env = _all_env(tmp_path)
+        env["SWARM_F2_EMIT_BUNDLE"] = "0"
+        rep = evaluate_f2_readiness(env=env, supplied=_all_supplied())
+        assert rep.ready is False
+        assert "delivery_instrumentation" in rep.blockers
+
+    def test_ready_becomes_false_when_procedure_is_absent(self, tmp_path):
+        env = _all_env(tmp_path)
+        env.pop("SWARM_F2_EVALUATOR_PROCEDURE")
+        rep = evaluate_f2_readiness(env=env, supplied=_all_supplied())
+        assert rep.ready is False
+        assert "evaluator_identity" in rep.blockers
+
+    def test_item_count_unchanged(self):
+        """The authorized contract is 18 items; strengthening must not add any."""
+        assert len(READINESS_ITEMS) == 18
+
+    def test_readiness_never_echoes_the_receipt_key(self, tmp_path):
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied())
+        assert rep.ready is True
+        blob = repr(rep)
+        assert "test-scoped-receipt-key" not in blob
+
+    def test_receipt_value_is_never_read(self, tmp_path, monkeypatch):
+        """The gate tests PRESENCE only. With an explicit env mapping it does not
+        consult os.environ at all, so the process environment cannot leak into the
+        report."""
+        import os as _os
+
+        seen = []
+        real_get = _os.environ.get
+
+        def spy(key, default=None):
+            seen.append(key)
+            return real_get(key, default)
+
+        monkeypatch.setattr(_os.environ, "get", spy, raising=False)
+
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied())
+        assert rep.ready is True
+        assert seen == [], f"explicit env must not fall through to os.environ: {seen}"
+
+        # And with no env mapping the key is read for presence only; its value
+        # never reaches the report.
+        seen.clear()
+        monkeypatch.setenv("SWARM_RECEIPT_KEY", "sentinel-secret-value")
+        rep2 = evaluate_f2_readiness(supplied=_all_supplied())
+        assert "SWARM_RECEIPT_KEY" in seen
+        assert "sentinel-secret-value" not in repr(rep2)
+        by = {c.item: c for c in rep2.checks}
+        assert by["receipt_key"].satisfied
+        assert "sentinel" not in by["receipt_key"].detail

@@ -644,9 +644,12 @@ def _load_bundle_governance() -> dict[str, Any]:
 
     report_path = Path(os.environ[F2_TASK_OUTCOME_ENV])
     if not report_path.is_file():
-        raise FreezeVerificationError(
-            f"F2 fail-closed: task-outcome report not found: {report_path}"
-        )
+        # The report is a RUN product. When the harness has retained the raw
+        # pytest/JUnit evidence and the declared test contract, the AUTHORITATIVE
+        # evaluator produces it here rather than the arm failing for want of a
+        # producer. This closes the producer gap that previously made every
+        # bundle emission depend on an out-of-band report generator.
+        report_path = _produce_outcome_report_from_evidence(report_path)
     task_outcome_report = _json.loads(report_path.read_text(encoding="utf-8"))
 
     return {
@@ -656,6 +659,61 @@ def _load_bundle_governance() -> dict[str, Any]:
         "implementation_bytes": implementation_bytes,
         "task_outcome_report": task_outcome_report,
     }
+
+
+def _produce_outcome_report_from_evidence(report_path: Path) -> Path:
+    """Derive the task-outcome report from retained evidence via the evaluator.
+
+    Requires both inputs, and names both when either is absent so the failure is
+    actionable rather than generic. The evaluator itself fails closed on
+    malformed evidence; this function only supplies its inputs.
+    """
+    junit = os.environ.get("SWARM_F2_JUNIT_EVIDENCE", "").strip()
+    contract = os.environ.get("SWARM_F2_TASK_CONTRACT", "").strip()
+    missing = [
+        name
+        for name, val in (
+            ("SWARM_F2_JUNIT_EVIDENCE", junit),
+            ("SWARM_F2_TASK_CONTRACT", contract),
+        )
+        if not val
+    ]
+    if missing:
+        raise FreezeVerificationError(
+            "F2 fail-closed: task-outcome report absent and retained evidence is "
+            f"incomplete; missing {', '.join(missing)} (supply the report produced "
+            "by qwen_train.f2_evaluator, or the junit evidence plus the task "
+            "contract so the evaluator can produce it)"
+        )
+    try:
+        payload = json.loads(Path(contract).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise FreezeVerificationError(
+            f"F2 fail-closed: task contract is not readable JSON: {contract}: {exc}"
+        ) from exc
+    f2p = payload.get("fail_to_pass") or payload.get("FAIL_TO_PASS") or []
+    p2p = payload.get("pass_to_pass") or payload.get("PASS_TO_PASS") or []
+    try:
+        from qwen_train.f2_evaluator import produce_report
+
+        produce_report(
+            junit_path=junit,
+            fail_to_pass=list(f2p),
+            pass_to_pass=list(p2p) or None,
+            out_path=report_path,
+            instance_id=str(os.environ.get("SWARM_F2_INSTANCE_ID", "") or ""),
+            repository=str(os.environ.get("SWARM_F2_REPOSITORY", "") or ""),
+            base_commit=str(os.environ.get("SWARM_F2_BASE_COMMIT", "") or ""),
+            execution_state_identity=str(
+                os.environ.get("SWARM_F2_EXECUTION_STATE", "") or ""
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise FreezeVerificationError(
+            f"F2 fail-closed: authoritative evaluator could not produce the "
+            f"task-outcome report: {type(exc).__name__}: {exc}"
+        ) from exc
+    return report_path
 
 
 def _read_trajectory_records(workspace_root: Path, trajectory_run_id: str) -> list[dict[str, Any]]:
