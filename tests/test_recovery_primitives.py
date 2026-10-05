@@ -33,6 +33,57 @@ def test_clean_directory_path_traversal_guard(tmp_path):
     assert "escapes project root" in res["error"]
 
 
+def test_clean_directory_rejects_sibling_prefix_escape():
+    """CB-3: '../v-horseshoe-v2-backup' shares the textual prefix but is NOT
+    inside the project; component-wise containment must reject it."""
+    res = clean_directory("../v-horseshoe-v2-backup", [".tmp"])
+    assert res["ok"] is False
+    assert "escapes project root" in res["error"]
+
+
+def test_clean_directory_requires_extension_allowlist():
+    """CB-3: refusing to delete arbitrary file types when no allowlist is given."""
+    res = clean_directory("tests", None)
+    assert res["ok"] is False
+    assert "allowlist" in res["error"]
+
+    res2 = clean_directory("tests", [])
+    assert res2["ok"] is False
+    assert "allowlist" in res2["error"]
+
+
+def test_find_and_kill_matches_identity_not_cmdline_substring(monkeypatch):
+    """CB-4: a python process whose ARGV merely contains 'llama' must NOT be
+    killed; only a real llama server executable (by name) is."""
+    import psutil
+    import swarm_os.healing.recovery_engine as re_mod
+
+    killed = []
+
+    class _FakeProc:
+        def __init__(self, info):
+            self.info = info
+
+        def name(self):
+            return self.info["name"]
+
+        def kill(self):
+            killed.append(self.info["pid"])
+
+    procs = [
+        {"pid": 111, "name": "python.exe", "cmdline": ["python", "train_llama_data.py"]},
+        {"pid": 222, "name": "llama-server.exe", "cmdline": ["llama-server.exe", "-m", "x.gguf"]},
+        {"pid": 333, "name": "pytest.exe", "cmdline": ["pytest", "tests/test_llama.py"]},
+    ]
+    monkeypatch.setattr(psutil, "process_iter", lambda *a, **k: [_FakeProc(p) for p in procs])
+    monkeypatch.setattr(
+        psutil, "Process", lambda pid: _FakeProc(next(p for p in procs if p["pid"] == pid))
+    )
+
+    assert re_mod._find_and_kill("llama", exclude_pid=999) == [222]
+    assert killed == [222]
+
+
 def test_clean_directory_valid(tmp_path):
     # Test cleaning files inside project directory
     target_rel = "tests"

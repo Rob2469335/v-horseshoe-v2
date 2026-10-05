@@ -132,31 +132,63 @@ def kill_process_by_name(pattern: str) -> Dict[str, Any]:
 def clean_directory(
     target_dir: str, extensions: List[str] = None, max_age_hours: int = 24
 ) -> Dict[str, Any]:
-    """Clean stale temporary or cache files within the project boundary."""
+    """Clean stale temporary or cache files within the project boundary.
+
+    Containment is COMPONENT-WISE (``Path.is_relative_to``), never a string
+    prefix: a sibling such as ``../v-horseshoe-v2-backup`` shares the textual
+    prefix ``...\\v-horseshoe-v2`` but is NOT inside the project. An extension
+    allowlist is REQUIRED -- deleting every file regardless of type is refused.
+    Each candidate is re-resolved and must stay inside the target, so a symlink
+    cannot redirect a deletion outside the sandbox.
+    """
     try:
-        target = (PROJECT_ROOT / target_dir).resolve()
-        if not str(target).startswith(str(PROJECT_ROOT)):
+        root = PROJECT_ROOT.resolve()
+        target = (root / target_dir).resolve()
+        try:
+            inside = target.is_relative_to(root)
+        except ValueError:
+            inside = False
+        if not inside:
             return {"ok": False, "error": f"Path '{target_dir}' escapes project root"}
         if not target.exists() or not target.is_dir():
             return {"ok": False, "error": f"Directory '{target_dir}' does not exist"}
 
-        cutoff = time.time() - (max_age_hours * 3600)
         ext_set = set()
-        if extensions:
-            for e in extensions:
-                ext_set.add(e.lower() if e.startswith(".") else f".{e.lower()}")
+        for e in extensions or ():
+            es = str(e).strip().lower()
+            if not es:
+                continue
+            ext_set.add(es if es.startswith(".") else f".{es}")
+        if not ext_set:
+            return {
+                "ok": False,
+                "error": "clean_directory requires a non-empty extensions allowlist "
+                "(refusing to delete arbitrary file types)",
+            }
 
+        cutoff = time.time() - (max_age_hours * 3600)
         removed = []
         for f in target.rglob("*"):
-            if f.is_file():
-                if ext_set and f.suffix.lower() not in ext_set:
+            try:
+                if not f.is_file() or f.suffix.lower() not in ext_set:
+                    continue
+                # Symlink defence: the RESOLVED path must stay inside the target.
+                try:
+                    resolved = f.resolve()
+                except OSError:
                     continue
                 try:
-                    if f.stat().st_mtime < cutoff:
-                        f.unlink(missing_ok=True)
-                        removed.append(str(f.relative_to(PROJECT_ROOT)))
-                except Exception as ex:
-                    log.warning(f"Could not remove {f}: {ex}")
+                    if not resolved.is_relative_to(target):
+                        continue
+                except ValueError:
+                    continue
+                if resolved.stat().st_mtime < cutoff:
+                    # Unlink the entry at its original location (the symlink, not
+                    # the outside target); resolved is only used for the check.
+                    f.unlink(missing_ok=True)
+                    removed.append(str(f.relative_to(PROJECT_ROOT)))
+            except Exception as ex:
+                log.warning(f"Could not remove {f}: {ex}")
 
         return {
             "ok": True,

@@ -55,20 +55,67 @@ def _record_to_agents_md(anomaly: str, script: str):
         log.warning(f"Could not record auto-heal to AGENTS.md: {e}")
 
 
+#: Executables that a non-dotted token (e.g. "llama") is allowed to match, by
+#: EXE NAME only. Deliberately NOT a cmdline-substring test: a script whose
+#: path/argument merely contains "llama" must never be killed.
+_KILLABLE_SERVER_EXES = {
+    "llama.exe",
+    "llama-server.exe",
+    "llama-cli.exe",
+    "llama-server",
+    "llama-cli",
+}
+
+#: Interpreters whose ARGV a dotted module token (e.g. "swarm_os.app.main") may
+#: be matched against.
+_PY_INTERPRETERS = {
+    "python.exe",
+    "python3.exe",
+    "python",
+    "python3",
+    "uvicorn.exe",
+    "uvicorn",
+}
+
+
 def _find_and_kill(match_str, exclude_pid=None):
+    """Kill processes by STRICT identity, never by an arbitrary cmdline substring.
+
+    A non-dotted token ("llama") matches only a known llama SERVER executable's
+    NAME, so a println/pytest path that merely contains "llama" is never killed.
+    A dotted token ("swarm_os.app.main") is matched only against the argv of a
+    python/uvicorn interpreter. The live process identity is re-validated
+    immediately before the kill to close the PID-recycle window.
+    """
     import psutil
 
-    killed = []
+    token = (match_str or "").strip().lower()
+    if not token:
+        return []
+    dotted = "." in token
     my_pid = exclude_pid or psutil.Process().pid
+    killed = []
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
-            if proc.info["pid"] == my_pid:
+            pid = proc.info["pid"]
+            if pid == my_pid:
                 continue
-            cmdline = " ".join(proc.info["cmdline"] or [])
-            if match_str in cmdline:
-                proc.kill()
-                killed.append(proc.info["pid"])
-        except psutil.NoSuchProcess, psutil.AccessDenied:
+            name = (proc.info["name"] or "").lower()
+            if dotted:
+                if name not in _PY_INTERPRETERS:
+                    continue
+                argv = [str(a).lower() for a in (proc.info["cmdline"] or [])]
+                if not any(token in a for a in argv):
+                    continue
+            else:
+                if name not in _KILLABLE_SERVER_EXES or token not in name:
+                    continue
+            p = psutil.Process(pid)
+            if (p.name() or "").lower() != name:
+                continue  # identity changed (PID recycled) -> do not kill
+            p.kill()
+            killed.append(pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return killed
 
