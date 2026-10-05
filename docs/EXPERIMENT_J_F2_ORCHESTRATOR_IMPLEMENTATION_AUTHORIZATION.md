@@ -281,6 +281,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-005 | Step 4 - persist the distiller provenance block and keep F2 arms out of the learning pipeline | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names two files explicitly; does not modify F0 |
 | F2-IMPL-AUTH-006 | Step 5 - record post-run workspace-mutation integrity evidence | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
 | F2-IMPL-AUTH-007 | Step 6 - strengthen workspace-mutation evidence against the commit/ref/ignored-artifact bypasses | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
+| F2-IMPL-AUTH-008 | Step 7 - F2Bundle persistence round-trip identity tests, and the authoritative assembly-point clarification | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); tests only plus a design clarification; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -587,6 +588,29 @@ None of these is a scoring bug; all three are evaluation-integrity observation g
 **Explicit non-authorization.** This entry does not authorize any other change to `qwen_train/f2_arm_worker.py` or to `qwen_train/arm_workspace.py`; no new exclusion or invalidation rule; no change to the endpoint, outcome, `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; no F2 execution; no real F2 evidence generation; and no provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
 
 **Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
+
+### F2-IMPL-AUTH-008 - Step 7: F2Bundle persistence round-trip tests; authoritative assembly point
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue 1 - the round trip was untested on a production path.** `F2Bundle.from_dict` is on the PRODUCTION path: admission deserializes bundles (`qwen_train/f2_admission.py:133`, `:135`) and regrade does too (`qwen_train/f2_protocol.py:945`, `:1185`, `:1187`). No test asserted that `to_dict()` -> `from_dict()` preserves the identity-bearing fields, so a silent drop or rewrite of a persisted identity field would have gone unnoticed while still changing the scientific record. This is the `prove serialization/reconstruction/identity consistency` requirement, and it was NOT ESTABLISHED before this entry.
+
+**Issue 2 - the bundle assembly point was mis-stated.** The readiness plan says `f2_arm_worker.py` "must call `assemble_f2_bundle` with its receipt data". That is not implementable: `assemble_f2_bundle` additionally requires `task_outcome_report`, `evaluator: EvaluatorAuthorization` and `implementation_bytes`, which are EVALUATION-phase artifacts produced after the arm has run, and `horizon_k`, which the worker never receives. `assemble_f2_bundle` has no production caller. Forcing the call into the worker would require inventing those inputs or duplicating the evaluation identity, which this repository forbids.
+
+**Decision.**
+
+1. Add `TestBundlePersistenceRoundTrip` to `tests/test_f2_protocol.py`: every identity-bearing field is pinned through `to_dict()` -> `from_dict()`; the canonical serialization is stable; the regrade verdict is unchanged by reconstruction; a control arm round-trips without a lesson block and a treatment arm keeps one; a truncated bundle FAILS CLOSED rather than reconstructing with fabricated defaults; and a round trip cannot launder a wrong `protocol_id` past the verifier.
+2. Record the authoritative assembly point in this entry: the governed `F2Bundle` is assembled where the evaluation outcome and evaluator authorization are available - the evaluation/admission stage - and NOT inside the arm worker. The worker's job is the execution receipt (delivery identity, delivered bytes, execution evidence, and the workspace-mutation evidence of F2-IMPL-AUTH-006/-007). This entry corrects the readiness-plan wording; it does not change any code path.
+
+**File boundary.** Tests only: `tests/test_f2_protocol.py`. No production file is modified by this entry.
+
+**Explicit non-authorization.** This entry does not authorize any production change, any change to `assemble_f2_bundle` or its callers, any change to the `F2Result` schema, `_reconstruct_endpoint`, `f2_admission.py`, `qwen_train/arm_workspace.py`, the delivery seam, or any frozen artifact; no F2 execution; no real F2 evidence generation; and no provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
+
+**Implementation status.** This entry authorizes the tests it names; the design clarification in item 2 is recorded here and requires no code change.
 
 ---
 

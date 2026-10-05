@@ -1726,3 +1726,125 @@ class TestLessonBoundAndControl:
         # Record the ACTUAL regrade outcome for C0 (not assumed).
         v = _regrade(b)
         assert v.state == STATE_VERIFIED, f"C0 regrade state={v.state}: {v.detail}"
+
+
+# ---------------------------------------------------------------------------
+# F2Bundle persistence round-trip (F2-IMPL-AUTH-008)
+# ---------------------------------------------------------------------------
+
+#: The identity-bearing fields that must survive to_dict -> from_dict.
+_BUNDLE_IDENTITY_FIELDS = (
+    "protocol_id",
+    "instance_id",
+    "repository",
+    "base_commit",
+    "relevant_file_set_hash",
+    "horizon_k",
+    "qualifying_operations",
+    "delivery",
+    "behavioral_artifact",
+    "task_outcome_artifact",
+    "treatment_artifact",
+    "delivery_artifact",
+    "evaluator",
+    "implementation_artifact",
+    "declared_endpoint",
+    "declared_first_edit_step",
+    "declared_task_success",
+    "lesson_block_artifact",
+)
+
+
+class TestBundlePersistenceRoundTrip:
+    """The persisted evidence object must reconstruct identically.
+
+    ``F2Bundle.from_dict`` is on the PRODUCTION path - admission deserializes
+    bundles (``f2_admission.py:133,135``) and regrade does too
+    (``f2_protocol.py:945,1185,1187``). If the round trip silently dropped or
+    rewrote an identity field, the scientific record would differ from what was
+    executed. This pins every identity field, byte-for-byte through to_dict().
+    """
+
+    def test_to_dict_from_dict_is_identity_preserving(self):
+        from qwen_train.f2_protocol import F2Bundle
+
+        b = _bundle(F2_TREATMENT_ARM)
+        rt = F2Bundle.from_dict(b.to_dict())
+        for f in _BUNDLE_IDENTITY_FIELDS:
+            assert getattr(rt, f) == getattr(b, f), f"field {f!r} changed in round trip"
+        # The canonical serialization itself must be stable (no dict drift).
+        assert rt.to_dict() == b.to_dict()
+
+    def test_regrade_verdict_is_unchanged_by_the_round_trip(self):
+        from qwen_train.f2_protocol import F2Bundle, regrade_f2
+
+        b = _bundle(F2_TREATMENT_ARM)
+        rt = F2Bundle.from_dict(b.to_dict())
+        v1 = regrade_f2(b, store=_store(), registry=_registry(), relevant_file_set=RFS)
+        v2 = regrade_f2(rt, store=_store(), registry=_registry(), relevant_file_set=RFS)
+        assert v1.state == v2.state
+        assert v1.detail == v2.detail
+
+    def test_control_arm_round_trips_without_a_lesson_block(self):
+        from qwen_train.f2_protocol import F2Bundle
+
+        b = _bundle(F2_CONTROL_ARM)
+        assert b.lesson_block_artifact is None
+        rt = F2Bundle.from_dict(b.to_dict())
+        assert rt.lesson_block_artifact is None
+        assert "lesson_block_artifact" not in rt.to_dict()
+        assert rt.arm == F2_CONTROL_ARM
+
+    def test_treatment_arm_round_trip_preserves_the_lesson_block(self):
+        from qwen_train.f2_protocol import F2Bundle
+
+        b = _bundle(F2_TREATMENT_ARM)
+        assert b.lesson_block_artifact is not None
+        rt = F2Bundle.from_dict(b.to_dict())
+        assert rt.lesson_block_artifact == b.lesson_block_artifact
+        assert rt.delivery.lesson_block_hash == b.delivery.lesson_block_hash
+
+    def test_truncated_bundle_is_rejected_not_fabricated(self):
+        """A bundle with no valid arm must FAIL, not reconstruct with defaults.
+
+        ``F2DeliveryEvidence`` validates its arm, so an empty dict raises rather
+        than producing a plausible-looking empty bundle. That is the stronger
+        fail-closed behaviour: a truncated persisted bundle cannot pass as a
+        complete one.
+        """
+        import pytest
+
+        from qwen_train.f2_protocol import F2Bundle
+
+        with pytest.raises(ValueError):
+            F2Bundle.from_dict({})
+
+    def test_missing_optional_identity_is_explicit_not_fabricated(self):
+        """Missing scalar identity reconstructs as an explicit empty value.
+
+        The delivery (and therefore the arm) is valid, but the task identity is
+        absent: it must come back as "" / 0 / (), never as a fabricated identity.
+        """
+        from qwen_train.f2_protocol import F2Bundle
+
+        b = _bundle(F2_TREATMENT_ARM)
+        d = b.to_dict()
+        for k in ("instance_id", "repository", "base_commit", "relevant_file_set_hash"):
+            d.pop(k, None)
+        rt = F2Bundle.from_dict(d)
+        assert rt.instance_id == ""
+        assert rt.repository == ""
+        assert rt.base_commit == ""
+        assert rt.relevant_file_set_hash == ""
+        # the arm identity, which IS present, is preserved
+        assert rt.arm == F2_TREATMENT_ARM
+
+    def test_protocol_id_mismatch_is_still_rejected_after_round_trip(self):
+        """Round-tripping must not launder an unauthorized protocol id."""
+        from qwen_train.f2_protocol import F2Bundle, regrade_f2
+
+        b = _bundle(F2_TREATMENT_ARM, protocol_id="not_the_frozen_protocol")
+        rt = F2Bundle.from_dict(b.to_dict())
+        assert rt.protocol_id == "not_the_frozen_protocol"
+        v = regrade_f2(rt, store=_store(), registry=_registry(), relevant_file_set=RFS)
+        assert v.state != STATE_VERIFIED
