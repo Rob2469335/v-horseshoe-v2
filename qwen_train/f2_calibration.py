@@ -42,7 +42,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 __all__ = [
     "CalibrationError",
@@ -289,3 +289,220 @@ def summarize_calibration(
         saturation_flag=flag,
         saturation_detail=detail,
     )
+
+
+# ===========================================================================
+# Calibration EXECUTION layer (F2-IMPL-AUTH-010)
+# ===========================================================================
+
+
+class CalibrationAuthorizationError(CalibrationError):
+    """Raised when a calibration run is attempted without a matching authorization.
+
+    Executing calibration creates Experiment J observations, which the execution
+    contract excludes absent its own operator authorization (the F1-OP-001/004
+    precedent). The runner therefore fails CLOSED: no authorization, no run.
+    """
+
+
+#: Default ceiling on reruns per observation. Bounded so a genuinely broken
+#: environment cannot loop forever; the governing plan's stop-and-diagnose rule.
+DEFAULT_MAX_RERUNS = 3
+
+
+@dataclass(frozen=True)
+class CalibrationAuthorization:
+    """The operator authorization Q10 requires, as an explicit object.
+
+    Mirrors the plan's Q10 wording: run count, task set, replicates per task, and
+    the censoring convention. `run_calibration` refuses to start unless the plan
+    matches this object EXACTLY, so an authorization cannot be silently widened.
+    """
+
+    authorization_id: str
+    authorized_by: str
+    task_ids: tuple[str, ...]
+    replicates: int
+    horizon_steps: int
+    censoring_convention: str
+    arm: str = "X"
+
+    def __post_init__(self) -> None:
+        if not str(self.authorization_id or "").strip():
+            raise CalibrationAuthorizationError("authorization_id is required")
+        if not str(self.authorized_by or "").strip():
+            raise CalibrationAuthorizationError(
+                "authorized_by is required: calibration needs a named operator authority"
+            )
+        if not self.task_ids:
+            raise CalibrationAuthorizationError("authorization must name the task set")
+        if self.replicates < 1:
+            raise CalibrationAuthorizationError("replicates must be >= 1")
+        if self.horizon_steps < 1:
+            raise CalibrationAuthorizationError("horizon_steps must be >= 1")
+        if not str(self.censoring_convention or "").strip():
+            raise CalibrationAuthorizationError(
+                "a censoring convention must be authorized, not assumed"
+            )
+        if self.arm not in CALIBRATION_ARMS:
+            raise CalibrationAuthorizationError(
+                f"calibration arm must be one of {CALIBRATION_ARMS}, got {self.arm!r}"
+            )
+
+    @property
+    def run_count(self) -> int:
+        return len(self.task_ids) * self.replicates
+
+
+@dataclass(frozen=True)
+class ObservationOutcome:
+    """One attempted no-lesson observation, as reported by the injected runner.
+
+    `infra_cause` set (to a member of INFRASTRUCTURE_RERUN_CAUSES) marks an
+    INFRASTRUCTURE failure, which is the only thing that may be rerun. A genuine
+    scientific outcome is never rerun.
+    """
+
+    instance_id: str
+    arm: str
+    rollout_id: str
+    endpoint_observed: bool
+    first_edit_step: int | None = None
+    valid: bool = True
+    invalid_reason: str = ""
+    infra_cause: str = ""
+
+
+@dataclass(frozen=True)
+class CalibrationPlan:
+    """The measurement to perform. Must match the authorization exactly."""
+
+    task_ids: tuple[str, ...]
+    replicates: int
+    horizon_steps: int
+    endpoint_hash: str
+    arm: str = "X"
+
+
+def _check_authorization(
+    plan: CalibrationPlan, authorization: CalibrationAuthorization | None
+) -> None:
+    """Fail closed unless the plan is exactly what was authorized."""
+    if authorization is None:
+        raise CalibrationAuthorizationError(
+            "calibration requires an explicit CalibrationAuthorization (Q10). "
+            "Executing calibration creates Experiment J observations; without an "
+            "authorization naming the run count, task set, replicates and censoring "
+            "convention, the runner refuses to start."
+        )
+    if plan.arm != authorization.arm:
+        raise CalibrationAuthorizationError(
+            f"plan arm {plan.arm!r} != authorized arm {authorization.arm!r}"
+        )
+    if tuple(plan.task_ids) != tuple(authorization.task_ids):
+        raise CalibrationAuthorizationError(
+            "plan task set differs from the authorized task set; an authorization "
+            "cannot be widened by supplying different tasks"
+        )
+    if plan.replicates != authorization.replicates:
+        raise CalibrationAuthorizationError(
+            f"plan replicates {plan.replicates} != authorized {authorization.replicates}"
+        )
+    if plan.horizon_steps != authorization.horizon_steps:
+        raise CalibrationAuthorizationError(
+            f"plan horizon {plan.horizon_steps} != authorized "
+            f"{authorization.horizon_steps}"
+        )
+    if not str(plan.endpoint_hash or "").strip():
+        raise CalibrationAuthorizationError(
+            "plan must carry the endpoint specification hash"
+        )
+
+
+def run_calibration(
+    plan: CalibrationPlan,
+    *,
+    authorization: CalibrationAuthorization | None,
+    runner: "Callable[[str, str, int], ObservationOutcome]",
+    max_reruns: int = DEFAULT_MAX_RERUNS,
+) -> tuple[list[CalibrationRecord], CalibrationSummary]:
+    """Execute a no-lesson calibration plan and return frozen records + summary.
+
+    ``runner(instance_id, arm, replicate) -> ObservationOutcome`` performs ONE
+    observation. It is injected so this function can be tested without starting a
+    model, a backend or a service, and so the production wiring stays a thin,
+    reviewable adapter over the same execution membrane the confirmatory run uses.
+
+    Rerun policy: only an INFRASTRUCTURE cause may be retried, at most
+    ``max_reruns`` times, and EVERY attempt is retained (the superseded attempt as
+    a ``valid=False`` record carrying ``rerun_of``/``rerun_cause``). An
+    outcome-dependent rerun is therefore structurally impossible: a scientific
+    outcome is never rerun, and a rerun never deletes the original.
+    """
+    _check_authorization(plan, authorization)
+    assert authorization is not None  # narrowed for type checkers
+
+    records: list[CalibrationRecord] = []
+    for instance_id in plan.task_ids:
+        for replicate in range(plan.replicates):
+            first_rollout = f"{instance_id}::{plan.arm}::r{replicate}"
+            attempt = 0
+            rerun_of = ""
+            rerun_cause = ""
+            while True:
+                outcome = runner(instance_id, plan.arm, replicate)
+                if outcome.arm not in CALIBRATION_ARMS:
+                    raise CalibrationError(
+                        f"runner returned arm {outcome.arm!r}, which is not a "
+                        f"calibration arm {CALIBRATION_ARMS}"
+                    )
+                is_infra = bool(outcome.infra_cause)
+                if is_infra and outcome.infra_cause not in INFRASTRUCTURE_RERUN_CAUSES:
+                    raise CalibrationError(
+                        f"runner reported infra cause {outcome.infra_cause!r} which is "
+                        "not a predefined infrastructure cause. Outcome-dependent "
+                        "reruns are forbidden."
+                    )
+                if not is_infra:
+                    records.append(
+                        CalibrationRecord(
+                            instance_id=outcome.instance_id,
+                            arm=outcome.arm,
+                            rollout_id=outcome.rollout_id or first_rollout,
+                            endpoint_hash=plan.endpoint_hash,
+                            horizon_steps=plan.horizon_steps,
+                            endpoint_observed=outcome.endpoint_observed,
+                            first_edit_step=outcome.first_edit_step,
+                            valid=outcome.valid,
+                            invalid_reason=outcome.invalid_reason,
+                            rerun_of=rerun_of,
+                            rerun_cause=rerun_cause,
+                            task_id=instance_id,
+                        )
+                    )
+                    break
+                # infrastructure failure: retain it, then maybe retry
+                attempt += 1
+                records.append(
+                    CalibrationRecord(
+                        instance_id=outcome.instance_id,
+                        arm=outcome.arm,
+                        rollout_id=f"{first_rollout}::infra{attempt}",
+                        endpoint_hash=plan.endpoint_hash,
+                        horizon_steps=plan.horizon_steps,
+                        endpoint_observed=False,
+                        first_edit_step=None,
+                        valid=False,
+                        invalid_reason=f"infrastructure:{outcome.infra_cause}",
+                        rerun_of=rerun_of or first_rollout,
+                        rerun_cause=outcome.infra_cause,
+                        task_id=instance_id,
+                    )
+                )
+                if attempt > max_reruns:
+                    break
+                rerun_of = rerun_of or first_rollout
+                rerun_cause = outcome.infra_cause
+
+    summary = summarize_calibration(records, endpoint_hash=plan.endpoint_hash)
+    return records, summary

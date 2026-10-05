@@ -28,6 +28,11 @@ from qwen_train.f2_calibration import (
     INFRASTRUCTURE_RERUN_CAUSES,
     CalibrationError,
     CalibrationRecord,
+    CalibrationAuthorization,
+    CalibrationAuthorizationError,
+    CalibrationPlan,
+    ObservationOutcome,
+    run_calibration,
     summarize_calibration,
 )
 
@@ -202,3 +207,202 @@ class TestSummary:
 
         s = summarize_calibration([_rec()])
         assert json.loads(json.dumps(s.to_dict()))["n_records"] == 1
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-010 - the calibration EXECUTION layer
+# ---------------------------------------------------------------------------
+
+
+def _auth(**kw):
+    base = dict(
+        authorization_id="Q10-test",
+        authorized_by="operator",
+        task_ids=("t1", "t2"),
+        replicates=1,
+        horizon_steps=12,
+        censoring_convention="endpoint_not_reached_within_horizon",
+        arm="X",
+    )
+    base.update(kw)
+    return CalibrationAuthorization(**base)
+
+
+def _plan(**kw):
+    base = dict(
+        task_ids=("t1", "t2"),
+        replicates=1,
+        horizon_steps=12,
+        endpoint_hash="e" * 64,
+        arm="X",
+    )
+    base.update(kw)
+    return CalibrationPlan(**base)
+
+
+def _fake(observed=True, step=4, infra=""):
+    def _runner(instance_id, arm, replicate):
+        if infra:
+            return ObservationOutcome(
+                instance_id=instance_id, arm=arm, rollout_id="",
+                endpoint_observed=False, infra_cause=infra,
+            )
+        return ObservationOutcome(
+            instance_id=instance_id, arm=arm,
+            rollout_id=f"{instance_id}::{arm}::r{replicate}",
+            endpoint_observed=observed, first_edit_step=(step if observed else None),
+        )
+    return _runner
+
+
+class TestCalibrationRunnerAuthorizationGate:
+    """No authorization, no run. Executing calibration creates observations."""
+
+    def test_missing_authorization_fails_closed(self):
+        with pytest.raises(CalibrationAuthorizationError) as e:
+            run_calibration(_plan(), authorization=None, runner=_fake())
+        assert "explicit CalibrationAuthorization" in str(e.value)
+
+    def test_widened_task_set_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError) as e:
+            run_calibration(
+                _plan(task_ids=("t1", "t2", "t3")),
+                authorization=_auth(),
+                runner=_fake(),
+            )
+        assert "cannot be widened" in str(e.value)
+
+    def test_replicate_mismatch_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError):
+            run_calibration(_plan(replicates=2), authorization=_auth(), runner=_fake())
+
+    def test_horizon_mismatch_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError):
+            run_calibration(
+                _plan(horizon_steps=99), authorization=_auth(), runner=_fake()
+            )
+
+    def test_lesson_bearing_arm_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError):
+            _auth(arm="T")
+
+    def test_missing_censoring_convention_is_refused(self):
+        with pytest.raises(CalibrationAuthorizationError):
+            _auth(censoring_convention="")
+
+    def test_run_count_is_task_times_replicates(self):
+        assert _auth(task_ids=("a", "b", "c"), replicates=4).run_count == 12
+
+
+class TestCalibrationRunnerRecords:
+    def test_produces_one_record_per_authorized_observation(self):
+        recs, summary = run_calibration(_plan(), authorization=_auth(), runner=_fake())
+        assert len(recs) == 2
+        assert summary.n_valid == 2
+        assert all(r.endpoint_hash == "e" * 64 for r in recs)
+        assert all(r.horizon_steps == 12 for r in recs)
+
+    def test_infrastructure_failure_is_rerun_and_both_attempts_retained(self):
+        calls = {"n": 0}
+
+        def _runner(instance_id, arm, replicate):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ObservationOutcome(
+                    instance_id=instance_id, arm=arm, rollout_id="",
+                    endpoint_observed=False, infra_cause="backend_unreachable",
+                )
+            return ObservationOutcome(
+                instance_id=instance_id, arm=arm, rollout_id="ok",
+                endpoint_observed=True, first_edit_step=4,
+            )
+
+        recs, _ = run_calibration(
+            _plan(task_ids=("t1",)), authorization=_auth(task_ids=("t1",)),
+            runner=_runner,
+        )
+        # BOTH attempts are present: the failed one is never deleted.
+        assert len(recs) == 2
+        infra = [r for r in recs if not r.valid]
+        assert len(infra) == 1
+        assert infra[0].rerun_cause == "backend_unreachable"
+        assert infra[0].invalid_reason == "infrastructure:backend_unreachable"
+        ok = [r for r in recs if r.valid]
+        assert ok[0].rerun_of == "t1::X::r0"
+
+    def test_scientific_outcome_is_never_rerun(self):
+        calls = {"n": 0}
+
+        def _runner(instance_id, arm, replicate):
+            calls["n"] += 1
+            return ObservationOutcome(
+                instance_id=instance_id, arm=arm, rollout_id="o",
+                endpoint_observed=False, first_edit_step=None,
+            )
+
+        recs, _ = run_calibration(
+            _plan(task_ids=("t1",)), authorization=_auth(task_ids=("t1",)),
+            runner=_runner,
+        )
+        assert calls["n"] == 1, "an undesired scientific outcome must NOT be rerun"
+        assert len(recs) == 1
+
+    def test_unknown_infra_cause_is_refused(self):
+        def _runner(instance_id, arm, replicate):
+            return ObservationOutcome(
+                instance_id=instance_id, arm=arm, rollout_id="",
+                endpoint_observed=False, infra_cause="flaky_i_guess",
+            )
+
+        with pytest.raises(CalibrationError) as e:
+            run_calibration(
+                _plan(task_ids=("t1",)), authorization=_auth(task_ids=("t1",)),
+                runner=_runner,
+            )
+        assert "Outcome-dependent reruns are forbidden" in str(e.value)
+
+    def test_lesson_arm_from_runner_is_refused(self):
+        def _runner(instance_id, arm, replicate):
+            return ObservationOutcome(
+                instance_id=instance_id, arm="T", rollout_id="x",
+                endpoint_observed=True, first_edit_step=4,
+            )
+
+        with pytest.raises(CalibrationError):
+            run_calibration(
+                _plan(task_ids=("t1",)), authorization=_auth(task_ids=("t1",)),
+                runner=_runner,
+            )
+
+    def test_infra_rerun_is_bounded(self):
+        calls = {"n": 0}
+
+        def _runner(instance_id, arm, replicate):
+            calls["n"] += 1
+            return ObservationOutcome(
+                instance_id=instance_id, arm=arm, rollout_id="",
+                endpoint_observed=False, infra_cause="process_crash",
+            )
+
+        recs, _ = run_calibration(
+            _plan(task_ids=("t1",)), authorization=_auth(task_ids=("t1",)),
+            runner=_runner, max_reruns=2,
+        )
+        assert calls["n"] == 3  # initial + 2 reruns, then stop
+        assert all(not r.valid for r in recs)
+
+    def test_saturated_run_flags_endpoint_saturation(self):
+        recs, summary = run_calibration(
+            _plan(task_ids=("a", "b", "c")), authorization=_auth(task_ids=("a", "b", "c")),
+            runner=_fake(observed=True, step=4),
+        )
+        assert summary.endpoint_rate == 1.0
+        assert summary.saturation_flag is True
+        assert "no headroom" in summary.saturation_detail
+
+    def test_records_are_json_serialisable_and_content_hashed(self):
+        import json
+
+        recs, _ = run_calibration(_plan(), authorization=_auth(), runner=_fake())
+        for r in recs:
+            d = r.to_dict()
+            assert json.loads(json.dumps(d))["record_hash"] == d["record_hash"]

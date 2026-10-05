@@ -283,6 +283,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-007 | Step 6 - strengthen workspace-mutation evidence against the commit/ref/ignored-artifact bypasses | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
 | F2-IMPL-AUTH-008 | Step 7 - F2Bundle persistence round-trip identity tests, and the authoritative assembly-point clarification | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); tests only plus a design clarification; does not modify F0 |
 | F2-IMPL-AUTH-009 | Step 8 - workspace-mutation classification (engineering assessment) and the operator execution contracts | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file; observation and classification only, adds no exclusion rule; does not modify F0 |
+| F2-IMPL-AUTH-010 | Step 9 - calibration execution layer (runner + authorization gate) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; code only, execution gated on Q10; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -646,6 +647,28 @@ SECRETS (Q7, Q11). Owner: the operator. Location: the operator's `.env` only. Sc
 REFERENCE TRUTH (sequestering). Stored outside every workspace, evaluator-only, digest-pinned, unavailable during agent execution.
 
 **Implementation status.** Decision 1 is implemented by this entry. Decisions 2 and 3 are recorded here and require the operator or Q1-Q6 authorization.
+
+### F2-IMPL-AUTH-010 - Step 9: calibration execution layer (runner + authorization gate)
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue.** `qwen_train/f2_calibration.py` held the calibration SCHEMA and ANALYSIS (`CalibrationRecord`, `CalibrationSummary`, `summarize_calibration`, `INFRASTRUCTURE_RERUN_CAUSES`, 27 tests) but no RUNNER. The plan justified the absence by "executing it creates Experiment J observations". That is a reason not to RUN calibration; it is not a reason not to BUILD it. Conflating the two left the cheapest, highest-value measurement in the design unimplemented and un-testable, while the scientific blocker (Q10) is authorization, not code.
+
+**Decision 1 - the runner (implemented).** `f2_calibration.py` gains `CalibrationAuthorization`, `ObservationOutcome`, `CalibrationPlan`, `run_calibration(plan, *, authorization, runner, max_reruns)` and `CalibrationAuthorizationError`. `runner(instance_id, arm, replicate) -> ObservationOutcome` is INJECTED, so the whole layer is testable with a fake and no model, backend, service or observation is required.
+
+**Decision 2 - execution is gated on Q10 (fail-closed).** `run_calibration` refuses to start unless a `CalibrationAuthorization` is supplied AND the plan matches it EXACTLY on arm, task set, replicates and horizon. The authorization object mirrors the plan's own Q10 wording - "run count, task set, replicates per task, and the censoring convention" - so an authorization cannot be silently widened by passing different tasks or a different replicate count. No authorization, no run.
+
+**Decision 3 - rerun policy (implemented, non-gameable).** Only a cause in the existing closed `INFRASTRUCTURE_RERUN_CAUSES` set may be retried, at most `max_reruns` times. Every attempt is RETAINED: a superseded attempt is a `valid=False` record carrying `rerun_of` and `rerun_cause`. An undesired SCIENTIFIC outcome is never rerun, and a rerun never deletes the original, so outcome-dependent rerunning is structurally impossible. An unrecognized infra cause is refused rather than treated as flaky.
+
+**File boundary.** One production file: `qwen_train/f2_calibration.py`. Tests: `tests/test_f2_calibration.py` (existing module). No other file.
+
+**Explicit non-authorization.** This entry does NOT authorize EXECUTING calibration (that is Q10), nor any change to the endpoint, `alpha`, `power`, `delta`, the statistical test, the population rule, the exclusion rule, the `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; nor F2 execution, real evidence generation, or provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q11 or Q12.
+
+**Implementation status.** Implemented by this entry: the runner and its 15 tests. Execution remains gated on Q10 and on an operator-supplied `CalibrationAuthorization`.
 
 ---
 
