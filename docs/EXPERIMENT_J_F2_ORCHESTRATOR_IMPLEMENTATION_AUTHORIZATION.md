@@ -293,6 +293,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-016 | ONE authoritative confirmatory interval (make `mcnemar_exact` report the frozen Clopper-Pearson CI) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); removes an ambiguous second CI; changes no scientific method; does not modify F0 |
 | F2-IMPL-AUTH-017 | Live worker -> governed bundle assembly (opt-in, fail-closed) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one production file plus its tests; invents no evaluator identity/store/digest; does not modify F0 |
 | F2-IMPL-AUTH-018 | Q5 block-level exclusion, Q6 infrastructure-failure operational gate, and the missingness rule (operator-granted) | AUTHORIZED | 2026-10-05 | Records operator-authorized methodological decisions from the F2 completion brief; documentation only (the outcome-independent invariants are already enforced in code); does not modify F0 |
+| F2-IMPL-AUTH-019 | Confirmatory analysis link: paired ledger -> final result + independent reconstruction | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); pure offline analysis that calls the FROZEN statistics unchanged; adds the missing final-chain link; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -930,6 +931,30 @@ No evaluator identity, implementation digest, trusted store, or task-outcome rep
 **Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, alpha, power, delta, pi_d, n, the statistical test, the CI, S8 admission, or the contamination state machine; no task admitted; no gold read; no credential; no security evidence; no confirmatory F2.
 
 **Implementation status.** Recorded. It implements nothing.
+
+### F2-IMPL-AUTH-019 - Confirmatory analysis link (ledger -> final result)
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-05 (F2 completion brief, section 3), entered by the agent. Completes the required chain `... -> paired outcome -> receipt -> statistical ledger -> final result`. Records no new science and changes no scientific parameter.
+
+**Issue.** No production code consumed the frozen confirmatory statistics: `mcnemar_exact` / `paired_risk_difference` / `required_pairs` had no non-test caller, so the `statistical ledger -> final result` link of the required chain did not exist.
+
+**Decision.** Add `qwen_train/f2_analysis.py` (pure, offline):
+
+* `finalize_f2(observations, ...)` builds the 2x2 table from the paired ledger and reports the frozen result by delegating to the shared `f2_statistics` implementation (so it cannot drift from the frozen method): `N`, `n00`, `n01`, `n10`, `n11`, `b`, `c`, `d`, `RD`, exact two-sided McNemar p, the authoritative Clopper-Pearson-transformed paired-RD 95% CI, direction, and the missing-by-reason ledger.
+* `independent_reconstruction(observations, ...)` re-derives the SAME numbers from the raw booleans as a SECOND implementation that does not import or call `f2_statistics`, so a defect in one is caught by the other (F2 section 21).
+* Missingness: a pair with either arm missing is not success, not failure, not silently dropped; it is excluded from the primary paired analysis and reported.
+
+**Verification.** `tests/test_f2_analysis.py` (10 tests): conventions and `to_dict` fields; field-for-field agreement with the authoritative `mcnemar_exact`; the R-transformed oracle; missingness accounting; and, decisively, `independent_reconstruction` still returns correct values when `f2_statistics.mcnemar_exact` is patched to raise, while `finalize_f2` then fails - proving the two paths are genuinely independent.
+
+**File boundary.** `qwen_train/f2_analysis.py` (plus `tests/test_f2_analysis.py`). No other file.
+
+**Explicit non-authorization.** Does NOT execute the experiment, contact any service, admit any task, read gold, provision credentials, or change the frozen method/CI/alpha/power/delta/pi_d/n. It is inert until a real paired ledger exists.
+
+**Implementation status.** Implemented, 10 tests. It cannot produce a scientific result until the confirmatory event has run (external prerequisites still absent).
 
 ---
 
