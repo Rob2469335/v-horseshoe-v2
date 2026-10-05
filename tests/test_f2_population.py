@@ -375,3 +375,21 @@ class TestContaminationProvenance:
     def test_created_at_is_recorded_on_the_entry(self):
         e = _entry(created_at="2025-06-01")
         assert e.created_at == "2025-06-01"
+
+    # -- F2-IMPL-AUTH-014: the explicit classification vocabulary -----------
+
+    def test_post_cutoff_is_clean(self):
+        e = _entry(created_at="2025-06-01", model_cutoff="2025-01-01")
+        assert e.contamination_class == "CLEAN"
+
+    def test_pre_cutoff_is_potentially_contaminated(self):
+        e = _entry(created_at="2024-06-01", model_cutoff="2025-01-01")
+        assert e.contamination_class == "POTENTIALLY CONTAMINATED"
+
+    def test_undeclared_cutoff_is_unknown_not_clean(self):
+        e = _entry()
+        assert e.contamination_class == "UNKNOWN"
+
+    def test_declared_cutoff_without_a_date_is_unknown_not_clean(self):
+        e = _entry(model_cutoff="2025-01-01")
+        assert e.contamination_class == "UNKNOWN"

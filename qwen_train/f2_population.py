@@ -100,6 +100,21 @@ class ScreenResult:
         return {"rule": self.rule, "passed": self.passed, "detail": self.detail}
 
 
+#: The contamination classification vocabulary (S10). UNKNOWN must never be
+#: silently treated as CLEAN.
+CONTAMINATION_CLEAN = "CLEAN"
+CONTAMINATION_POTENTIALLY = "POTENTIALLY CONTAMINATED"
+CONTAMINATION_UNKNOWN = "UNKNOWN"
+
+#: contamination_state -> classification
+_CONTAMINATION_CLASS = {
+    "POST_CUTOFF": CONTAMINATION_CLEAN,
+    "PRE_CUTOFF": CONTAMINATION_POTENTIALLY,
+    "NO_DATE": CONTAMINATION_UNKNOWN,
+    "NOT_DECLARED": CONTAMINATION_UNKNOWN,
+}
+
+
 @dataclass(frozen=True)
 class PopulationEntry:
     """One candidate task, with its frozen endpoint and recorded provenance."""
@@ -136,6 +151,17 @@ class PopulationEntry:
                 "constructed directly, so an admission decision cannot be forged "
                 "from caller-supplied booleans."
             )
+
+    @property
+    def contamination_class(self) -> str:
+        """S10 classification: CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN.
+
+        A temporal cutoff is a PROXY, not proof of zero contamination, and an
+        undeclared or dateless task is UNKNOWN - never silently CLEAN.
+        """
+        return _CONTAMINATION_CLASS.get(
+            self.contamination_state, CONTAMINATION_UNKNOWN
+        )
 
     @property
     def admitted(self) -> bool:

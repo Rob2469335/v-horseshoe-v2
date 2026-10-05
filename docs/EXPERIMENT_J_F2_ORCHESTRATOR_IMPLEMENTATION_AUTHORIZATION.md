@@ -287,6 +287,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-011 | Step 10 - calibration production adapter (membrane -> runner) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; wiring only, no authority; does not modify F0 |
 | F2-IMPL-AUTH-012 | Step 11 - contamination-provenance screen (S10, temporal-cutoff proxy) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; adds a screen, selects no parameter; does not modify F0 |
 | F2-IMPL-AUTH-013 | Statistical design authorization: F1 freeze, exact McNemar, pi_d=0.50, n=300 | AUTHORIZED | 2026-10-05 | Operator-authorized scientific parameters per this mission; documentation only; does not modify F0 |
+| F2-IMPL-AUTH-014 | Step 12 - explicit contamination classification vocabulary (CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; exposes a derived classification, changes no screening decision; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -775,6 +776,31 @@ REFERENCE TRUTH (sequestering). Stored outside every workspace, evaluator-only, 
 **Explicit non-authorization.** This entry does not authorize modifying F0, changing `k`, changing the endpoint, changing T/X/C0 definitions, rerunning F1, acquiring the task population, recovering gold patches, provisioning any credential, establishing host security, or executing confirmatory F2. Those remain BLOCKED or REQUIRES EXTERNAL PROVISIONING as recorded elsewhere.
 
 **Implementation status.** Recorded. It implements no code.
+
+### F2-IMPL-AUTH-014 - Step 12: explicit contamination classification vocabulary
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-05, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue.** S10 computes `contamination_state` (`NOT_DECLARED` / `NO_DATE` / `PRE_CUTOFF` / `POST_CUTOFF`) but exposes no explicit classification. The governing mission requires each task to be classified as **CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN**, and requires that **UNKNOWN never silently becomes CLEAN**.
+
+**Decision.** `qwen_train/f2_population.py` gains the constants `CONTAMINATION_CLEAN`, `CONTAMINATION_POTENTIALLY`, `CONTAMINATION_UNKNOWN`, the mapping `_CONTAMINATION_CLASS`, and the derived property `PopulationEntry.contamination_class`:
+
+- `POST_CUTOFF` -> **CLEAN**
+- `PRE_CUTOFF` -> **POTENTIALLY CONTAMINATED**
+- `NO_DATE`, `NOT_DECLARED` -> **UNKNOWN** (never CLEAN)
+- any unrecognised state -> **UNKNOWN** (fail-safe default)
+
+This is a DERIVED view: it changes no screening decision, no admission, no manifest field. The temporal cutoff remains a **PROXY**, not proof of zero contamination.
+
+**File boundary.** One production file: `qwen_train/f2_population.py` (plus its tests in `tests/test_f2_population.py`). No other file.
+
+**Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, S8 admission, the exclusion rule, or any statistical parameter; no cutoff value selected; no task admitted; no gold patch recovered; no credential provisioned; no security evidence; no confirmatory F2.
+
+**Implementation status.** Implemented, with 4 tests (RED->GREEN proven).
 
 ---
 
