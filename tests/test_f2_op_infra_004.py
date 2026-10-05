@@ -594,3 +594,99 @@ class TestWorkspaceMutationEvidence:
         ev = WORKER._capture_workspace_mutation(inst)
         assert "secret_artifact.txt" in ev["ignored_paths_sample"], ev["ignored_paths_sample"]
         assert ev["ignored_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-009 - mutation classification (engineering, not an exclusion rule)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkspaceMutationClassification:
+    """OBSERVED ACTIVITY -> CLASSIFICATION -> INTEGRITY ASSESSMENT.
+
+    This classification does not change admission or the endpoint; it turns the
+    raw observation into a reasoned verdict so a trusted admission authority can
+    act on it without re-deriving anything.
+    """
+
+    @staticmethod
+    def _ev(**kw):
+        base = {
+            "captured": True,
+            "base_commit_expected": "abc123",
+            "head_after": "abc123",
+            "head_unchanged": True,
+            "refs_after": [],
+            "touched_paths": [],
+            "ignored_count": 0,
+            "ignored_paths_sample": [],
+        }
+        base.update(kw)
+        return base
+
+    def test_clean_when_only_the_relevant_set_is_touched(self):
+        v = WORKER._classify_workspace_mutation(
+            self._ev(touched_paths=["src/a.py"]), relevant_file_set=["src/a.py"]
+        )
+        assert v["integrity"] == WORKER.INTEGRITY_CLEAN
+        assert v["classification"] == WORKER.MUTATION_EXPECTED
+        assert v["reasons"] == []
+
+    def test_suspicious_when_a_path_outside_the_relevant_set_is_touched(self):
+        v = WORKER._classify_workspace_mutation(
+            self._ev(touched_paths=["src/a.py", "docs/readme.md"]),
+            relevant_file_set=["src/a.py"],
+        )
+        assert v["integrity"] == WORKER.INTEGRITY_SUSPECT
+        assert v["classification"] == WORKER.MUTATION_SUSPICIOUS
+        assert "docs/readme.md" in v["by_class"][WORKER.MUTATION_SUSPICIOUS]
+
+    def test_prohibited_when_head_moved(self):
+        v = WORKER._classify_workspace_mutation(
+            self._ev(head_unchanged=False, head_after="deadbeef", touched_paths=[]),
+            relevant_file_set=["src/a.py"],
+        )
+        assert v["integrity"] == WORKER.INTEGRITY_COMPROMISED
+        assert v["classification"] == WORKER.MUTATION_PROHIBITED
+        assert any("HEAD moved" in r for r in v["reasons"])
+
+    def test_prohibited_when_a_ref_was_created(self):
+        v = WORKER._classify_workspace_mutation(
+            self._ev(refs_after=["refs/heads/escape"]),
+            relevant_file_set=["src/a.py"],
+        )
+        assert v["integrity"] == WORKER.INTEGRITY_COMPROMISED
+        assert "refs/heads/escape" in v["by_class"][WORKER.MUTATION_PROHIBITED]
+
+    def test_prohibited_when_git_internals_are_modified(self):
+        v = WORKER._classify_workspace_mutation(
+            self._ev(touched_paths=[".git/config"]), relevant_file_set=["src/a.py"]
+        )
+        assert v["integrity"] == WORKER.INTEGRITY_COMPROMISED
+        assert ".git/config" in v["by_class"][WORKER.MUTATION_PROHIBITED]
+
+    def test_authorized_test_patch_path_is_allowed_not_suspicious(self):
+        v = WORKER._classify_workspace_mutation(
+            self._ev(touched_paths=["tests/thing_test.py"]),
+            relevant_file_set=["src/a.py"],
+            authorized_paths=["tests/thing_test.py"],
+        )
+        assert v["integrity"] == WORKER.INTEGRITY_CLEAN
+        assert "tests/thing_test.py" in v["by_class"][WORKER.MUTATION_ALLOWED]
+
+    def test_ignored_artifacts_make_it_suspicious(self):
+        v = WORKER._classify_workspace_mutation(
+            self._ev(ignored_count=3, ignored_paths_sample=["secret.txt"]),
+            relevant_file_set=["src/a.py"],
+        )
+        assert v["integrity"] == WORKER.INTEGRITY_SUSPECT
+
+    def test_uncaptured_workspace_is_unknown_not_clean(self):
+        v = WORKER._classify_workspace_mutation({"captured": False})
+        assert v["integrity"] == WORKER.INTEGRITY_UNKNOWN
+        assert v["classification"] == WORKER.MUTATION_UNKNOWN
+
+    def test_receipt_carries_the_classification(self):
+        src = (REPO_ROOT / "qwen_train" / "f2_arm_worker.py").read_text("utf-8")
+        assert "_classify_workspace_mutation" in src
+        assert 'workspace_mutation["classification"]' in src

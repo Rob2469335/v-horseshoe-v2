@@ -36,7 +36,7 @@ import sys
 import time
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 # ---------------------------------------------------------------------------
 # Fresh-process repository-root bootstrap (BEFORE any repository import).
@@ -188,6 +188,111 @@ def _capture_workspace_mutation(
         # Hidden-artifact detection (bounded sample).
         "ignored_paths_sample": ignored[:50],
         "ignored_count": len(ignored),
+    }
+
+
+MUTATION_ALLOWED = "allowed"
+MUTATION_EXPECTED = "expected"
+MUTATION_SUSPICIOUS = "suspicious"
+MUTATION_PROHIBITED = "prohibited"
+MUTATION_UNKNOWN = "unknown"
+
+#: Integrity assessment values derived from the classification.
+INTEGRITY_CLEAN = "clean"
+INTEGRITY_SUSPECT = "suspect"
+INTEGRITY_COMPROMISED = "compromised"
+INTEGRITY_UNKNOWN = "unknown"
+
+
+def _classify_workspace_mutation(
+    evidence: Mapping[str, Any],
+    *,
+    relevant_file_set: Sequence[str] | None = None,
+    authorized_paths: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Classify observed workspace activity and assess its integrity.
+
+    ENGINEERING assessment, NOT an exclusion rule. The F2 admission authority -
+    not the arm, and not this function - decides admissibility; this only turns
+    raw observation into a reasoned classification so that decision is auditable
+    rather than re-derived ad hoc. Nothing here changes the endpoint, the outcome
+    or the statistics.
+
+    Order matters: a prohibited signal (history manipulation) dominates, because a
+    clean working tree can otherwise be manufactured by committing.
+    """
+    reasons: list[str] = []
+    by_class: dict[str, list[str]] = {
+        MUTATION_ALLOWED: [],
+        MUTATION_EXPECTED: [],
+        MUTATION_SUSPICIOUS: [],
+        MUTATION_PROHIBITED: [],
+    }
+
+    if not evidence.get("captured"):
+        return {
+            "classification": MUTATION_UNKNOWN,
+            "integrity": INTEGRITY_UNKNOWN,
+            "reasons": ["workspace could not be inspected"],
+            "by_class": by_class,
+        }
+
+    allowed = {str(p) for p in (authorized_paths or ())}
+    expected = {str(p) for p in (relevant_file_set or ())}
+
+    # -- prohibited: history manipulation ---------------------------------
+    if evidence.get("base_commit_expected") and not evidence.get("head_unchanged"):
+        reasons.append(
+            f"HEAD moved from the reset base: {evidence.get('head_after')!r} != "
+            f"{evidence.get('base_commit_expected')!r} (a commit can hide a mutation)"
+        )
+        by_class[MUTATION_PROHIBITED].append("<HEAD>")
+
+    # _strip_future_history deletes EVERY ref and detaches at base, so the
+    # expected post-run ref set is EMPTY; any surviving ref is unexpected.
+    refs = [str(r).strip() for r in (evidence.get("refs_after") or []) if str(r).strip()]
+    unexpected_refs = refs
+    if unexpected_refs:
+        reasons.append(f"unexpected git refs present: {unexpected_refs[:5]}")
+        by_class[MUTATION_PROHIBITED].extend(unexpected_refs[:5])
+
+    # -- per-path classification ------------------------------------------
+    for p in evidence.get("touched_paths") or []:
+        sp = str(p)
+        if sp.startswith(".git/") or sp == ".git":
+            by_class[MUTATION_PROHIBITED].append(sp)
+            reasons.append(f"git internals modified: {sp}")
+        elif sp in allowed:
+            by_class[MUTATION_ALLOWED].append(sp)
+        elif sp in expected:
+            by_class[MUTATION_EXPECTED].append(sp)
+        else:
+            by_class[MUTATION_SUSPICIOUS].append(sp)
+
+    if evidence.get("ignored_count"):
+        reasons.append(
+            f"{evidence['ignored_count']} ignored path(s) present "
+            "(hidden artifacts are invisible to -uall)"
+        )
+        by_class[MUTATION_SUSPICIOUS].extend(
+            str(p) for p in (evidence.get("ignored_paths_sample") or [])[:5]
+        )
+
+    # -- assessment -------------------------------------------------------
+    if by_class[MUTATION_PROHIBITED]:
+        classification, integrity = MUTATION_PROHIBITED, INTEGRITY_COMPROMISED
+    elif by_class[MUTATION_SUSPICIOUS]:
+        classification, integrity = MUTATION_SUSPICIOUS, INTEGRITY_SUSPECT
+    elif by_class[MUTATION_EXPECTED] or by_class[MUTATION_ALLOWED]:
+        classification, integrity = MUTATION_EXPECTED, INTEGRITY_CLEAN
+    else:
+        classification, integrity = MUTATION_ALLOWED, INTEGRITY_CLEAN
+
+    return {
+        "classification": classification,
+        "integrity": integrity,
+        "reasons": reasons,
+        "by_class": {k: sorted(v) for k, v in by_class.items()},
     }
 
 
@@ -531,6 +636,11 @@ def run_worker(argv: list[str] | None = None) -> int:
         workspace_mutation = _capture_workspace_mutation(
             workspace_root,
             str((artifact.task_readiness or {}).get("base_commit", "")),
+        )
+        # ENGINEERING classification of the observation (not an exclusion rule).
+        _rfs = tuple((artifact.task_readiness or {}).get("relevant_file_set") or ())
+        workspace_mutation["classification"] = _classify_workspace_mutation(
+            workspace_mutation, relevant_file_set=_rfs
         )
 
         receipt: dict[str, Any] = {

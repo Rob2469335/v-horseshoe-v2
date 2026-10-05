@@ -282,6 +282,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-006 | Step 5 - record post-run workspace-mutation integrity evidence | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
 | F2-IMPL-AUTH-007 | Step 6 - strengthen workspace-mutation evidence against the commit/ref/ignored-artifact bypasses | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
 | F2-IMPL-AUTH-008 | Step 7 - F2Bundle persistence round-trip identity tests, and the authoritative assembly-point clarification | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); tests only plus a design clarification; does not modify F0 |
+| F2-IMPL-AUTH-009 | Step 8 - workspace-mutation classification (engineering assessment) and the operator execution contracts | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file; observation and classification only, adds no exclusion rule; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -611,6 +612,40 @@ None of these is a scoring bug; all three are evaluation-integrity observation g
 **Explicit non-authorization.** This entry does not authorize any production change, any change to `assemble_f2_bundle` or its callers, any change to the `F2Result` schema, `_reconstruct_endpoint`, `f2_admission.py`, `qwen_train/arm_workspace.py`, the delivery seam, or any frozen artifact; no F2 execution; no real F2 evidence generation; and no provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
 
 **Implementation status.** This entry authorizes the tests it names; the design clarification in item 2 is recorded here and requires no code change.
+
+### F2-IMPL-AUTH-009 - Step 8: workspace-mutation classification and the operator execution contracts
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue.** F2-IMPL-AUTH-006/-007 record the workspace mutation as raw observation, but nothing turns it into a reasoned verdict, so any consumer would have to re-derive one ad hoc. Separately, every remaining external dependency (network, sandbox, population, secrets) is described in prose rather than as a machine-checkable contract, which is why it keeps needing re-litigation.
+
+**Decision 1 - engineering classification (implemented).** `qwen_train/f2_arm_worker.py` gains `_classify_workspace_mutation(evidence, *, relevant_file_set, authorized_paths)`, and the receipt carries `workspace_mutation["classification"]`. It maps OBSERVED ACTIVITY to one of `allowed` / `expected` / `suspicious` / `prohibited` / `unknown` and to an integrity assessment `clean` / `suspect` / `compromised` / `unknown`. A prohibited signal dominates, because a clean tree can otherwise be manufactured by committing. This is an ENGINEERING assessment ONLY: it changes no endpoint, no outcome, no statistics, and it is NOT an exclusion rule. Whether a classification excludes an observation is a SCIENTIFIC decision reserved to the admission authority and to Q1-Q6 (see Decision 2).
+
+**Decision 2 - the exclusion rule is NOT set here (REQUIRES AUTHORIZATION).** Mapping `compromised` to "excluded from the primary analysis" is a pre-registered analysis rule. It is deliberately NOT implemented in code, because defining it after seeing data would be a researcher degree of freedom. It is recorded here as the exact authorization-ready rule: "an observation whose `workspace_mutation.classification.integrity` is `compromised` is INVALID and is excluded from the primary T/X analysis as missing data; `suspect` and `unknown` are recorded and reported but do not by themselves exclude."
+
+**Decision 3 - operator execution contracts (recorded).** The remaining external dependencies are specified below as machine-checkable contracts so the operator can satisfy them without another design cycle.
+
+**File boundary.** One production file: `qwen_train/f2_arm_worker.py` (plus its tests in `tests/test_f2_op_infra_004.py`, already named in F2-IMPL-AUTH-004). No other file.
+
+**Explicit non-authorization.** No exclusion or invalidation rule in code; no change to the endpoint, outcome, `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, `f2_admission.py`, or any frozen artifact; no F2 execution; no real F2 evidence generation; no provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
+
+**Operator execution contracts.**
+
+NETWORK (Q9). Windows-native, because the host is Windows 11. Preferred: run the model backend INSIDE the sandbox and set `<Networking>Disable</Networking>` in the `.wsb`; the F2 arm reaches the model over loopback inside the sandbox, and no external egress exists. Alternative: AppContainer isolation with loopback-only capability, or a host firewall rule that permits only `127.0.0.1:<model-port>` and denies all other egress. Note that Windows Sandbox enables networking BY DEFAULT and that total disable breaks a loopback model call, so the allowlist or the model-inside-sandbox design is required. ACCEPTANCE: from inside the arm, `curl https://example.com` MUST fail; a raw socket to `1.1.1.1:53` MUST fail; a raw UDP packet MUST fail; an IPv6 egress attempt MUST fail; a proxy env var MUST NOT create a path; loopback to the model port MUST succeed; the host-side control MUST succeed.
+
+SANDBOX. Windows Sandbox (hypervisor-backed) with `<ProtectedClient>Enable</ProtectedClient>`. ACCEPTANCE: fresh instance per arm; no persistence between arms; only the task workspace is mapped; the evaluator, the reference truth and other arms are NOT mapped and are unreachable; `.git` future history is absent. NOTE: a mapped folder with write permission PERSISTS after disposal, so the host-side result must be re-verified after the sandbox closes.
+
+POPULATION (Q1). Source MUST be contamination-resistant: SWE-rebench or SWE-bench-Live, NOT vanilla SWE-bench (measured 32.67 percent direct solution leakage, 31.08 percent inadequate tests). ACCEPTANCE: frozen digest; every instance created after the model training cutoff; held-out provenance recorded; contamination screen passed; endpoint derived by `reference_modified_file_set_v1`; reference fix unique (the current fail-closed refusal of ambiguous references is preserved); relevant_file_set frozen; minimum N 19, target 85.
+
+SECRETS (Q7, Q11). Owner: the operator. Location: the operator's `.env` only. Scope: never in the arm workspace, never in task files, never in logs, never in the bundle payload, never in a model prompt. `SWARM_DISTILLER_MODEL` and `SWARM_DISTILLER_WEIGHTS_DIGEST` are read by `lesson_distiller.default_local_identity` (fail-closed, already verified). `SWARM_RECEIPT_KEY` is read by `prompt_repairer._receipt_key` (env-only, fail-closed, already verified). ACCEPTANCE: missing key fails closed; wrong key fails; tampered receipt fails; a valid trusted receipt succeeds.
+
+REFERENCE TRUTH (sequestering). Stored outside every workspace, evaluator-only, digest-pinned, unavailable during agent execution.
+
+**Implementation status.** Decision 1 is implemented by this entry. Decisions 2 and 3 are recorded here and require the operator or Q1-Q6 authorization.
 
 ---
 
