@@ -411,6 +411,371 @@ def _verify_p2_evidence_binding(p2_evidence: dict[str, Any], artifact: Any) -> s
     return p2_agent_id if isinstance(p2_agent_id, str) else ""
 
 
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-017: live worker -> governed bundle assembly (fail closed).
+#
+# The worker already produces the raw material for a governed F2Bundle: the
+# exact delivered bytes, P2's authenticated delivery evidence, the workspace/
+# task binding, and the trajectory. This section connects that material to
+# ``assemble_f2_bundle`` + an independent regrade, consuming ONLY
+# operator-provided governance inputs (a trusted artifact root, an evaluator
+# authorization, and the evaluator's task-outcome report). It invents no
+# evaluator identity, implementation digest, or store: with any of them absent
+# it fails closed and names the missing input. Disabled unless
+# ``SWARM_F2_EMIT_BUNDLE=1``, so the existing receipt contract is unchanged.
+# ---------------------------------------------------------------------------
+F2_EMIT_BUNDLE_ENV = "SWARM_F2_EMIT_BUNDLE"
+F2_ARTIFACT_ROOT_ENV = "SWARM_F2_ARTIFACT_ROOT"
+F2_ARTIFACT_RETENTION_DAYS_ENV = "SWARM_F2_ARTIFACT_RETENTION_DAYS"
+F2_EVALUATOR_ID_ENV = "SWARM_F2_EVALUATOR_ID"
+F2_EVALUATOR_VERSION_ENV = "SWARM_F2_EVALUATOR_VERSION"
+F2_EVALUATOR_IMPL_ENV = "SWARM_F2_EVALUATOR_IMPL"
+F2_EVALUATOR_PROCEDURE_ENV = "SWARM_F2_EVALUATOR_PROCEDURE"
+F2_TASK_OUTCOME_ENV = "SWARM_F2_TASK_OUTCOME_REPORT"
+
+#: Every governance input the bundle path requires, with a human label. Absence
+#: of any one is a fail-closed condition naming exactly what must be supplied.
+_BUNDLE_CONFIG_REQUIRED: tuple[tuple[str, str], ...] = (
+    (F2_ARTIFACT_ROOT_ENV, "trusted artifact store root (absolute path)"),
+    (F2_ARTIFACT_RETENTION_DAYS_ENV, "artifact retention in days (integer)"),
+    (F2_EVALUATOR_ID_ENV, "authorized evaluator identity"),
+    (F2_EVALUATOR_VERSION_ENV, "authorized evaluator version"),
+    (F2_EVALUATOR_IMPL_ENV, "evaluator implementation artifact path"),
+    (F2_EVALUATOR_PROCEDURE_ENV, "authorized evaluator procedure identity"),
+    (F2_TASK_OUTCOME_ENV, "task-outcome report path (fail_to_pass map)"),
+)
+
+
+def _behavioral_records_from_trajectory(
+    records: "Sequence[Mapping[str, Any]]",
+) -> list[dict[str, Any]]:
+    """Convert P2 ``record_type="step"`` trajectory records to the flat F2 shape.
+
+    The protocol retains flat ``{step_id, timestamp, function_name, operation,
+    path}`` records; the trajectory stores ATIF steps whose ``tool_calls`` carry
+    ``arguments.operation`` / ``arguments.path`` (verified against real
+    trajectories). This is a pure field projection — it invents nothing.
+    """
+    out: list[dict[str, Any]] = []
+    for rec in records or ():
+        if not isinstance(rec, Mapping):
+            continue
+        if str(rec.get("record_type") or "") != "step":
+            continue
+        ts = rec.get("timestamp")
+        for tc in rec.get("tool_calls") or ():
+            if not isinstance(tc, Mapping):
+                continue
+            args = tc.get("arguments") or {}
+            extra = tc.get("extra") or {}
+            operation = (
+                args.get("operation")
+                or args.get("action")
+                or (extra.get("operation") if isinstance(extra, Mapping) else "")
+                or ""
+            )
+            path = args.get("path") or (
+                extra.get("path") if isinstance(extra, Mapping) else ""
+            ) or ""
+            out.append(
+                {
+                    "step_id": rec.get("step_id"),
+                    "timestamp": ts,
+                    "function_name": str(tc.get("function_name") or ""),
+                    "operation": str(operation),
+                    "path": str(path),
+                }
+            )
+    return out
+
+
+def _task_success_from_report(report: Mapping[str, Any]) -> bool:
+    """Derive the SECONDARY outcome from the evaluator's retained report.
+
+    Mirrors ``f2_protocol._derive_task_outcome``: every declared FAIL_TO_PASS
+    node must be ``passed``. Fail closed on a missing/empty/oddly-typed map.
+    """
+    f2p = report.get("fail_to_pass") if isinstance(report, Mapping) else None
+    if not isinstance(f2p, Mapping) or not f2p:
+        raise FreezeVerificationError(
+            "task-outcome report has no non-empty 'fail_to_pass' map"
+        )
+    statuses = {str(v).lower() for v in f2p.values()}
+    allowed = {"passed", "failed", "error", "skipped"}
+    if not statuses <= allowed:
+        raise FreezeVerificationError(
+            f"task-outcome report has unrecognised test statuses: {sorted(statuses)}"
+        )
+    return statuses <= {"passed"}
+
+
+def assemble_worker_bundle(
+    *,
+    store: Any,
+    evaluator: Any,
+    implementation_bytes: bytes,
+    manifest: Any,
+    task_binding: Mapping[str, Any],
+    seam_delivery: Mapping[str, Any],
+    trajectory_records: "Sequence[Mapping[str, Any]]",
+    task_outcome_report: Mapping[str, Any],
+    slug: str,
+) -> Any:
+    """Assemble the governed F2Bundle for THIS arm from retained live evidence.
+
+    This is the bounded worker->bundle step of the F2 protocol
+    (``CONTROLLED EXECUTION -> IMMUTABLE EVIDENCE BUNDLE -> ... -> REGRADE``).
+    It computes the PRODUCER DECLARATIONS from raw evidence (endpoint via the
+    FROZEN detector, task outcome from the retained report); those declarations
+    are then independently re-derived and rejected on disagreement by
+    ``regrade_f2_pair``. The producer is never authoritative for the result.
+    """
+    from qwen_train.f2_calibration import endpoint_from_trajectory
+    from qwen_train.f2_endpoint import freeze_endpoint
+    from qwen_train.f2_protocol import assemble_f2_bundle
+
+    tr = manifest.task_readiness or {}
+    instance_id = str(tr.get("task_id") or "")
+    base_commit = str(tr.get("base_commit") or "")
+    relevant_file_set = tuple(tr.get("relevant_file_set") or ())
+    if not instance_id or not base_commit or not relevant_file_set:
+        raise FreezeVerificationError(
+            "F2 fail-closed: the frozen manifest carries no task_readiness "
+            "(task_id/base_commit/relevant_file_set) to bind a bundle"
+        )
+    repository = str(task_binding.get("repo") or "")
+    horizon_k = 12
+
+    spec = freeze_endpoint(
+        task_id=instance_id,
+        relevant_file_set=relevant_file_set,
+        horizon_steps=horizon_k,
+        derivation_evidence=("f2_experiment_j_v1",),
+    )
+    hit = endpoint_from_trajectory(trajectory_records, spec)
+    declared_endpoint = hit is not None
+    declared_first_edit_step = int(hit["step_id"]) if hit is not None else None
+    declared_task_success = _task_success_from_report(task_outcome_report)
+
+    lesson_block_text = None
+    if manifest.arm == "T":
+        from qwen_train.f2_arm_primitives import render_block_from_records
+
+        lesson_block_text = render_block_from_records(manifest.ordered_lessons)
+
+    return assemble_f2_bundle(
+        store=store,
+        arm=manifest.arm,
+        instance_id=instance_id,
+        repository=repository,
+        base_commit=base_commit,
+        relevant_file_set=relevant_file_set,
+        horizon_k=horizon_k,
+        seam_delivery=seam_delivery,
+        behavioral_records=_behavioral_records_from_trajectory(trajectory_records),
+        task_outcome_report=task_outcome_report,
+        evaluator=evaluator,
+        implementation_bytes=implementation_bytes,
+        lesson_block_text=lesson_block_text,
+        declared_endpoint=declared_endpoint,
+        declared_first_edit_step=declared_first_edit_step,
+        declared_task_success=declared_task_success,
+        slug=slug,
+    )
+
+
+def _load_bundle_governance() -> dict[str, Any]:
+    """Load the operator-provided governance inputs for bundle assembly.
+
+    FAIL CLOSED: any absent required input raises, naming exactly what the
+    operator must supply. Nothing here is fabricated or defaulted.
+    """
+    import json as _json
+
+    from qwen_train.f2_governance import (
+        EvaluatorAuthorization,
+        EvaluatorRegistry,
+        RetentionPolicy,
+        TrustedArtifactStore,
+    )
+    from qwen_train.f2_protocol import F2_PROTOCOL_ID
+
+    missing = [f"{env} ({label})" for env, label in _BUNDLE_CONFIG_REQUIRED
+               if not str(os.environ.get(env, "")).strip()]
+    if missing:
+        raise FreezeVerificationError(
+            "F2 fail-closed: bundle emission requested but governance inputs are "
+            "missing: " + "; ".join(missing) + ". The live worker->bundle path needs "
+            "an operator-provisioned trusted store and evaluator authorization; none "
+            "is fabricated."
+        )
+
+    root = Path(os.environ[F2_ARTIFACT_ROOT_ENV])
+    if not root.is_absolute():
+        raise FreezeVerificationError(
+            f"F2 fail-closed: {F2_ARTIFACT_ROOT_ENV} must be an absolute path"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        retention_days = int(os.environ[F2_ARTIFACT_RETENTION_DAYS_ENV])
+    except ValueError as exc:
+        raise FreezeVerificationError(
+            f"F2 fail-closed: {F2_ARTIFACT_RETENTION_DAYS_ENV} must be an integer"
+        ) from exc
+
+    impl_path = Path(os.environ[F2_EVALUATOR_IMPL_ENV])
+    if not impl_path.is_file():
+        raise FreezeVerificationError(
+            f"F2 fail-closed: evaluator implementation artifact not found: {impl_path}"
+        )
+    implementation_bytes = impl_path.read_bytes()
+
+    evaluator = EvaluatorAuthorization(
+        evaluator_id=os.environ[F2_EVALUATOR_ID_ENV],
+        version=os.environ[F2_EVALUATOR_VERSION_ENV],
+        implementation_digest=hashlib.sha256(implementation_bytes).hexdigest(),
+        procedure_id=os.environ[F2_EVALUATOR_PROCEDURE_ENV],
+        protocol_version=F2_PROTOCOL_ID,
+    )
+    store = TrustedArtifactStore(
+        root, RetentionPolicy("f2_retention", retention_days, True)
+    )
+    registry = EvaluatorRegistry([evaluator])
+
+    report_path = Path(os.environ[F2_TASK_OUTCOME_ENV])
+    if not report_path.is_file():
+        raise FreezeVerificationError(
+            f"F2 fail-closed: task-outcome report not found: {report_path}"
+        )
+    task_outcome_report = _json.loads(report_path.read_text(encoding="utf-8"))
+
+    return {
+        "store": store,
+        "registry": registry,
+        "evaluator": evaluator,
+        "implementation_bytes": implementation_bytes,
+        "task_outcome_report": task_outcome_report,
+    }
+
+
+def _read_trajectory_records(workspace_root: Path, trajectory_run_id: str) -> list[dict[str, Any]]:
+    """Read the arm's raw trajectory JSONL records (all record types)."""
+    run_id = (trajectory_run_id or "").strip()
+    if not run_id:
+        raise FreezeVerificationError(
+            "F2 fail-closed: bundle assembly requires the arm's trajectory_run_id"
+        )
+    traj_file = _resolve_traj_dir(workspace_root) / f"{run_id}.jsonl"
+    if not traj_file.is_file():
+        raise FreezeVerificationError(
+            f"F2 fail-closed: trajectory not found for bundle assembly: {traj_file}"
+        )
+    records: list[dict[str, Any]] = []
+    for line in traj_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def emit_worker_bundle(
+    *,
+    manifest: Any,
+    task_binding: Mapping[str, Any],
+    p2_evidence: Mapping[str, Any] | None,
+    delivered_actual: str,
+    workspace_root: Path,
+    rollout_id: str,
+    trajectory_run_id: str,
+    system_prompt: str,
+) -> dict[str, Any]:
+    """Assemble, persist and regrade-check the governed bundle for this arm.
+
+    Returns a compact, auditable descriptor. Raises (fail closed) on any missing
+    governance input, absent trajectory, or assembly/regrade disagreement.
+    """
+    governance = _load_bundle_governance()
+    store = governance["store"]
+    registry = governance["registry"]
+    evaluator = governance["evaluator"]
+    implementation_bytes = governance["implementation_bytes"]
+    task_outcome_report = governance["task_outcome_report"]
+
+    trajectory_records = _read_trajectory_records(workspace_root, trajectory_run_id)
+
+    # The seam record is the authoritative delivery evidence. P2's authenticated
+    # record is preferred; the P1 computation is used only when P2 is absent
+    # (delegated path), and assembly still fails closed on a non-canonical
+    # timestamp.
+    delivered_bytes = delivered_actual.encode("utf-8")
+    seam = {
+        "arm": manifest.arm,
+        "delivered_block": delivered_actual,
+        "lesson_block_hash": hashlib.sha256(delivered_bytes).hexdigest(),
+        "final_prompt_hash": (
+            (p2_evidence or {}).get("final_prompt_hash")
+            or _compute_final_prompt_hash(system_prompt, delivered_actual)
+        ),
+        "delivery_timestamp": (p2_evidence or {}).get("delivery_timestamp"),
+    }
+    if seam["delivery_timestamp"] is None or str(seam["delivery_timestamp"]).strip() == "":
+        raise FreezeVerificationError(
+            "F2 fail-closed: no authenticated delivery timestamp for bundle assembly"
+        )
+
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{rollout_id}_{manifest.arm}")
+    bundle = assemble_worker_bundle(
+        store=store,
+        evaluator=evaluator,
+        implementation_bytes=implementation_bytes,
+        manifest=manifest,
+        task_binding=task_binding,
+        seam_delivery=seam,
+        trajectory_records=trajectory_records,
+        task_outcome_report=task_outcome_report,
+        slug=f"{safe}_",
+    )
+
+    # Independent regrade of THIS arm against the retained bundle bytes.
+    from qwen_train.f2_protocol import regrade_f2
+
+    verification = regrade_f2(
+        bundle,
+        store=store,
+        registry=registry,
+        relevant_file_set=tuple((manifest.task_readiness or {}).get("relevant_file_set") or ()),
+        expected_arm=manifest.arm,
+    )
+    if not verification.ok:
+        raise FreezeVerificationError(
+            f"F2 fail-closed: assembled bundle failed independent regrade "
+            f"({verification.state}): {verification.detail}"
+        )
+
+    bundle_json = json.dumps(bundle.to_dict(), sort_keys=True, separators=(",", ":"))
+    bundle_digest = hashlib.sha256(bundle_json.encode("utf-8")).hexdigest()
+    bundle_path = Path(workspace_root) / "data" / "f2_bundles" / f"{safe}.bundle.json"
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    bundle_path.write_text(bundle_json, encoding="utf-8")
+
+    return {
+        "bundle_path": str(bundle_path),
+        "bundle_digest": bundle_digest,
+        "instance_id": bundle.instance_id,
+        "arm": bundle.arm,
+        "regrade_state": verification.state,
+        "behavioral_artifact_digest": bundle.behavioral_artifact.digest,
+        "task_outcome_artifact_digest": bundle.task_outcome_artifact.digest,
+        "treatment_artifact_digest": bundle.treatment_artifact.digest,
+        "delivery_artifact_digest": bundle.delivery_artifact.digest,
+        "implementation_artifact_digest": bundle.implementation_artifact.digest,
+    }
+
+
 def run_worker(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="F2 fresh arm worker")
     parser.add_argument("--manifest", required=True, help="Path to the frozen F2 manifest")
@@ -696,6 +1061,19 @@ def run_worker(argv: list[str] | None = None) -> int:
             # Integrity evidence: which repository paths this arm touched.
             "workspace_mutation_evidence": workspace_mutation,
         }
+        # F2-IMPL-AUTH-017: opt-in governed bundle emission. Disabled by default,
+        # so the historical receipt contract is byte-identical unless requested.
+        if os.environ.get(F2_EMIT_BUNDLE_ENV, "").strip() == "1":
+            receipt["f2_bundle"] = emit_worker_bundle(
+                manifest=artifact,
+                task_binding=(execution_result.get("task_binding") or {}),
+                p2_evidence=p2_evidence,
+                delivered_actual=delivered_actual,
+                workspace_root=workspace_root,
+                rollout_id=rollout_id,
+                trajectory_run_id=trajectory_run_id,
+                system_prompt=args.system_prompt,
+            )
         print(_arm_report(receipt))
         return 0
 
