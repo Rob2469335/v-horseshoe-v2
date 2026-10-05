@@ -414,6 +414,10 @@ class SynthesisAttestation:
             "rationale": self.rationale,
             "task_id": self.task_id,
             "rollout_id": self.rollout_id,
+            # R5 / F2-IMPL-AUTH-005: the structured provenance block must survive
+            # persistence. Omitting it here silently discarded the weights digest,
+            # prompt digest, frozen sampling config and code version on every save.
+            "distiller_reproducibility": dict(self.distiller_reproducibility),
         }
 
     @classmethod
@@ -434,6 +438,8 @@ class SynthesisAttestation:
             rationale=str(d.get("rationale") or ""),
             task_id=str(d.get("task_id") or ""),
             rollout_id=str(d.get("rollout_id") or ""),
+            # F2-IMPL-AUTH-005: restore the block written by to_dict().
+            distiller_reproducibility=dict(d.get("distiller_reproducibility") or {}),
         )
 
 

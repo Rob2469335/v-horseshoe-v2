@@ -208,7 +208,24 @@ async def _store_decision_reflexion(
     BOTH as episodic memory AND as a structured ReflexionMemory rule so that
     check_for_past_mistakes() can inject a [PAST-MISTAKE WARNING] into a future
     decision (was: episodic remember_fact only, so decision-level lessons never
-    reached the warning path)."""
+    reached the warning path).
+
+    F2-IMPL-AUTH-005: an F2 arm runs under FROZEN_REPLAY, which is a clean-room
+    experiment, so this must NOT touch the learning pipeline. Without this guard a
+    routine decision failure in ANY arm (T, X or the no-lesson calibration) called
+    ``process_failure`` with the harness task id set, minting a PromptRepairer
+    CANDIDATE and appending promotion evidence - so the "exactly one genuine
+    learning event" the F2 plan requires was not actually one, and calibration
+    could accumulate evidence on candidates other than the intended lesson. In
+    replay mode the write is skipped entirely; behaviour outside F2 is unchanged.
+    """
+    if is_replay_active():
+        log.debug(
+            "[%s] F2 replay active: decision-failure write suppressed "
+            "(clean-room; no candidate, no evidence, no reflexion)",
+            agent_id,
+        )
+        return
     try:
         from runtime_v2.services.memory_core import remember_fact
 

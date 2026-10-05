@@ -316,3 +316,89 @@ class TestFourStateTaxonomy:
 
 async def _fake_render(q, max_chars=700):
     return "[LIVE LESSONS] fakelesson"
+
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-005 - an F2 arm must not write to the learning pipeline
+# ---------------------------------------------------------------------------
+
+
+class TestF2ReplaySuppressesLearningWrites:
+    """In replay mode a decision failure must not mint a learning candidate.
+
+    Before the guard, `_store_decision_reflexion` called
+    `get_prompt_repairer().process_failure(...)` with the harness task id set, so
+    ANY arm (T, X, or the no-lesson calibration) created a PromptRepairer
+    candidate from an ordinary decision failure - defeating the plan's
+    "exactly one genuine learning event" clean-room requirement.
+    """
+
+    async def test_replay_active_suppresses_every_learning_write(self, monkeypatch):
+        calls = {"remember": 0, "reflexion": 0, "process_failure": 0}
+
+        import runtime_v2.services.memory_core as memory_core
+
+        def _remember(*a, **k):
+            calls["remember"] += 1
+
+        class _Refl:
+            async def store_reflexion(self, **k):
+                calls["reflexion"] += 1
+
+        class _Repairer:
+            async def process_failure(self, **k):
+                calls["process_failure"] += 1
+
+        monkeypatch.setattr(memory_core, "remember_fact", _remember)
+        monkeypatch.setattr(
+            "swarm_os.services.reflection_loop.get_reflection_service",
+            lambda: _Refl(),
+        )
+        monkeypatch.setattr(
+            "swarm_os.services.prompt_repairer.get_prompt_repairer",
+            lambda: _Repairer(),
+        )
+        # F2 replay ACTIVE
+        monkeypatch.setattr(stream_runner, "is_replay_active", _FakeReplayActive(True))
+
+        await stream_runner._store_decision_reflexion(
+            "coder", "malformed JSON", "bad json", "fix it", "do not repeat"
+        )
+        assert calls == {"remember": 0, "reflexion": 0, "process_failure": 0}, (
+            f"F2 replay must suppress ALL learning-pipeline writes, got {calls}"
+        )
+
+    async def test_replay_inactive_still_writes(self, monkeypatch):
+        """Control: outside F2 the behaviour is unchanged (writes still happen)."""
+        calls = {"process_failure": 0}
+
+        class _Repairer:
+            async def process_failure(self, **k):
+                calls["process_failure"] += 1
+
+        class _Refl:
+            async def store_reflexion(self, **k):
+                pass
+
+        # Stub EVERY dependency so this control writes nothing real: an unstubbed
+        # remember_fact would fire a genuine background episodic-memory write and
+        # pollute later tests.
+        import runtime_v2.services.memory_core as memory_core
+
+        monkeypatch.setattr(memory_core, "remember_fact", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "swarm_os.services.reflection_loop.get_reflection_service",
+            lambda: _Refl(),
+        )
+        monkeypatch.setattr(
+            "swarm_os.services.prompt_repairer.get_prompt_repairer",
+            lambda: _Repairer(),
+        )
+        monkeypatch.setattr(stream_runner, "is_replay_active", _FakeReplayActive(False))
+
+        await stream_runner._store_decision_reflexion(
+            "coder", "malformed JSON", "bad json", "fix it", "do not repeat"
+        )
+        assert calls["process_failure"] == 1, (
+            "non-F2 behaviour must be unchanged: the write still happens"
+        )

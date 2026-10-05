@@ -217,3 +217,66 @@ class TestAttestationCarriesTheRecord:
             validator_passed=True,
         )
         assert att.distiller_reproducibility == {}
+
+    def test_populated_record_survives_persistence_round_trip(self):
+        """F2-IMPL-AUTH-005: a POPULATED block must survive to_dict -> from_dict.
+
+        The pre-fix defect was that ``to_dict`` omitted the field entirely, so the
+        weights digest, prompt digest, frozen sampling config and code version were
+        silently discarded on every save. The readiness-plan row 16 claim ("persisted
+        attestation carries the full reproducibility block") was therefore NOT
+        ESTABLISHED. This test exercises a POPULATED block, not the empty default.
+        """
+        from swarm_os.services.lesson_synthesis import SynthesisAttestation
+
+        block = {
+            "provider": "local",
+            "model_id": "qwen3.5-4b",
+            "qualified_id": "local:qwen3.5-4b",
+            "weights_digest": "a" * 64,
+            "prompt_digest": "b" * 64,
+            "temperature": 0.0,
+            "max_tokens": 512,
+            "top_p": 1.0,
+            "seed": None,
+            "code_version": "deadbeef",
+        }
+        att = SynthesisAttestation(
+            synthesis_version="v",
+            principle_text="p",
+            feature_codes=("f",),
+            mechanism="m",
+            evidence_ref="runs:x",
+            validator_id="v1",
+            validator_passed=True,
+            distiller_reproducibility=block,
+        )
+        serialized = att.to_dict()
+        assert "distiller_reproducibility" in serialized, (
+            "to_dict must carry the structured provenance block"
+        )
+        restored = SynthesisAttestation.from_dict(serialized)
+        assert restored is not None
+        assert restored.distiller_reproducibility == block, (
+            "the reproducibility block must round-trip unchanged"
+        )
+        # The specific fields the R5 requirement exists to preserve.
+        assert restored.distiller_reproducibility["weights_digest"] == "a" * 64
+        assert restored.distiller_reproducibility["prompt_digest"] == "b" * 64
+        assert restored.distiller_reproducibility["temperature"] == 0.0
+
+    def test_empty_record_round_trips_as_empty(self):
+        """The default (no provenance) must not fabricate a block."""
+        from swarm_os.services.lesson_synthesis import SynthesisAttestation
+
+        att = SynthesisAttestation(
+            synthesis_version="v",
+            principle_text="p",
+            feature_codes=("f",),
+            mechanism="m",
+            evidence_ref="runs:x",
+            validator_id="v1",
+            validator_passed=True,
+        )
+        restored = SynthesisAttestation.from_dict(att.to_dict())
+        assert restored.distiller_reproducibility == {}

@@ -278,6 +278,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-003 | Ratification (retroactive) of Step 1 and Step 1c assembler binding, commits bee672dc and 68208c4f | AUTHORIZED (RETROACTIVE) | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names no files beyond the two already named in F2-IMPL-AUTH-001; records that no authorization existed when the commits were made; does not modify F0 |
 | F2-CLARIFICATION-003 | Rediscovery reads the UN-FLOORED delivery instant; the endpoint window keeps the floored second | CLARIFICATION | 2026-10-04 | Dated F2 authorial interpretation per 13; resolves which delivery reading F0 6 uses; does not modify F0 |
 | F2-IMPL-AUTH-004 | Step 3 - F0 6 rediscovery integration, test-isolation fix and op_infra_004 workspace fixture | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names four files explicitly; does not modify F0 |
+| F2-IMPL-AUTH-005 | Step 4 - persist the distiller provenance block and keep F2 arms out of the learning pipeline | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names two files explicitly; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -514,6 +515,32 @@ authorization. Implementation remains a separate, subsequent step.
 **File boundary.** Exactly four files, named here and by no others: `qwen_train/f2_protocol.py` (items 1 and, only as the new function's documentation, nothing else); `tests/test_f2_protocol.py` (new tests for item 1); `conftest.py` (item 2); `tests/test_f2_op_infra_004.py` (item 3).
 
 **Explicit non-authorization.** Everything listed as not authorized in F2-IMPL-AUTH-001 and F2-IMPL-AUTH-002, plus: `qwen_train/f2_rediscovery.py` and `tests/test_f2_rediscovery.py` (consumed, never modified); any change to the `F2Result` schema; any change to `_reconstruct_endpoint`; any change to `qwen_train/arm_workspace.py` or `qwen_train/f2_arm_orchestrator.py`; ambiguity recording as a persisted artifact; frozen F0 and F1 artifacts; `organism_console/*`; `.github/*`; F2 experiment execution; real F2 evidence generation; service startup; provisioning `SWARM_RECEIPT_KEY`, which is operator-only.
+
+**Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
+
+### F2-IMPL-AUTH-005 - Step 4: persist the distiller provenance block; keep F2 arms out of the learning pipeline
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Two independent SOTA-audit defects, each verified by direct inspection and a reproduction. Records no new science and modifies no frozen element.
+
+**Issue.**
+
+1. `SynthesisAttestation.distiller_reproducibility` (`swarm_os/services/lesson_synthesis.py:402`) is populated at construction (`:1252`) but is absent from `to_dict()` (`:404-417`) and never read by `from_dict()` (`:419-437`). A round-trip therefore returns `{}`. The readiness plan row 16 claims the persisted attestation carries the full reproducibility block and cites `TestAttestationCarriesTheRecord`, but that class holds exactly one test, which asserts the DEFAULT is empty and never exercises persistence. Consequence: the persisted candidate cannot be independently checked for which distiller transformation produced the rule, which is the precise property row 16 exists to guarantee. The promotion gate does not require the field, so this is a provenance/auditability defect, not a gate failure.
+
+2. `_store_decision_reflexion` (`runtime_v2/services/stream_runner.py:199-265`) is NOT gated by `is_replay_active()`. On any decision-level failure (empty response, malformed JSON, timeout) it calls `get_prompt_repairer().process_failure(...)` (`:253`) with `task_id=TASK_ID_CTX.get()` (`:258`). `process_failure` creates a PromptRepairer CANDIDATE whenever `task_id` is set (`swarm_os/services/prompt_repairer.py:1377,1387-1403`), and the F2 harness supplies the task id via the `x-swarm-task-id` header (`swarm_os/api/agents.py:306`). Therefore EVERY F2 arm run - T, X and the no-lesson calibration - can mint learning candidates from ordinary decision failures. That contradicts the plan's clean-room requirement of exactly one controlled learning event, and it lets F2 run failures accumulate promotion evidence on candidates other than the intended L.
+
+**Decision.**
+
+1. `swarm_os/services/lesson_synthesis.py`: include `distiller_reproducibility` in `SynthesisAttestation.to_dict()` and restore it in `from_dict()`, so the block survives persistence. No field is added, removed or renamed, so the `F2Result` schema and the readiness-plan result schema are unchanged.
+2. `runtime_v2/services/stream_runner.py`: in F2 replay mode (`is_replay_active()`), `_store_decision_reflexion` MUST NOT write to the learning pipeline. The function returns early, so an F2 arm cannot mint a PromptRepairer candidate, cannot append promotion evidence, and cannot write reflexion memory. Non-F2 behaviour is unchanged.
+3. Tests: a real round-trip test for item 1 (a POPULATED block must survive), and an F2-mode test for item 2 (a decision failure in replay mode must create no candidate), plus a non-F2 control that the write still happens when replay is inactive.
+
+**File boundary.** Exactly four files, named here and by no others. Production (items 1-2): `swarm_os/services/lesson_synthesis.py` (item 1); `runtime_v2/services/stream_runner.py` (item 2). Tests (item 3): `tests/test_distiller_reproducibility.py` (the populated round-trip regression test, added to the existing `TestAttestationCarriesTheRecord` class); `tests/test_f2_delivery_seam.py` (the replay-suppression test and its non-F2 control, added to the existing module that already owns the replay monkeypatch infrastructure).
+
+**Explicit non-authorization.** This entry does not authorize any other change to `swarm_os/services/*` or `runtime_v2/services/stream_runner.py`, and it does not reopen OP_INFRA_004:130/:133 except to the exact extent of items 1 and 2. It does not authorize: rediscovery persistence, ambiguity recording, the `F2Result` schema, `_reconstruct_endpoint`, `f2_rediscovery.py`, `qwen_train/arm_workspace.py`, `qwen_train/f2_arm_orchestrator.py`, frozen F0/F1, `organism_console/*`, `.github/*`, F2 execution, real F2 evidence generation, or provisioning `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
 
 **Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
 
