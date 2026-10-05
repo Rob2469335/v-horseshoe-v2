@@ -290,6 +290,9 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-014 | Step 12 - explicit contamination classification vocabulary (CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; exposes a derived classification, changes no screening decision; does not modify F0 |
 | F2-CLARIFICATION-004 | Freeze the exact CI construction and the outcome-independence invariant | CLARIFICATION | 2026-10-05 | Dated F2 authorial interpretation per 13; records what the readiness plan already specifies; does not modify F0 |
 | F2-IMPL-AUTH-015 | Repair the Clopper-Pearson bisection (broken exact CI solver) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); correctness fix only, no scientific parameter changed; does not modify F0 |
+| F2-IMPL-AUTH-016 | ONE authoritative confirmatory interval (make `mcnemar_exact` report the frozen Clopper-Pearson CI) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); removes an ambiguous second CI; changes no scientific method; does not modify F0 |
+| F2-IMPL-AUTH-017 | Live worker -> governed bundle assembly (opt-in, fail-closed) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one production file plus its tests; invents no evaluator identity/store/digest; does not modify F0 |
+| F2-IMPL-AUTH-018 | Q5 block-level exclusion, Q6 infrastructure-failure operational gate, and the missingness rule (operator-granted) | AUTHORIZED | 2026-10-05 | Records operator-authorized methodological decisions from the F2 completion brief; documentation only (the outcome-independent invariants are already enforced in code); does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -850,6 +853,83 @@ Both tails are monotone in `p`, so bisection is valid. The callers now pass the 
 **Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, alpha, power, delta, pi_d, n, the statistical test, or the frozen CI construction; no task admitted; no gold patch read; no credential provisioned; no confirmatory F2.
 
 **Implementation status.** Implemented, with 3 tests added (bounds match the standard interval; bounds are valid probabilities and ordered; edges clamped).
+
+### F2-IMPL-AUTH-016 - ONE authoritative confirmatory confidence interval
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-05 (F2 completion brief), entered by the agent. Implements Decision 1 of `F2-CLARIFICATION-004` and removes the ambiguity that AUTH-015 reported but deliberately did not repair. Records no new science and changes no scientific parameter.
+
+**Issue.** `F2-CLARIFICATION-004` froze the confirmatory interval as the Clopper-Pearson exact conditional interval on the discordant direction, transformed to the paired risk difference. That construction lives in `paired_risk_difference`; `mcnemar_exact` reported a Wald interval. Two different "F2 confidence intervals" were therefore obtainable from the same module, and an analysis could report the wrong one. A worked case shows they disagree on significance: `b=5, c=0, N=10` gives the frozen CP interval `(-0.0218, 0.5000)` (contains 0) versus the Wald interval `(0.1901, 0.8099)` (excludes 0).
+
+**Decision (option 1 - one authoritative interval).** Both entry points now share the private helper `_paired_rd_and_interval(b, c, both, neither, confidence=0.95)`. The authoritative interval is, with `d = b + c` and `p = b / d`:
+
+* point estimate `RD = (b - c) / N` (N = total pairs);
+* `RD_L = d * (2*p_L - 1) / N`, `RD_U = d * (2*p_U - 1) / N`, where `[p_L, p_U]` is the two-sided 95% Clopper-Pearson exact interval for `p`;
+* `d = 0`: the authorized conservative worst-case paired half-width (never `[0, 0]`).
+
+The Wald interval is removed from the confirmatory path (it was never the frozen construction). `mcnemar_exact.ci_low`/`ci_high` and `paired_risk_difference` now return the SAME values by construction.
+
+**Verification.** `test_f2_statistics.py::TestAuthoritativeConfidenceInterval`: the two entry points agree exactly across seven fixtures; the transformed interval matches R's `binom.test(k, n)$conf.int` for `(3,6)`, `(6,20)`, `(10,20)`, `(6,6)` (tolerance 1e-3); the no-discordance interval is conservative, not degenerate; and a case is pinned where the CP interval includes 0 while the Wald interval does not.
+
+**File boundary.** `qwen_train/f2_statistics.py` (plus its tests in `tests/test_f2_statistics.py`). No other file.
+
+**Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, alpha, power, delta, pi_d, n, the statistical test, or the frozen interval construction; no task admitted; no gold read; no credential; no confirmatory F2.
+
+**Implementation status.** Implemented, 4 tests added (29 in the file).
+
+### F2-IMPL-AUTH-017 - Live worker -> governed bundle assembly
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-05 (F2 completion brief), entered by the agent. Implements the bounded wiring required for `worker -> assemble_f2_bundle -> evaluator -> regrade_f2_pair`. Records no new science and changes no scientific parameter.
+
+**Issue.** `assemble_f2_bundle` was exercised only by tests; the real `f2_arm_worker.py` path never emitted an `F2Bundle`, so the live `worker -> bundle -> evaluator -> regrade` path was `NOT ESTABLISHED`.
+
+**Decision.** Add an OPT-IN (`SWARM_F2_EMIT_BUNDLE=1`), fail-closed bundle-emission path to `f2_arm_worker.py`:
+
+* the worker projects the arm's raw trajectory (`record_type="step"` tool calls) into the protocol's flat behavioral-record shape;
+* it derives the PRODUCER DECLARATIONS from raw evidence (endpoint via the frozen detector `f2_endpoint.qualifying_first_edit` through `f2_calibration.endpoint_from_trajectory`; task outcome from the evaluator's retained report) — the producer is never authoritative, and `regrade_f2` independently re-derives and rejects disagreement;
+* it consumes operator-provided governance inputs only: `SWARM_F2_ARTIFACT_ROOT`, `SWARM_F2_ARTIFACT_RETENTION_DAYS`, `SWARM_F2_EVALUATOR_ID`, `SWARM_F2_EVALUATOR_VERSION`, `SWARM_F2_EVALUATOR_IMPL`, `SWARM_F2_EVALUATOR_PROCEDURE`, `SWARM_F2_TASK_OUTCOME_REPORT`;
+* the evaluator implementation digest is `SHA-256` of the actual supplied implementation artifact (never a declared string); the `EvaluatorAuthorization` binds to those bytes;
+* missing inputs, an absent trajectory, or a regrade disagreement fail closed, naming the missing input;
+* the assembled bundle is persisted and independently regraded (`regrade_f2`) before the receipt records `regrade_state`.
+
+No evaluator identity, implementation digest, trusted store, or task-outcome report is fabricated; the production values remain operator-provisioned.
+
+**Verification.** `tests/test_f2_worker_bundle_wiring.py` (13 tests): the full chain `worker evidence -> assemble_worker_bundle -> assemble_f2_bundle -> evaluator authorization -> regrade_f2` returns VERIFIED over a real `TrustedArtifactStore` and real `EvaluatorRegistry`; the endpoint is reconstructed from the trajectory; a declaration disagreement is rejected; and each missing governance input fails closed. `emit_worker_bundle` is exercised end-to-end (config -> trajectory -> assemble -> regrade -> persist).
+
+**File boundary.** `qwen_train/f2_arm_worker.py` (plus `tests/test_f2_worker_bundle_wiring.py`). No other file.
+
+**Explicit non-authorization.** Does NOT name a production evaluator, provision a trusted store, run the task-outcome evaluator, generate real evidence, or execute confirmatory F2. The live path against a real model/backend remains `NOT ESTABLISHED`: it requires the operator's services, the evaluator authorization, the trusted store, and Q7/Q9/Q11.
+
+**Implementation status.** Implemented, 13 tests. Live end-to-end execution remains `NOT ESTABLISHED` (external prerequisites absent).
+
+### F2-IMPL-AUTH-018 - Q5, Q6, and the missingness rule (operator-granted)
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Records the operator-authorized methodological decisions made in the F2 completion brief of 2026-10-05. Documentation only; it selects no statistical parameter. The outcome-independence invariants it states are ALREADY enforced in code, so this entry implements nothing.
+
+**Q5 - block-level exclusion (authoritative).** A task/block may be excluded only for a pre-specified, outcome-independent reason established before the paired outcome is observed: missing required provenance; failed base/gold verification; infrastructure invalidity under the predeclared rule; contamination classification; malformed task; reproducibility failure; missing required artifact. Excluding a block because T won, X won, or the result is inconvenient is FORBIDDEN. A single invalid arm invalidates the whole pair (McNemar requires complete pairs). Enforced by construction: `f2_admission.admit_f2_task` requires both T and X bundles and fails closed otherwise.
+
+**Q6 - infrastructure-failure budget (operational gate, NOT a statistical property).** The 30% figure is an operational feasibility ceiling, not a property of McNemar. Predeclare: if infrastructure-invalid candidates exceed 30% of the attempted candidate set, STOP acquisition/execution and investigate the environment; the ceiling never justifies selectively discarding observations; all infrastructure failures remain in the ledger; the denominator is never reset. Enforced by construction: `f2_calibration` reruns only named `INFRASTRUCTURE_RERUN_CAUSES`, retains every attempt, and never reruns a scientific outcome.
+
+**Missingness rule.** A missing outcome is MISSING — not a success, not a failure, not silently excluded, not converted into the opposite arm's result, and never a trigger for an outcome-dependent replacement. Incomplete pairs stay out of the primary paired McNemar analysis but remain fully reported in the CONSORT-style accounting. Enforced by construction: `regrade_f2` fails closed on a missing event stream rather than inferring a censored run.
+
+**Contamination vocabulary.** CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN, with `UNKNOWN != CLEAN` and `POTENTIALLY CONTAMINATED != CLEAN`. Temporal cutoff is necessary evidence but not proof of non-contamination. The S10 `contamination_class` is a SCREENING PROXY under the declared-cutoff assumption and must be reported as such, never as proof. This entry does not change the AUTH-014 mapping; it bounds how the label may be interpreted.
+
+**File boundary.** This document only. No code, no test, no F0 change.
+
+**Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, alpha, power, delta, pi_d, n, the statistical test, the CI, S8 admission, or the contamination state machine; no task admitted; no gold read; no credential; no security evidence; no confirmatory F2.
+
+**Implementation status.** Recorded. It implements nothing.
 
 ---
 
