@@ -284,6 +284,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-008 | Step 7 - F2Bundle persistence round-trip identity tests, and the authoritative assembly-point clarification | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); tests only plus a design clarification; does not modify F0 |
 | F2-IMPL-AUTH-009 | Step 8 - workspace-mutation classification (engineering assessment) and the operator execution contracts | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file; observation and classification only, adds no exclusion rule; does not modify F0 |
 | F2-IMPL-AUTH-010 | Step 9 - calibration execution layer (runner + authorization gate) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; code only, execution gated on Q10; does not modify F0 |
+| F2-IMPL-AUTH-011 | Step 10 - calibration production adapter (membrane -> runner) | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; wiring only, no authority; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -671,6 +672,32 @@ REFERENCE TRUTH (sequestering). Stored outside every workspace, evaluator-only, 
 **Explicit non-authorization.** This entry does NOT authorize EXECUTING calibration (that is Q10), nor any change to the endpoint, `alpha`, `power`, `delta`, the statistical test, the population rule, the exclusion rule, the `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; nor F2 execution, real evidence generation, or provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q11 or Q12.
 
 **Implementation status.** Implemented by this entry: the runner and its 15 tests. Execution remains gated on Q10 and on an operator-supplied `CalibrationAuthorization`.
+
+### F2-IMPL-AUTH-011 - Step 10: calibration production adapter (membrane -> runner)
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue.** `run_calibration` takes an INJECTED per-observation runner, but nothing connected that runner to the F2 execution membrane. The orchestration layer was therefore complete and testable yet not executable: the last link between "a Q10 authorization exists" and "one no-lesson observation is actually measured" was missing.
+
+**Decision.** `qwen_train/f2_calibration.py` gains three functions.
+
+1. `tool_calls_from_trajectory(records)` - PURE. Flattens ATIF step records into the tool-call shape the endpoint detector reads. The trajectory stores `step_id` at the RECORD level while its tool calls carry only `extra.turn`; the detector reads `extra.step_id` and falls back to `extra.turn`. The adapter injects the record-level `step_id` so the horizon test uses the authoritative ATIF step id rather than a counter that merely happens to coincide. Non-step records are ignored and malformed entries do not raise.
+2. `endpoint_from_trajectory(records, spec)` - PURE. Delegates to the frozen `f2_endpoint.qualifying_first_edit`, so calibration measures the SAME F0 section 5 detector as the confirmatory run. No qualifying edit inside the horizon is a CENSORED observation, not a failure and not a missing datum.
+3. `make_calibration_runner(...)` - the membrane adapter. Runs ONE no-lesson arm through the existing orchestrator and returns an `ObservationOutcome`: a scientific outcome (endpoint observed / censored), or a predefined INFRASTRUCTURE failure - the only class the caller may rerun.
+
+**Authority boundary.** The adapter grants itself NOTHING. It does not create a credential, does not read `SWARM_RECEIPT_KEY`, does not bypass the authorization gate (which lives in `run_calibration`), does not alter the endpoint definition, and does not touch any statistical parameter. It can only run arms the caller already asked for, through the same membrane as confirmatory F2.
+
+**What this does NOT establish.** The adapter proves the WIRING. It does NOT establish the host/network/sandbox membrane - that is the operator's Q9 control - and it does not prove production execution on its own. Exercising it requires Q10 authorization and the operator's model/backend services.
+
+**File boundary.** One production file: `qwen_train/f2_calibration.py` (plus its tests in `tests/test_f2_calibration.py`). No other file.
+
+**Explicit non-authorization.** This entry does NOT authorize EXECUTING calibration (Q10), nor any change to the endpoint, `alpha`, `power`, `delta`, the statistical test, the population rule, the exclusion rule, the `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; nor F2 execution, real evidence generation, or provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q11 or Q12.
+
+**Implementation status.** Implemented by this entry: the adapter and its 10 tests. Execution remains gated on Q10.
 
 ---
 

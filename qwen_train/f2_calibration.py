@@ -42,7 +42,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping
 
 __all__ = [
     "CalibrationError",
@@ -535,3 +536,148 @@ def run_calibration(
 
     summary = summarize_calibration(records, endpoint_hash=plan.endpoint_hash)
     return records, summary
+
+
+# ===========================================================================
+# Production adapter: F2 execution membrane -> calibration runner
+# ===========================================================================
+
+
+def tool_calls_from_trajectory(
+    records: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Flatten ATIF step records into the tool-call shape the endpoint detector reads.
+
+    PURE. The trajectory stores `step_id` at the RECORD level while its tool calls
+    carry only `extra.turn`; the endpoint detector reads `extra.step_id` and falls
+    back to `extra.turn`. Injecting the record-level `step_id` makes the horizon
+    test use the authoritative ATIF step id rather than a counter that merely
+    happens to coincide. Non-step records (e.g. `summary`) are ignored.
+    """
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        if not isinstance(rec, Mapping):
+            continue
+        if str(rec.get("record_type") or "") != "step":
+            continue
+        step_id = rec.get("step_id")
+        for tc in rec.get("tool_calls") or ():
+            if not isinstance(tc, Mapping):
+                continue
+            extra = dict(tc.get("extra") or {})
+            if step_id is not None:
+                extra["step_id"] = step_id
+            out.append(
+                {
+                    "function_name": tc.get("function_name"),
+                    "arguments": tc.get("arguments") or {},
+                    "extra": extra,
+                }
+            )
+    return out
+
+
+def endpoint_from_trajectory(
+    records: Iterable[Mapping[str, Any]],
+    spec: Any,
+) -> dict[str, Any] | None:
+    """The frozen F0 section 5 endpoint for one observation, or None.
+
+    PURE. Delegates to `f2_endpoint.qualifying_first_edit` so the calibration
+    measures the SAME detector as the confirmatory run: an observation that
+    produced no qualifying edit inside the horizon is a censored observation, not
+    a failure and not a missing datum.
+    """
+    from qwen_train.f2_endpoint import qualifying_first_edit
+
+    return qualifying_first_edit(tool_calls_from_trajectory(records), spec)
+
+
+def make_calibration_runner(
+    *,
+    manifest_dir: "Path | str",
+    worker_script: "Path | str",
+    repo_root: "Path | str",
+    workspace_root: "Path | str",
+    endpoint_spec: Any,
+    render_x: Any,
+    lesson_l_id: str,
+    lesson_l_hash: str,
+    arm: str = "X",
+    agent_id: str = "coder",
+    port: int = 8211,
+    timeout_s: int = 600,
+) -> "Callable[[str, str, int], ObservationOutcome]":
+    """Build the runner that `run_calibration` drives. EXERCISING it needs services.
+
+    The returned callable performs ONE no-lesson observation through the existing
+    F2 orchestrator and reports either a scientific outcome (endpoint observed /
+    censored) or a predefined INFRASTRUCTURE failure, which is the only class the
+    caller may rerun.
+
+    Scope: this is glue. It does NOT establish the host/network/sandbox membrane -
+    that is the operator's control (Q9). It does not prove production execution on
+    its own; it proves the wiring, and the wiring is exercised only once Q10 is
+    authorized and the operator's services are running.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    from qwen_train.f2_arm_orchestrator import run_f2_arm
+
+    ws = _Path(workspace_root).resolve()
+    traj_dir = ws / "data" / "trajectories"
+
+    def _runner(instance_id: str, arm_name: str, replicate: int) -> ObservationOutcome:
+        rollout_id = f"{instance_id}::{arm_name}::r{replicate}"
+        try:
+            result = run_f2_arm(
+                arm=arm_name,
+                manifest_dir=_Path(manifest_dir),
+                worker_script=_Path(worker_script),
+                repo_root=_Path(repo_root),
+                render_t=render_x,
+                lesson_l_id=lesson_l_id,
+                lesson_l_hash=lesson_l_hash,
+                task_id=instance_id,
+                rollout_id=rollout_id,
+                instance_id=instance_id,
+                agent_id=agent_id,
+                port=port,
+                timeout_s=timeout_s,
+                execute=True,
+                workspace_root=ws,
+            )
+        except Exception as exc:  # noqa: BLE001 - mapped to a predefined cause
+            return ObservationOutcome(
+                instance_id=instance_id, arm=arm_name, rollout_id=rollout_id,
+                endpoint_observed=False, valid=False,
+                invalid_reason=f"infrastructure:{type(exc).__name__}",
+                infra_cause="workspace_preparation_failed",
+            )
+
+        receipt = result.receipt or {}
+        run_id = str(receipt.get("trajectory_run_id") or rollout_id)
+        traj = traj_dir / f"{run_id}.jsonl"
+        if not traj.exists():
+            return ObservationOutcome(
+                instance_id=instance_id, arm=arm_name, rollout_id=rollout_id,
+                endpoint_observed=False, valid=False,
+                invalid_reason="infrastructure:trajectory_malformed",
+                infra_cause="trajectory_malformed",
+            )
+        records = [
+            _json.loads(line)
+            for line in traj.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        hit = endpoint_from_trajectory(records, endpoint_spec)
+        return ObservationOutcome(
+            instance_id=instance_id,
+            arm=arm_name,
+            rollout_id=rollout_id,
+            endpoint_observed=hit is not None,
+            first_edit_step=(int(hit["step_id"]) if hit is not None else None),
+        )
+
+    return _runner

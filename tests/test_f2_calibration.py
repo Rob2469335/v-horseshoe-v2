@@ -33,6 +33,8 @@ from qwen_train.f2_calibration import (
     CalibrationPlan,
     ObservationOutcome,
     run_calibration,
+    tool_calls_from_trajectory,
+    endpoint_from_trajectory,
     summarize_calibration,
 )
 
@@ -464,3 +466,115 @@ class TestCalibrationRunnerRecords:
         for r in recs:
             d = r.to_dict()
             assert json.loads(json.dumps(d))["record_hash"] == d["record_hash"]
+
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-011 - the production adapter (pure half)
+# ---------------------------------------------------------------------------
+
+
+def _step_rec(step_id, tool_calls, record_type="step"):
+    return {
+        "record_type": record_type,
+        "run_id": "r",
+        "schema_version": "ATIF-v1.4",
+        "step_id": step_id,
+        "timestamp": "2026-10-04T00:00:00Z",
+        "tool_calls": tool_calls,
+    }
+
+
+def _fs_call(op, path, turn):
+    return {
+        "tool_call_id": "x",
+        "function_name": "filesystem",
+        "arguments": {"operation": op, "path": path},
+        "extra": {"turn": turn, "agent_id": "coder"},
+    }
+
+
+class TestAdapterToolCallExtraction:
+    """ATIF step records -> the shape the endpoint detector reads."""
+
+    def test_flattens_step_records_and_injects_record_step_id(self):
+        recs = [_step_rec(7, [_fs_call("patch", "src/a.py", 3)])]
+        tcs = tool_calls_from_trajectory(recs)
+        assert len(tcs) == 1
+        assert tcs[0]["function_name"] == "filesystem"
+        assert tcs[0]["arguments"]["operation"] == "patch"
+        # record-level step_id wins over the merely-coincidental extra.turn
+        assert tcs[0]["extra"]["step_id"] == 7
+
+    def test_non_step_records_are_ignored(self):
+        recs = [
+            _step_rec(1, [_fs_call("patch", "src/a.py", 1)]),
+            _step_rec(99, [_fs_call("patch", "src/a.py", 99)], record_type="summary"),
+        ]
+        assert len(tool_calls_from_trajectory(recs)) == 1
+
+    def test_malformed_entries_do_not_raise(self):
+        recs = [
+            "not-a-mapping",
+            _step_rec(1, ["not-a-call", _fs_call("patch", "src/a.py", 1)]),
+        ]
+        assert len(tool_calls_from_trajectory(recs)) == 1
+
+
+class TestAdapterEndpoint:
+    def _spec(self, files=("src/a.py",), horizon=12):
+        from qwen_train.f2_endpoint import freeze_endpoint
+
+        return freeze_endpoint(
+            task_id="t", relevant_file_set=list(files), horizon_steps=horizon
+        )
+
+    def test_qualifying_edit_is_found(self):
+        recs = [
+            _step_rec(2, [_fs_call("read", "src/a.py", 2)]),
+            _step_rec(4, [_fs_call("patch", "src/a.py", 4)]),
+        ]
+        hit = endpoint_from_trajectory(recs, self._spec())
+        assert hit is not None and hit["step_id"] == 4
+
+    def test_no_qualifying_edit_is_censored_not_missing(self):
+        recs = [_step_rec(2, [_fs_call("read", "src/a.py", 2)])]
+        assert endpoint_from_trajectory(recs, self._spec()) is None
+
+    def test_edit_outside_the_relevant_file_set_does_not_qualify(self):
+        recs = [_step_rec(4, [_fs_call("patch", "docs/readme.md", 4)])]
+        assert endpoint_from_trajectory(recs, self._spec()) is None
+
+    def test_edit_past_the_horizon_does_not_qualify(self):
+        recs = [_step_rec(13, [_fs_call("patch", "src/a.py", 13)])]
+        assert endpoint_from_trajectory(recs, self._spec(horizon=12)) is None
+
+    def test_endpoint_is_taken_from_the_frozen_detector(self):
+        """The adapter must not re-implement the F0 section 5 rule."""
+        src = (__import__("pathlib").Path(__file__).resolve().parents[1]
+               / "qwen_train" / "f2_calibration.py").read_text("utf-8")
+        assert "qualifying_first_edit" in src
+        assert "F0 section 5" in src
+
+
+class TestAdapterFactory:
+    def test_factory_returns_a_callable_runner(self):
+        from qwen_train.f2_calibration import make_calibration_runner
+
+        r = make_calibration_runner(
+            manifest_dir="m",
+            worker_script="w",
+            repo_root="r",
+            workspace_root=".",
+            endpoint_spec=None,
+            render_x=None,
+            lesson_l_id="L",
+            lesson_l_hash="h",
+        )
+        assert callable(r)
+
+    def test_adapter_does_not_grant_authority(self):
+        """It must not bypass the gate, create credentials or touch statistics."""
+        src = (__import__("pathlib").Path(__file__).resolve().parents[1]
+               / "qwen_train" / "f2_calibration.py").read_text("utf-8")
+        for forbidden in ("SWARM_RECEIPT_KEY", "os.environ[", "required_pairs("):
+            assert forbidden not in src, f"adapter must not contain {forbidden!r}"
