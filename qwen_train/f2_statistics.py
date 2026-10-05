@@ -149,14 +149,22 @@ def mcnemar_exact(
     p-value: under H0 the discordant split is Binomial(b + c, 1/2). Two-sided p
     is the symmetric double of the smaller tail; one-sided p is the tail in the
     observed direction only.
+
+    The reported ``ci_low``/``ci_high`` are the ONE authoritative confirmatory
+    interval: the two-sided 95% Clopper-Pearson exact conditional interval on the
+    discordant direction, transformed to the paired risk difference (see
+    ``_paired_rd_and_interval``). There is no separate Wald interval on this
+    path; the frozen F2 interval is produced by the same helper that
+    ``paired_risk_difference`` uses, so the two entry points cannot disagree.
     """
     b, c, both, neither = contingency_table(t_values, x_values)
     n = b + c
     m = b + c + both + neither
     if n == 0:
         # No discordant pair => the test cannot reject; report p = 1 honestly
-        # rather than claiming evidence of equivalence.
-        rd = 0.0
+        # rather than claiming evidence of equivalence. The interval is the
+        # authorized conservative paired interval, never a degenerate [0, 0].
+        rd, ci_low, ci_high = _paired_rd_and_interval(b, c, both, neither)
         return McNemarResult(
             n_pairs=m,
             b=0,
@@ -165,8 +173,8 @@ def mcnemar_exact(
             n_concordant_x=neither,
             p_value=1.0,
             risk_difference=rd,
-            ci_low=-_wald_halfwidth(m),
-            ci_high=_wald_halfwidth(m),
+            ci_low=ci_low,
+            ci_high=ci_high,
             sided=sided,
         )
 
@@ -176,12 +184,7 @@ def mcnemar_exact(
     else:
         p = min(1.0, 2.0 * binom_sf(k, n, 0.5))
 
-    rd = (b - c) / m if m else 0.0
-    # Risk-difference interval. Not a bootstrap (see module docstring): the
-    # conditional (Bonett-Price style) interval is reported by
-    # ``paired_risk_difference``; this keeps McNemarResult self-contained with a
-    # conservative normal-approximation half-width.
-    hw = _wald_halfwidth(m)
+    rd, ci_low, ci_high = _paired_rd_and_interval(b, c, both, neither)
     return McNemarResult(
         n_pairs=m,
         b=b,
@@ -190,8 +193,8 @@ def mcnemar_exact(
         n_concordant_x=neither,
         p_value=p,
         risk_difference=rd,
-        ci_low=max(-1.0, rd - hw),
-        ci_high=min(1.0, rd + hw),
+        ci_low=ci_low,
+        ci_high=ci_high,
         sided=sided,
     )
 
@@ -208,43 +211,44 @@ def _wald_halfwidth(m: int, z: float = 1.959963985) -> float:
     return z * math.sqrt(1.0 / (4.0 * m))
 
 
-def paired_risk_difference(
-    t_values: Iterable[bool],
-    x_values: Iterable[bool],
+def _paired_rd_and_interval(
+    b: int,
+    c: int,
+    both: int,
+    neither: int,
     *,
     confidence: float = 0.95,
 ) -> tuple[float, float, float]:
-    """Return (point estimate, CI low, CI high) for the paired risk difference.
+    """The ONE authoritative paired risk-difference estimate and 95% interval.
 
-    Uses the exact conditional structure: given the discordant count n = b + c,
-    the conditional distribution of b is Binomial(n, theta) and theta is estimated
-    by b/n. The interval is the Clopper-Pearson (exact binomial) interval for
-    theta, mapped to the risk difference via
-    ``RD = (2*theta - 1) * n / m``. That is the standard exact conditional
-    construction for McNemar-style paired proportions and, unlike a bootstrap,
-    has correct coverage at small m (arXiv 2605.30315; Bonett & Price 2012 for
-    the asymptotically-smoother alternative reported there).
+    With ``d = b + c`` discordant pairs and ``m`` total pairs:
+
+    * point estimate ``RD = (b - c) / m``;
+    * the two-sided ``confidence`` Clopper-Pearson exact conditional interval
+      ``[p_L, p_U]`` for the discordant direction ``p = b / d`` (Clopper-Pearson
+      via the binomial tail, solved by bisection -- no scipy dependency),
+      transformed to the risk difference by
+      ``RD_L = d * (2*p_L - 1) / m`` and ``RD_U = d * (2*p_U - 1) / m``
+      (equivalently ``(2*p - 1) * d / m``).
+
+    ``d == 0`` is the authorized conservative case: the plug-in paired RD has
+    zero paired variance, so a naive interval would collapse to ``[0, 0]`` and
+    claim a certainty the data does not support. The unpaired worst-case
+    half-width (``var <= 1/4`` per arm) is reported instead, so the interval can
+    only be too wide, never too narrow.
+
+    This helper is shared by ``mcnemar_exact`` and ``paired_risk_difference`` so
+    the two entry points cannot report different confirmatory intervals.
     """
-    b, c, both, neither = contingency_table(t_values, x_values)
     m = b + c + both + neither
     n = b + c
     if m == 0:
         return 0.0, -1.0, 1.0
     if n == 0:
-        # No discordance: the plug-in paired RD is exactly 0 with ZERO paired
-        # variance, so a naive interval collapses to [0, 0] and claims a
-        # certainty the data does not support -- exactly the overconfidence
-        # evalstats documents for small-sample paired intervals. Report the
-        # conservative unpaired WORST-CASE half-width instead (var <= 1/4 per
-        # arm), so the interval can only be too wide, never too narrow.
-        p_t = (b + both) / m
-        p_x = (c + both) / m  # X succeeds on c (discordant) or both (concordant)
         hw = _wald_halfwidth(m)
-        return p_t - p_x, max(-1.0, p_t - p_x - hw), min(1.0, p_t - p_x + hw)
+        return 0.0, max(-1.0, -hw), min(1.0, hw)
 
     alpha = 1.0 - confidence
-    # Clopper-Pearson via the Beta quantile relation, solved by bisection on the
-    # binomial tail (no scipy dependency).
     lo = _clopper_pearson_lower(b, n, alpha / 2.0)
     hi = _clopper_pearson_upper(b, n, alpha / 2.0)
     scale = n / m
@@ -253,6 +257,30 @@ def paired_risk_difference(
         max(-1.0, (2.0 * lo - 1.0) * scale),
         min(1.0, (2.0 * hi - 1.0) * scale),
     )
+
+
+def paired_risk_difference(
+    t_values: Iterable[bool],
+    x_values: Iterable[bool],
+    *,
+    confidence: float = 0.95,
+) -> tuple[float, float, float]:
+    """Return (point estimate, CI low, CI high) for the paired risk difference.
+
+    Uses the exact conditional structure: given the discordant count d = b + c,
+    the conditional distribution of b is Binomial(d, theta) and theta is estimated
+    by b/d. The interval is the Clopper-Pearson (exact binomial) interval for
+    theta, mapped to the risk difference via
+    ``RD = (2*theta - 1) * d / m``. That is the standard exact conditional
+    construction for McNemar-style paired proportions and, unlike a bootstrap,
+    has correct coverage at small m (arXiv 2605.30315; Bonett & Price 2012 for
+    the asymptotically-smoother alternative reported there).
+
+    This is the same construction ``mcnemar_exact`` now reports, via the shared
+    ``_paired_rd_and_interval`` helper.
+    """
+    b, c, both, neither = contingency_table(t_values, x_values)
+    return _paired_rd_and_interval(b, c, both, neither, confidence=confidence)
 
 
 def _binom_cdf_bisect(k: int, n: int, target: float, *, upper: bool) -> float:

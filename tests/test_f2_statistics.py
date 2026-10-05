@@ -219,3 +219,84 @@ class TestClopperPearsonBisection:
 
         assert _clopper_pearson_lower(0, 20, 0.025) == 0.0
         assert _clopper_pearson_upper(20, 20, 0.025) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# ONE authoritative confirmatory interval (Clopper-Pearson on the discordant
+# direction, transformed to the paired risk difference). F2-IMPL-AUTH-016.
+# ---------------------------------------------------------------------------
+
+
+class TestAuthoritativeConfidenceInterval:
+    """`mcnemar_exact` and `paired_risk_difference` must report ONE interval.
+
+    The frozen contract (`F2-CLARIFICATION-004`) fixes the confirmatory interval
+    as the Clopper-Pearson exact conditional interval on the discordant
+    direction, transformed to the paired risk difference. A prior
+    `mcnemar_exact` path reported a Wald interval instead, so an analysis could
+    have reported two different "F2 confidence intervals". These tests lock the
+    two entry points to the same construction.
+    """
+
+    # (b, c, both, neither) fixtures.
+    FIXTURES = [
+        (6, 14, 0, 0),
+        (10, 10, 0, 0),
+        (3, 3, 0, 0),
+        (5, 0, 5, 0),
+        (0, 3, 7, 0),
+        (2, 1, 1, 4),
+        (0, 0, 10, 0),
+    ]
+
+    @staticmethod
+    def _seq(b, c, both, neither):
+        t = [True] * b + [False] * c + [True] * both + [False] * neither
+        x = [False] * b + [True] * c + [True] * both + [False] * neither
+        return t, x
+
+    def test_mcnemar_and_paired_risk_difference_agree(self):
+        for b, c, both, neither in self.FIXTURES:
+            t, x = self._seq(b, c, both, neither)
+            r = mcnemar_exact(t, x)
+            est, lo, hi = paired_risk_difference(t, x)
+            assert (r.b, r.c) == (b, c)
+            assert r.risk_difference == pytest.approx(est, abs=1e-12)
+            assert r.ci_low == pytest.approx(lo, abs=1e-12)
+            assert r.ci_high == pytest.approx(hi, abs=1e-12)
+
+    # R's binom.test(k, n, conf.level=0.95)$conf.int, transformed to the risk
+    # difference with m = n (so scale = d/m = 1): RD = 2*p - 1.
+    R_ORACLE = [
+        # (b, c, both, neither, expected RD_low, expected RD_high)
+        (3, 3, 0, 0, 2 * 0.1181 - 1.0, 2 * 0.8819 - 1.0),   # k=3, n=6
+        (6, 14, 0, 0, 2 * 0.1189 - 1.0, 2 * 0.5428 - 1.0),  # k=6, n=20
+        (10, 10, 0, 0, 2 * 0.2719 - 1.0, 2 * 0.7281 - 1.0),  # k=10, n=20
+        (6, 0, 0, 0, 2 * 0.5407 - 1.0, 1.0),               # k=6, n=6 (upper clamped)
+    ]
+
+    def test_interval_matches_r_transformed_oracle(self):
+        for b, c, both, neither, lo_exp, hi_exp in self.R_ORACLE:
+            t, x = self._seq(b, c, both, neither)
+            r = mcnemar_exact(t, x)
+            assert r.ci_low == pytest.approx(lo_exp, abs=1e-3), (b, c, r.ci_low, lo_exp)
+            assert r.ci_high == pytest.approx(hi_exp, abs=1e-3), (b, c, r.ci_high, hi_exp)
+
+    def test_no_discordance_is_conservative_not_degenerate(self):
+        t, x = self._seq(0, 0, 8, 8)
+        r = mcnemar_exact(t, x)
+        assert r.ci_low < 0.0 < r.ci_high
+        assert r.risk_difference == pytest.approx(0.0)
+
+    def test_confirmatory_interval_is_not_the_wald_interval(self):
+        """Lock in the CP construction; a Wald interval would exclude 0 here."""
+        from qwen_train.f2_statistics import _wald_halfwidth
+
+        b, c, both, neither = 5, 0, 5, 0  # d=5, m=10
+        t, x = self._seq(b, c, both, neither)
+        r = mcnemar_exact(t, x)
+        wald_hw = _wald_halfwidth(r.n_pairs)
+        # CP interval includes 0; the Wald interval around RD=0.5 would not.
+        assert r.ci_low < 0.0
+        assert r.ci_low == pytest.approx(-0.0218, abs=1e-3)
+        assert r.risk_difference - wald_hw > 0.0
