@@ -115,7 +115,10 @@ def _resolve_traj_dir(workspace_root: Path) -> Path:
     return Path(workspace_root) / "data" / "trajectories"
 
 
-def _capture_workspace_mutation(workspace_root: "Path | str") -> dict[str, Any]:
+def _capture_workspace_mutation(
+    workspace_root: "Path | str",
+    base_commit: str = "",
+) -> dict[str, Any]:
     """Post-run: record the repository paths the arm actually touched.
 
     Integrity evidence, not a gate. The F2 endpoint is measured from the
@@ -129,8 +132,25 @@ def _capture_workspace_mutation(workspace_root: "Path | str") -> dict[str, Any]:
     Fail-soft by design: this is an OBSERVATION. If the workspace cannot be
     inspected the receipt says so explicitly (``captured: False``) rather than
     implying the workspace was clean.
+
+    F2-IMPL-AUTH-007: the dirty-path set alone is DEFEATABLE - an arm that runs
+    ``git add -A && git commit`` leaves a clean working tree, so ``git status``
+    reports nothing while the repository has in fact been mutated. The post-run
+    HEAD commit and ref list are therefore recorded too: a commit moves HEAD away
+    from the base the workspace was reset to, and a new ref is exactly the
+    history-manipulation channel the pre-run stripping removes. Ignored paths are
+    sampled because ``-uall`` alone does not report them.
     """
+    import subprocess as _sub
+
     from qwen_train.arm_workspace import _observed_dirty_paths, resolve_task_repo
+
+    def _git(*a: str) -> tuple[bool, str]:
+        try:
+            r = _sub.run(["git", *a], cwd=str(repo), capture_output=True, text=True)
+        except Exception:  # noqa: BLE001
+            return False, ""
+        return r.returncode == 0, r.stdout.strip()
 
     try:
         repo = resolve_task_repo(workspace_root)
@@ -141,11 +161,33 @@ def _capture_workspace_mutation(workspace_root: "Path | str") -> dict[str, Any]:
             "error_type": type(exc).__name__,
             "error": str(exc)[:300],
         }
+
+    ok_head, head_after = _git("rev-parse", "HEAD")
+    ok_refs, refs_raw = _git("for-each-ref", "--format=%(refname)")
+    ok_ign, ign_raw = _git("status", "--porcelain", "-uall", "--ignored")
+    ignored = sorted(
+        ln[3:].strip().strip('"')
+        for ln in ign_raw.splitlines()
+        if ln.startswith("!! ")
+    ) if ok_ign else []
+
+    base = (base_commit or "").strip()
     return {
         "captured": True,
         "repository": str(repo),
         "touched_paths": touched,
         "touched_count": len(touched),
+        # Commit-bypass detection: HEAD must still be the reset base.
+        "base_commit_expected": base,
+        "head_after": head_after if ok_head else "",
+        "head_unchanged": (bool(base) and ok_head and head_after == base),
+        # History-manipulation detection: any ref beyond HEAD is unexpected.
+        "refs_after": sorted(r.strip() for r in refs_raw.splitlines() if r.strip())
+        if ok_refs
+        else [],
+        # Hidden-artifact detection (bounded sample).
+        "ignored_paths_sample": ignored[:50],
+        "ignored_count": len(ignored),
     }
 
 
@@ -486,7 +528,10 @@ def run_worker(argv: list[str] | None = None) -> int:
 
         # Post-run workspace-mutation evidence. Observation only: recorded on the
         # receipt so an independent reviewer can see every path the arm touched.
-        workspace_mutation = _capture_workspace_mutation(workspace_root)
+        workspace_mutation = _capture_workspace_mutation(
+            workspace_root,
+            str((artifact.task_readiness or {}).get("base_commit", "")),
+        )
 
         receipt: dict[str, Any] = {
             "experiment_id": artifact.experiment_id,

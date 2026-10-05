@@ -539,4 +539,58 @@ class TestWorkspaceMutationEvidence:
     def test_receipt_carries_the_evidence_field(self):
         src = (REPO_ROOT / "qwen_train" / "f2_arm_worker.py").read_text("utf-8")
         assert "workspace_mutation_evidence" in src
-        assert "_capture_workspace_mutation(workspace_root)" in src
+        assert "_capture_workspace_mutation(" in src
+
+    # -- F2-IMPL-AUTH-007: the commit bypass --------------------------------
+
+    def test_clean_workspace_reports_head_unchanged(self, tmp_path):
+        inst, repo = self._make_task(tmp_path)
+        base = WORKER._capture_workspace_mutation(inst)["head_after"]
+        ev = WORKER._capture_workspace_mutation(inst, base)
+        assert ev["captured"] is True
+        assert ev["touched_paths"] == []
+        assert ev["head_unchanged"] is True
+
+    def test_commit_bypass_is_detected(self, tmp_path):
+        """An arm that COMMITS its edits leaves a clean tree; HEAD must reveal it.
+
+        Without the HEAD check, `git status` reports nothing and the mutation
+        evidence would falsely read as 'clean'.
+        """
+        import subprocess as _sp
+
+        inst, repo = self._make_task(tmp_path)
+        base = WORKER._capture_workspace_mutation(inst)["head_after"]
+        # The arm edits the evaluator test file AND commits, hiding it.
+        (repo / "suite_test.py").write_text("assert True  # tampered\n", encoding="utf-8")
+        for a in (("add", "-A"), ("commit", "-q", "-m", "hide")):
+            r = _sp.run(["git", *a], cwd=str(repo), capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr
+
+        ev = WORKER._capture_workspace_mutation(inst, base)
+        # The tree is clean (bypass would otherwise succeed)...
+        assert ev["touched_paths"] == []
+        # ...but HEAD moved, so the mutation is still visible.
+        assert ev["head_unchanged"] is False
+        assert ev["head_after"] != base
+
+    def test_new_ref_is_detected(self, tmp_path):
+        import subprocess as _sp
+
+        inst, repo = self._make_task(tmp_path)
+        base = WORKER._capture_workspace_mutation(inst)["head_after"]
+        r = _sp.run(["git", "update-ref", "refs/heads/escape", base],
+                    cwd=str(repo), capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+        ev = WORKER._capture_workspace_mutation(inst, base)
+        assert any("escape" in ref for ref in ev["refs_after"]), ev["refs_after"]
+
+    def test_ignored_artifacts_are_sampled(self, tmp_path):
+        inst, repo = self._make_task(tmp_path)
+        (repo / ".gitignore").write_text("secret_*.txt\n", encoding="utf-8")
+        (repo / "secret_artifact.txt").write_text("hidden\n", encoding="utf-8")
+
+        ev = WORKER._capture_workspace_mutation(inst)
+        assert "secret_artifact.txt" in ev["ignored_paths_sample"], ev["ignored_paths_sample"]
+        assert ev["ignored_count"] >= 1

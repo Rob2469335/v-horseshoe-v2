@@ -280,6 +280,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-004 | Step 3 - F0 6 rediscovery integration, test-isolation fix and op_infra_004 workspace fixture | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names four files explicitly; does not modify F0 |
 | F2-IMPL-AUTH-005 | Step 4 - persist the distiller provenance block and keep F2 arms out of the learning pipeline | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names two files explicitly; does not modify F0 |
 | F2-IMPL-AUTH-006 | Step 5 - record post-run workspace-mutation integrity evidence | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
+| F2-IMPL-AUTH-007 | Step 6 - strengthen workspace-mutation evidence against the commit/ref/ignored-artifact bypasses | AUTHORIZED | 2026-10-04 | Separate implementation authorization per 13(4) and 13(7); names one file explicitly; observation only, adds no exclusion rule; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -560,6 +561,30 @@ authorization. Implementation remains a separate, subsequent step.
 **File boundary.** Exactly one file: `qwen_train/f2_arm_worker.py` (plus its regression tests in `tests/test_f2_op_infra_004.py`, which already owns the worker tests and is named in F2-IMPL-AUTH-004).
 
 **Explicit non-authorization.** This entry does not authorize any other change to `qwen_train/f2_arm_worker.py` or to `qwen_train/arm_workspace.py`; no new exclusion or invalidation rule; no change to the endpoint, the outcome, the `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; no F2 execution; no real F2 evidence generation; and no provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
+
+**Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
+
+### F2-IMPL-AUTH-007 - Step 6: strengthen workspace-mutation evidence against the commit/ref/ignored-artifact bypasses
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-04
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-04, entered by the release agent. Records no new science and modifies no frozen element.
+
+**Issue.** F2-IMPL-AUTH-006 records the post-run dirty-path set via `git status --porcelain -uall`. That evidence is DEFEATABLE three ways, each verified by a test in this change:
+
+1. **Commit bypass.** An arm that runs `git add -A && git commit` leaves a CLEAN working tree, so `git status` reports nothing while the repository has in fact been mutated. The mutation evidence would falsely read as "clean".
+2. **Ref creation.** `git status` says nothing about refs. Creating a ref (the same history-manipulation channel the pre-run `_strip_future_history` removes) is invisible in the dirty-path set.
+3. **Ignored artifacts.** `-uall` does not report ignored paths, so an artifact hidden behind `.gitignore` is invisible.
+
+None of these is a scoring bug; all three are evaluation-integrity observation gaps.
+
+**Decision.** `qwen_train/f2_arm_worker.py`'s `_capture_workspace_mutation` additionally records: the post-run `head_after` commit; `head_unchanged` (whether HEAD still equals the base the workspace was reset to, taken from the frozen manifest's `task_readiness.base_commit`); the post-run `refs_after` list; and a bounded `ignored_paths_sample` with `ignored_count`. This remains OBSERVATION ONLY - no exclusion rule, no endpoint or outcome change, no gate - and stays fail-soft.
+
+**File boundary.** Exactly one file: `qwen_train/f2_arm_worker.py` (plus its regression tests in `tests/test_f2_op_infra_004.py`, already named in F2-IMPL-AUTH-004).
+
+**Explicit non-authorization.** This entry does not authorize any other change to `qwen_train/f2_arm_worker.py` or to `qwen_train/arm_workspace.py`; no new exclusion or invalidation rule; no change to the endpoint, outcome, `F2Result` schema, `_reconstruct_endpoint`, the delivery seam, or any frozen artifact; no F2 execution; no real F2 evidence generation; and no provisioning of `SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`, Q9, Q10, Q11 or Q12.
 
 **Implementation status.** This entry authorizes future implementation; it does not itself implement anything.
 
