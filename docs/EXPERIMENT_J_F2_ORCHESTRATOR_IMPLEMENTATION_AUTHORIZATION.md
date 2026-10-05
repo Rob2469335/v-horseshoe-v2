@@ -288,6 +288,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-012 | Step 11 - contamination-provenance screen (S10, temporal-cutoff proxy) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; adds a screen, selects no parameter; does not modify F0 |
 | F2-IMPL-AUTH-013 | Statistical design authorization: F1 freeze, exact McNemar, pi_d=0.50, n=300 | AUTHORIZED | 2026-10-05 | Operator-authorized scientific parameters per this mission; documentation only; does not modify F0 |
 | F2-IMPL-AUTH-014 | Step 12 - explicit contamination classification vocabulary (CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; exposes a derived classification, changes no screening decision; does not modify F0 |
+| F2-CLARIFICATION-004 | Freeze the exact CI construction and the outcome-independence invariant | CLARIFICATION | 2026-10-05 | Dated F2 authorial interpretation per 13; records what the readiness plan already specifies; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -801,6 +802,28 @@ This is a DERIVED view: it changes no screening decision, no admission, no manif
 **Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, S8 admission, the exclusion rule, or any statistical parameter; no cutoff value selected; no task admitted; no gold patch recovered; no credential provisioned; no security evidence; no confirmatory F2.
 
 **Implementation status.** Implemented, with 4 tests (RED->GREEN proven).
+
+### F2-CLARIFICATION-004 - Freeze the exact CI construction and the outcome-independence invariant
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-05, entered by the release agent. This is a CLARIFICATION: it records, as authoritative, constructions the readiness plan ALREADY specifies. It adds no new science, selects no new parameter, and modifies no frozen element.
+
+**Issue.** Two analysis constructions were specified in the plan but not yet recorded as authoritative, leaving a theoretical opening for post-hoc selection after outcomes are seen: (a) the exact confidence-interval construction, and (b) the invariant that admission, exclusion, contamination classification and missingness handling cannot depend on which arm wins.
+
+**Decision 1 - the confidence interval is frozen.** The 95% interval for the paired marginal difference is the **Clopper-Pearson exact conditional interval for the discordant proportion, mapped to the risk difference** (readiness plan section 2.3, `:125-129`). Where there are **no** discordant pairs the interval deliberately does **NOT** collapse to `[0, 0]`; it uses the conservative worst-case paired half-width. **Bootstrap is NOT used** - evalstats (arXiv 2609.35815) finds no bootstrap variant reaches nominal coverage on paired binary data even at N = 100. This construction is fixed BEFORE any confirmatory outcome and may not be changed after seeing results. The analysis reports: `b` and `c` (the discordant cells), the observed paired marginal difference, the exact two-sided McNemar p-value, and this frozen 95% interval.
+
+**Decision 2 - the outcome-independence invariant is frozen.** Task admission, exclusion, contamination classification and missingness handling **MUST NOT depend on whether T or X wins.** The plan already requires this (section 2.5, `:188-196`): **fixed N**, no interim analysis, no peeking-based sample-size change, and re-runs **"for infrastructure causes only, never for outcome"**. The population is frozen before confirmatory collection; no task may be added, removed or replaced after an outcome is observed; and UNKNOWN contamination must never silently become CLEAN (F2-IMPL-AUTH-014).
+
+**Boundary recorded, NOT crossed.** Two exclusion parameters remain **proposed and unauthorised**, exactly as the plan states: the **block-level exclusion rule** (invalid arm invalidates the whole pair) and the **infrastructure-failure budget** (proposed <= 30%, with stop-and-diagnose) are marked *"Requires authorization (section 6 Q5)"* and *"(section 6 Q6)"*. This clarification does **NOT** authorise them; they remain an operator decision.
+
+**File boundary.** This document only. No code, no test, no F0 change.
+
+**Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, S8 admission, the statistical test, alpha, power, delta, pi_d, or n; no authorisation of Q5 or Q6; no task admitted; no gold patch read; no credential provisioned; no security evidence; no confirmatory F2.
+
+**Implementation status.** Recorded. It implements nothing.
 
 ---
 
