@@ -294,6 +294,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-017 | Live worker -> governed bundle assembly (opt-in, fail-closed) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one production file plus its tests; invents no evaluator identity/store/digest; does not modify F0 |
 | F2-IMPL-AUTH-018 | Q5 block-level exclusion, Q6 infrastructure-failure operational gate, and the missingness rule (operator-granted) | AUTHORIZED | 2026-10-05 | Records operator-authorized methodological decisions from the F2 completion brief; documentation only (the outcome-independent invariants are already enforced in code); does not modify F0 |
 | F2-IMPL-AUTH-019 | Confirmatory analysis link: paired ledger -> final result + independent reconstruction | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); pure offline analysis that calls the FROZEN statistics unchanged; adds the missing final-chain link; does not modify F0 |
+| F2-IMPL-AUTH-020 | F2 execution-prerequisite readiness checker (fail-closed, read-only) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); pure readiness report that fabricates nothing and executes nothing; reports the exact blocker; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -955,6 +956,24 @@ No evaluator identity, implementation digest, trusted store, or task-outcome rep
 **Explicit non-authorization.** Does NOT execute the experiment, contact any service, admit any task, read gold, provision credentials, or change the frozen method/CI/alpha/power/delta/pi_d/n. It is inert until a real paired ledger exists.
 
 **Implementation status.** Implemented, 10 tests. It cannot produce a scientific result until the confirmatory event has run (external prerequisites still absent).
+
+### F2-IMPL-AUTH-020 - F2 execution-prerequisite readiness checker
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-05 (F2 readiness brief, Phase 5), entered by the agent. Extends the mandated fail-closed execution gate from the per-task R1-R8 check (`task_readiness.evaluate_readiness`) to the EXPERIMENT-level prerequisites. Records no new science.
+
+**Decision.** Add `qwen_train/f2_readiness.py` -- a PURE, READ-ONLY, FAIL-CLOSED report over the 18 F2 execution prerequisites (distiller model identity, weights digest, evaluator identity, evaluator implementation digest, trusted artifact store, receipt key, protected population >= 300, base/gold artifacts, T/X/C0 manifests, clean-room isolation, Q9 no-egress, Q10/Q12/Q13 authorization, delivery instrumentation, regrade/bundle verification, statistical analysis). For each it reports the evidence required, where it must exist, the failure behavior, and the operator action. A prerequisite passes ONLY when its evidence is explicitly present and well-formed; the checker never reads a secret's value, never infers no-egress from configuration, and never promotes unproven population/memory.
+
+**Verification.** `tests/test_f2_readiness.py` (12 tests): the empty environment yields 15 blockers and 3 satisfied local capabilities; malformed digest / relative store root / missing evaluator impl / population shortfall / config-only no-egress / partial probe / missing authorization all fail closed; and a fully-supplied synthetic fixture turns READY. Live current-revision evaluation: **READY False, 15 blockers**.
+
+**File boundary.** `qwen_train/f2_readiness.py` (plus `tests/test_f2_readiness.py`). No other file.
+
+**Explicit non-authorization.** Does NOT execute F2, supply any evidence, name an evaluator/model, provision a store/receipt, or alter F0/F1/statistics. It reports blockers; it does not remove them.
+
+**Implementation status.** Implemented, 12 tests.
 
 ---
 
