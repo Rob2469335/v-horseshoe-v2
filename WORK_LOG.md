@@ -483,6 +483,98 @@ standing trap it corrects is retained in  + "AGENTS.md" + @ (Protected Paths sec
 **Correction (supersedes an earlier claim):** there is **NO Arc A770** on this
 machine. The training GPU is the Meteor Lake integrated Arc iGPU using shared DDR5.
 
+## Experiment J F2 — Engineering Closure and the Sample-Size Contract Gap (2026-10-05)
+
+**Engineering freeze at this entry:** `cea3c1d1` (`origin/master`), F0 unchanged
+(SHA-256 `4EAFD2FAF2BA79078F8C1CAD7415DC1CEB2D24E753122A06FC2FA6AF76908337`).
+
+### Completed and published engineering (11 commits, `9fe968d1` … `cea3c1d1`)
+
+- **Step 2b/2c — delivery-timestamp contract.** `parse_delivery_timestamp`: Unix
+  epoch -> UTC -> **floored** whole second, strict `<`; numeric conversion guarded
+  so no input raises; a 2025-01-01 plausibility floor. The generic canonical parser
+  was deliberately NOT broadened.
+- **Step 3 — F0 section 6 rediscovery.** `classify_run_rediscovery` is now on the
+  verification path; a pre-delivery edit is named as rediscovery rather than
+  reported as an empty post-delivery window. `_reconstruct_endpoint` and the
+  `F2Result` schema were NOT changed.
+- **Step 3 — test-isolation fix.** Root `conftest.py` autouse fixtures no longer
+  share the test's own `tmp_path`; this repaired **11** pre-existing failures
+  across 9 files.
+- **Step 4 — distiller provenance persistence.** `SynthesisAttestation.to_dict()`
+  omitted `distiller_reproducibility` and `from_dict()` never restored it; both now
+  carry it. A populated round-trip regression test replaced a test that only
+  asserted the empty default.
+- **Step 4 — F2 clean-room leak closed.** `_store_decision_reflexion` was not gated
+  by `is_replay_active()`, so ANY arm (T, X or the no-lesson calibration) could mint
+  a PromptRepairer candidate from an ordinary decision failure.
+- **Step 5/6 — workspace-mutation integrity evidence.** The arm receipt now carries
+  the post-run dirty-path set plus `head_after`, `head_unchanged`, `refs_after` and
+  an ignored-path sample, closing the commit / ref / ignored-artifact bypasses; and
+  `_classify_workspace_mutation` maps the observation to
+  allowed/expected/suspicious/prohibited/unknown with an integrity assessment.
+  **Engineering assessment only — not an exclusion rule.**
+- **Step 7 — `F2Bundle` persistence round-trip.** Identity fields are now pinned
+  through `to_dict()`/`from_dict()`; a truncated bundle FAILS CLOSED. The
+  authoritative assembly point is the **evaluation/admission** stage, not the arm
+  worker (which cannot supply `task_outcome_report`, `EvaluatorAuthorization`,
+  `implementation_bytes` or `horizon_k`).
+- **Step 9/10 — calibration execution layer + adapter.** `run_calibration` is gated
+  fail-closed on a `CalibrationAuthorization` verifying six fields (arm, task set,
+  replicates, horizon, censoring convention, endpoint hash); reruns are limited to
+  the closed infrastructure-cause set with every attempt retained.
+  `make_calibration_runner` connects the runner to the F2 membrane and delegates
+  the endpoint to the frozen `f2_endpoint.qualifying_first_edit`.
+- **Retroactive ratification.** `F2-IMPL-AUTH-003` records that `bee672dc` and
+  `68208c4f` were made before repository authorization existed and were later
+  ratified; the provenance is preserved, not rewritten.
+
+**Tests at this entry:** F2 suite **899 passed, 3 skipped, 0 failed**.
+
+### Unresolved scientific issue — the paired-binary sample-size contract
+
+**Status: UNRESOLVED. REQUIRES SCIENTIFIC AUTHORIZATION. Do not treat as solved.**
+
+`docs/EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md` states that the no-lesson
+X/C0 calibration produces *"the empirical discordance `π_d` that sets required N"*.
+That is **mathematically impossible**: for a task-PAIRED design,
+
+> `π_d = P(T xor X) = p_T + p_X - 2*P(T=1, X=1)`
+
+which requires **both** arms and the joint association. `p_X` alone leaves
+`π_d` anywhere in `[0, 1]`. A no-lesson calibration has no T arm
+(`CALIBRATION_ARMS = ("X", "C0")`), so it cannot supply `π_d`.
+
+This also conflicts with the frozen sequence: **F0 section 10** has the no-lesson
+pilot inform `k`/`n`, then **F1 freezes `k`, `n`, practical-effect** — and the
+learning event comes AFTER F1, so no T observation can exist when `n` is frozen.
+
+An earlier report proposed a `p_X`-derived bound on `π_d`; **that bound is invalid**
+(it assumed T/X independence) and is withdrawn.
+
+**What the pilot CAN legitimately estimate:** `p_X` (the headroom gate),
+steps-to-first-edit (which informs `k` per F0 section 5, capped [8, 12]), task
+heterogeneity, censoring / no-edit / invalid / infrastructure rates, and run-to-run
+instability. **It cannot estimate `π_d`, `p_T`, or the association.**
+
+**Also recorded:** `horizon_steps = 12` in the implementation is the observation
+horizon and the F0 **cap**; it is NOT the frozen primary-endpoint `k`, which F1
+selects from the pilot by the 95th-percentile rule.
+
+### Task-population status
+
+`qwen_train/curriculum/f2_endpoints.json`: **12 derived, 2 refused** (correct
+fail-closed refusals — an ambiguous or non-matching reference fix). `reference_digest`
+proves **artifact identity only**; reference *execution*, reference *acceptance*, and
+empty/base *failure* are **NOT ESTABLISHED**.
+
+### External prerequisites still outstanding
+
+`SWARM_RECEIPT_KEY` (Q11) — NOT PROVISIONED; `SWARM_DISTILLER_MODEL` and
+`SWARM_DISTILLER_WEIGHTS_DIGEST` (Q7) — unset; network/sandbox enforcement (Q9) —
+host control, not established; contamination-resistant post-cutoff population (Q1)
+— not acquired; Q10 calibration — not authorized, not executed.
+
 ---
 
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

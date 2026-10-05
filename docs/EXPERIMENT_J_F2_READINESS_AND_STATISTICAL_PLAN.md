@@ -86,7 +86,10 @@ repository standard (AGENTS.md §3.8).
 ### 2.1 Estimand (unchanged from F0)
 
 > The **paired risk difference** in the probability of a qualifying
-> first-relevant-edit within `k = 12` ATIF decision steps, strictly after
+> first-relevant-edit within the first `k` ATIF decision steps, strictly after
+> (F0 §5: `k` is selected during F1 from the no-lesson pilot by the
+> pre-registered 95th-percentile rule and capped within `[8, 12]`; it is NOT
+> fixed at 12 by F0, and is not frozen yet.)
 > `delivery_timestamp`, on the task's frozen per-task `relevant_file_set`,
 > between arm **T** (frozen artifact containing genuine lesson L) and arm **X**
 > (the identical frozen artifact with L removed), over the F2 task population.
@@ -144,8 +147,27 @@ One-sided comparison at δ = 0.20: `π_d = 0.30 → 42`, `π_d = 0.50 → 74`.
 Two facts that govern everything downstream:
 
 1. **`δ` and `π_d` are both empirical.** Neither may be fixed by assertion.
-   `π_d` must come from the no-lesson calibration (§3). A default would
-   fabricate the sample size.
+
+   > **CORRECTION (2026-10-05) — THIS CLAIM IS CONTRADICTED; THE DESIGN IS BLOCKED.**
+   > The sentence that followed asserted that `π_d` "must come from the no-lesson
+   > calibration (§3)". That is mathematically impossible. For a task-PAIRED design,
+   > `π_d = P(T xor X) = p_T + p_X − 2·P(T=1, X=1)`, which requires BOTH arms and
+   > the joint association. `p_X` alone leaves `π_d` anywhere in `[0, 1]`, and the
+   > no-lesson calibration has no T arm (`CALIBRATION_ARMS = ("X", "C0")`). This also
+   > conflicts with the frozen sequence: F0 §10 has the no-lesson pilot inform `k`/`n`,
+   > then F1 freezes `k`, `n` and the practical-effect criterion, and the learning event
+   > comes AFTER F1 — so no T observation can exist when `n` is frozen. An earlier
+   > proposed `p_X`-derived bound on `π_d` was INVALID (it assumed T/X independence)
+   > and is withdrawn. **Resolution requires scientific authorization; no replacement
+   > estimator is asserted here.** The pilot legitimately yields `p_X` (headroom),
+   > steps-to-first-edit (which informs `k` per F0 §5, capped [8, 12]), task
+   > heterogeneity, and censoring / invalid / infrastructure rates — NOT `π_d`.
+   >
+   > Also note: `horizon_steps = 12` in the implementation is the observation horizon
+   > and the F0 cap; it is NOT the frozen primary-endpoint `k`.
+
+   (Superseded text, retained for provenance:) `π_d` must come from the no-lesson
+   calibration (§3). A default would fabricate the sample size.
 2. **The dispositive constraint.** With a 4-task population the best achievable
    exact one-sided p-value is **0.06250** (`b = 4, c = 0`), which does **not**
    reach 0.05; `b = 5, c = 0` gives 0.03125. This is machine-checked in
@@ -198,12 +220,24 @@ scientific decision, not an implementation detail.
 
 **Purpose.** Produce the two empirical inputs the confirmatory plan needs:
 
-1. the **X-arm base rate at k = 12** — F1 reached the endpoint in **10/10** valid
+1. the **X-arm base rate at the measurement horizon of 12 steps** — note that
+   `12` here is the **observation horizon and the F0 §5 cap**, NOT a frozen primary
+   endpoint `k`: F0 §5 selects `k` during F1 as the 95th percentile of
+   steps-to-first-edit across pilot runs, capped within `[8, 12]`, and F1 freezes it.
+   F1 reached the endpoint in **10/10** valid
    no-lesson observations (all at ATIF step 4). If X is similarly saturated the
    binary endpoint has **zero headroom** and no positive risk difference is
    attainable at any N. This must be *measured*, not assumed;
-2. the **empirical discordance `π_d`** that sets required N (a ~3× swing across
-   its plausible range).
+2. ~~the **empirical discordance `π_d`** that sets required N (a ~3× swing across
+   its plausible range).~~ **CONTRADICTED — see §2.4 (correction 2026-10-05).** The
+   no-lesson pilot does **NOT** empirically estimate `π_d`. `π_d = P(T xor X)` needs
+   both arms and the joint association; the pilot has no T arm
+   (`CALIBRATION_ARMS = ("X", "C0")`), and `p_X` alone leaves `π_d` anywhere in
+   `[0, 1]`. What the pilot legitimately supplies is: `p_X` / endpoint-headroom
+   information, steps-to-first-edit (which feeds the F0 §5 / F1 `k`-selection rule),
+   task heterogeneity, and censoring / invalid / infrastructure rates. `π_d` remains
+   **unidentified before T exists**, and the final `n` remains an **F1 scientific
+   authorization decision**. No replacement estimator is asserted here.
 
 **Contract** (enforced in `qwen_train/f2_calibration.py`): no lesson · no ACTIVE
 transition · no promotion · no receipt key · fresh process · fresh workspace ·
@@ -236,10 +270,10 @@ repositories) against the rules in `f2_population.py`:
 | State | Value |
 |---|---|
 | Pool rows / distinct repositories | 14 / 14 |
-| Tasks with a frozen `relevant_file_set` (R8) | **0** — none designated |
-| Admitted today | **0** |
-| Admitted once endpoints + evidence digests are supplied | **13 of 14** |
-| Rejected on data | 1 — `pyqtgraph__pyqtgraph-1845` declares an **empty** `pass_to_pass` set, so R3 has nothing to check for regression |
+| Tasks with a frozen `relevant_file_set` (R8) | **12 derived, 2 refused** — updated 2026-10-05; see §4b. This row previously read "0 — none designated". |
+| Admitted today | **0** (R8 is delivered for 12; the remaining eligibility gates are not) |
+| Admitted once endpoints + evidence digests are supplied | 12 of 14 |
+| Refused (correct, fail-closed) | 2 — `pytest-dev__pyfakefs-916` (no child of the base has a test-file diff equal to the declared reference test patch) and `pallets__click-2380` (reference fix commit AMBIGUOUS: 2 children match). Both **refused rather than guessed**. Corrected 2026-10-05: this row previously named `pyqtgraph__pyqtgraph-1845`. |
 
 Two independent reasons the current population cannot be confirmatory:
 
@@ -639,10 +673,12 @@ CONTROLLED EXECUTION -> IMMUTABLE EVIDENCE BUNDLE -> TRUSTED ARTIFACT STORE
 
 ### Scientific endpoint (F0, unchanged)
 
-First qualifying filesystem edit within **k = 12**, **strictly after** lesson
+First qualifying filesystem edit within the first **k** decision steps (F0 §5: `k`
+is selected during F1 and capped within `[8, 12]`; not fixed at 12 by F0 and not
+frozen yet), **strictly after** lesson
 delivery, path in the task's frozen `relevant_file_set`, operation in
-`{write, patch, edit, create}`; no qualifying edit by step 12 ⇒ **censored at
-12**. Task success is **secondary** and is never synonymous with the endpoint.
+`{write, patch, edit, create}`; no qualifying edit by step `k` ⇒ **censored at
+`k`**. Task success is **secondary** and is never synonymous with the endpoint.
 The endpoint is computed by the frozen detector
 `f2_endpoint.qualifying_first_edit`; this protocol does not reimplement it, and
 delivery ordering is enforced by filtering step records to those strictly after
@@ -940,9 +976,9 @@ task environment) — it is not a code change I can make unilaterally.
 | **Q5** | Ratify **block-level** exclusion (invalid arm ⇒ invalid pair) | Ratify. McNemar requires complete pairs. | Analysis undefined for partially-invalid blocks. |
 | **Q6** | Infrastructure-failure budget (proposed ≤ 30 %) | Authorize, with stop-and-diagnose on breach. | At F1's 50 % loss rate the design cannot hold together. |
 | **Q7** | Distiller model identity + weights digest | Fix both now; `SWARM_DISTILLER_MODEL` and `SWARM_DISTILLER_WEIGHTS_DIGEST` (or explicit unavailability). | Synthesis fails closed; no lesson can be produced. |
-| **Q8** | Per-task `relevant_file_set` (R8) | **DELIVERED** — see §4b. Governed reference-modified-file derivation, hash-frozen before any trajectory. | 8/14 derived; 6 fail closed; S8 evidence digests still outstanding |
+| **Q8** | Per-task `relevant_file_set` (R8) | **DELIVERED** — see §4b. Governed reference-modified-file derivation, hash-frozen before any trajectory. | 12 derived; 2 refused (fail-closed); `reference_digest` recorded. Corrected 2026-10-05: this cell previously read "8/14 derived; 6 fail closed" and contradicted §4b. |
 | **Q9** | Shell network-egress isolation for the learning event | Authorize an operator-level control. | "Clean-room" remains an assumption. |
-| **Q10** | **No-lesson X/C0 calibration run** (run count, tasks, replicates, censoring convention) | Authorize — cheapest, highest-value measurement available. | δ and π_d stay unmeasured; N cannot be frozen. |
+| **Q10** | **No-lesson X/C0 calibration run** (run count, tasks, replicates, censoring convention) | Authorize — cheapest, highest-value measurement available. | δ and the other F1 statistical parameters remain to be authorized. `π_d` is NOT identifiable from the lesson-free pilot (no T arm), so the `π_d` planning value must be an **F1-authorized planning decision** (or another explicitly F1-authorized resolution); `N` cannot be frozen until then. Corrected 2026-10-05. |
 | **Q11** | `SWARM_RECEIPT_KEY` provisioning | Only **after** Q7 and Q8. | Promotion stays fail-closed; no ACTIVE lesson. |
 | **Q12** | The learning event itself (exactly one, clean-room) | After Q9–Q11. | No genuine L; F2 cannot freeze. |
 | **Q13** | Confirmatory T/X collection and N=2 | Last. | — |
@@ -969,4 +1005,4 @@ provision a receipt key, run a calibration arm or a confirmatory arm, select a
 population/`n`/`δ`/test, or modify F0 or any frozen document. It records what the
 code enforces and what the operator still has to decide.
 
-*Engineering frozen at `1dd07120`. Scientific authorization NOT GRANTED.*
+*Engineering frozen at `cea3c1d1`. Scientific authorization NOT GRANTED.* (Updated 2026-10-05; this line previously read `1dd07120`.)
