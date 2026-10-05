@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @pytest.fixture(autouse=True)
-def isolate_prompt_repairer_store(tmp_path):
+def isolate_prompt_repairer_store(tmp_path_factory):
     """Never let a test mutate PromptRepairer's PRODUCTION persistent state.
 
     RED-1/RED-2 from `docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md`:
@@ -37,8 +37,7 @@ def isolate_prompt_repairer_store(tmp_path):
     `tests/conftest.py` is scoped to `tests/` only. Mirrors the existing
     `isolate_outcome_fitness` pattern in `tests/conftest.py`.
     """
-    store = tmp_path / "prompt_repairer_store"
-    store.mkdir(parents=True, exist_ok=True)
+    store = tmp_path_factory.mktemp("prompt_repairer_store")
     with patch("swarm_os.services.prompt_repairer._DATA_DIR", store):
         with patch(
             "swarm_os.services.prompt_repairer._CANDIDATES_FILE",
@@ -56,7 +55,7 @@ def isolate_prompt_repairer_store(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def isolate_runtime_data_dirs(tmp_path, monkeypatch):
+def isolate_runtime_data_dirs(tmp_path_factory, monkeypatch):
     """Never let a test append to the runtime stores under `data/`.
 
     PROVEN leaks (docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md §13.1 and the
@@ -81,7 +80,7 @@ def isolate_runtime_data_dirs(tmp_path, monkeypatch):
     When a new `data/` writer is added, add one line to `DATA_PATH_ATTRS`.
     That is the whole maintenance contract.
     """
-    root = tmp_path / "runtime_data"
+    root = tmp_path_factory.mktemp("runtime_data")
 
     # (fully-qualified dotted path INCLUDING the attribute, relative subpath)
     data_path_attrs = [

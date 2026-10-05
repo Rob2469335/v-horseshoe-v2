@@ -86,6 +86,7 @@ __all__ = [
     "EXECUTION_STATE_BY_ARM",
     "parse_canonical_timestamp",
     "parse_delivery_timestamp",
+    "classify_run_rediscovery",
     "canonical_text_bytes",
     "assemble_f2_bundle",
 ]
@@ -269,6 +270,122 @@ def parse_delivery_timestamp(value: Any) -> tuple[Any, str]:
         return None, (
             f"delivery timestamp is out of range for a UTC instant: {value!r} ({exc})"
         )
+
+
+def _delivery_epoch_unfloored(value: Any) -> float | None:
+    """Exact, UN-floored delivery instant in epoch seconds, or ``None``.
+
+    The endpoint window uses the whole-second floored instant
+    (``F2-CLARIFICATION-001``). The F0 section 6 rediscovery comparison needs the
+    delivery instant as it was actually recorded (``F2-CLARIFICATION-003``),
+    because flooring a fractional delivery to :05 would hide a possible
+    pre-delivery edit recorded at :05. Fails closed; never guesses.
+    """
+    from math import isfinite
+
+    seconds: float
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if _DELIVERY_EPOCH_TEXT.match(text):
+            try:
+                seconds = float(text)
+            except (OverflowError, ValueError):
+                return None
+        else:
+            dt, _ = parse_canonical_timestamp(text)
+            return None if dt is None else dt.timestamp()
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            seconds = float(value)
+        except (OverflowError, ValueError):
+            return None
+    else:
+        return None
+    if not isfinite(seconds) or seconds < _DELIVERY_EPOCH_FLOOR:
+        return None
+    return seconds
+
+
+def _atif_step_view(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Adapt one retained behavioral record to the ATIF tool-call shape.
+
+    The protocol retains flat records ``{step_id, timestamp, function_name,
+    operation, path}``; the existing classifier reads ATIF ``tool_calls``. This is
+    a pure field rename - it invents nothing and infers nothing.
+    """
+    return {
+        "step_id": record.get("step_id"),
+        "run_id": record.get("run_id"),
+        "timestamp": record.get("timestamp"),
+        "tool_calls": [
+            {
+                "function_name": str(record.get("function_name") or ""),
+                "arguments": {
+                    "action": str(record.get("operation") or ""),
+                    "path": str(record.get("path") or ""),
+                },
+            }
+        ],
+    }
+
+
+def classify_run_rediscovery(
+    bundle: F2Bundle,
+    *,
+    store: TrustedArtifactStore,
+) -> tuple[dict[str, Any] | None, str]:
+    """Classify one F2 arm against F0 section 6 (rediscovery), from retained bytes.
+
+    F0 section 6 (``docs/EXPERIMENT_J.md:103-109``) is FROZEN and requires that a
+    target edit performed STRICTLY EARLIER than the delivery instant be recorded
+    with a rediscovery flag, classified as pre-delivery behaviour, excluded from
+    the primary T/X causal analysis, and handled as missing data for that arm's
+    primary endpoint.
+
+    Per ``F2-CLARIFICATION-003`` the classification reads the UN-FLOORED delivery
+    instant from the retained delivery evidence, while the endpoint window keeps
+    using the floored whole second. The two rules need different inputs.
+
+    The comparison itself is delegated to
+    :func:`qwen_train.f2_rediscovery.classify_rediscovery`, the existing, tested
+    implementation, so the rule is defined in exactly one place.
+
+    Returns ``(verdict|None, reason)``. FAIL CLOSED: a behavioral artifact that
+    cannot be read, is not a step array, is missing a required field, or carries a
+    delivery instant that cannot be read exactly, yields ``(None, reason)`` rather
+    than a guessed verdict.
+    """
+    from qwen_train.f2_rediscovery import RediscoveryError, classify_rediscovery
+
+    payload, why = _read_json(store, bundle.behavioral_artifact, "behavioral artifact")
+    if payload is None:
+        return None, why
+    if not isinstance(payload, list):
+        return None, "behavioral artifact is not a JSON array of step records"
+    views = []
+    for i, r in enumerate(payload):
+        if not isinstance(r, Mapping):
+            return None, f"behavioral record {i} is not an object"
+        for name in ("step_id", "timestamp", "function_name", "operation", "path"):
+            if name not in r:
+                return None, f"behavioral record {i} is missing {name!r}"
+        views.append(_atif_step_view(r))
+
+    delivery, rwhy = _verified_delivery(bundle, store)
+    if delivery is None:
+        return None, rwhy
+    exact = _delivery_epoch_unfloored(delivery.delivery_timestamp)
+    if exact is None:
+        return None, (
+            f"delivery event: {delivery.delivery_timestamp!r} has no exact "
+            "(un-floored) epoch reading for the F0 section 6 comparison"
+        )
+    try:
+        return classify_rediscovery(views, exact), ""
+    except RediscoveryError as exc:
+        return None, f"F0 section 6 classification failed: {exc}"
 
 
 def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
@@ -757,6 +874,23 @@ def derive_f2_result(
         bundle, store, relevant_file_set, delivery.delivery_timestamp
     )
     if status == "insufficient":
+        # No post-delivery endpoint. If the run's earliest qualifying edit was
+        # STRICTLY EARLIER than the delivery instant, F0 section 6 classifies it as
+        # rediscovery, and that - not a merely empty event stream - is why this arm
+        # contributes no primary endpoint. Recording the distinction is the point:
+        # the two are different findings and must not share one reason.
+        verdict, _ = classify_run_rediscovery(bundle, store=store)
+        if verdict is not None and verdict["rediscovery"]:
+            return None, (
+                f"F0 section 6 rediscovery ({verdict['rule']}): the earliest "
+                f"qualifying edit at step {verdict['step_id']} "
+                f"({verdict['step_timestamp']}) is strictly earlier than the "
+                f"delivery instant {verdict['delivery_timestamp']} "
+                f"(delta {verdict['delta_seconds']}s, boundary_ambiguous="
+                f"{verdict['boundary_ambiguous']}); excluded from the primary T/X "
+                "causal analysis and handled as missing data for this arm's primary "
+                "endpoint (contribution is to contamination diagnostics only)"
+            )
         return None, why
     task_success, task_why = _derive_task_outcome(store, bundle.task_outcome_artifact)
     if task_success is None:

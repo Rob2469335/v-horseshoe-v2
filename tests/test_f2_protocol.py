@@ -272,14 +272,21 @@ class TestEndpointSemantics:
     def test_pre_delivery_edit_does_not_count(self):
         # Only a pre-delivery qualifying edit exists -> the event stream cannot
         # establish an endpoint, so derivation FAILS CLOSED rather than counting
-        # the pre-delivery edit or inventing a censored run.
+        # the pre-delivery edit or inventing a censored run. F2-IMPL-AUTH-004 makes
+        # the reason specific: the run is CLASSIFIED as F0 section 6 rediscovery, so
+        # a contaminated run is distinguishable from a run with an empty stream.
         res, why = derive_f2_result(
             _bundle(F2_TREATMENT_ARM, behavior=_steps(_PRE)),
             store=_store(),
             relevant_file_set=RFS,
         )
         assert res is None
-        assert "strictly after the delivery" in why
+        assert "F0 section 6 rediscovery" in why
+        assert "step.timestamp < delivery_timestamp" in why
+        # still fail-closed: no censored run invented, and the excluded run is
+        # declared a contribution to contamination diagnostics only
+        assert "censored" not in why
+        assert "contamination diagnostics only" in why
 
     def test_irrelevant_file_edit_is_not_the_endpoint(self):
         beh = _steps(_PRE, _step(4, "2026-10-04T00:00:05Z", "src/other.py"))
@@ -1197,6 +1204,186 @@ class TestDeliveryTimestampHardening:
         dt, why = parse_delivery_timestamp("1791072005.8")
         assert why == ""
         assert dt is not None and dt.second == 5
+
+
+# --------------------------------------------------------------------------
+# F2-IMPL-AUTH-004 - F0 section 6 rediscovery integration
+# --------------------------------------------------------------------------
+
+#: 2026-10-04T00:00:05Z as Unix epoch seconds (the ambiguous boundary second).
+_EPOCH_2026_10_04_05 = int(datetime(2026, 10, 4, 0, 0, 5, tzinfo=timezone.utc).timestamp())
+
+
+class TestRediscoveryIntegration:
+    """F0 section 6 is emitted by the F2 verification path, not only by a helper.
+
+    Per F2-CLARIFICATION-003 the endpoint window keeps the FLOORED delivery second
+    while the rediscovery classification reads the UN-FLOORED delivery instant, so a
+    possible pre-delivery edit in the delivery second cannot hide behind flooring.
+    """
+
+    def _bundle_with(self, steps, delivery_ts):
+        return _bundle(
+            F2_TREATMENT_ARM,
+            behavior=_steps(*steps),
+            delivery_ts=delivery_ts,
+        )
+
+    # -- the classification itself ----------------------------------------
+    def test_pre_delivery_edit_is_classified_rediscovery(self):
+        from qwen_train.f2_protocol import classify_run_rediscovery
+
+        b = self._bundle_with(
+            [_step(2, "2026-10-04T00:00:04Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        verdict, why = classify_run_rediscovery(b, store=_store())
+        assert why == ""
+        assert verdict is not None
+        assert verdict["edit_observed"] is True
+        assert verdict["rediscovery"] is True
+        assert verdict["classification"] == "pre_delivery_rediscovery"
+        assert verdict["excluded_from_causal_analysis"] is True
+        # F0 section 6 evidence, recorded rather than asserted as causality
+        assert verdict["rule"] == "step.timestamp < delivery_timestamp"
+        assert verdict["evidence_source"] == "trajectory_step_records"
+        assert verdict["step_id"] == 2
+        assert verdict["delta_seconds"] < 0
+
+    def test_post_delivery_edit_is_not_rediscovery(self):
+        from qwen_train.f2_protocol import classify_run_rediscovery
+
+        b = self._bundle_with(
+            [_step(4, "2026-10-04T00:00:06Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        verdict, why = classify_run_rediscovery(b, store=_store())
+        assert why == ""
+        assert verdict["rediscovery"] is False
+        assert verdict["classification"] == "post_delivery_first_edit"
+        assert verdict["excluded_from_causal_analysis"] is False
+
+    def test_classification_reads_the_UN_FLOORED_delivery_instant(self):
+        # Delivery .8 floors to :05. The step is AT :05.
+        # Un-floored  -> :05 < :05.8  -> rediscovery, ambiguous.
+        # Floored     -> :05 < :05    -> NOT rediscovery (the hidden case).
+        from qwen_train.f2_protocol import classify_run_rediscovery
+
+        b = self._bundle_with(
+            [_step(4, "2026-10-04T00:00:05Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        verdict, why = classify_run_rediscovery(b, store=_store())
+        assert why == ""
+        assert verdict["delivery_timestamp"] == _EPOCH_2026_10_04_05 + 0.8
+        assert verdict["step_timestamp"] == float(_EPOCH_2026_10_04_05)
+        assert verdict["rediscovery"] is True
+        assert verdict["boundary_ambiguous"] is True
+
+    def test_read_only_steps_are_not_treated_as_edits(self):
+        from qwen_train.f2_protocol import classify_run_rediscovery
+
+        b = self._bundle_with(
+            [_step(2, "2026-10-04T00:00:01Z", "twine/package.py", op="read")],
+            "1791072005.8",
+        )
+        verdict, why = classify_run_rediscovery(b, store=_store())
+        assert why == ""
+        assert verdict["edit_observed"] is False
+        assert verdict["classification"] == "no_edit_observed"
+        assert verdict["rediscovery"] is False
+
+    def test_malformed_behavioral_artifact_fails_closed(self):
+        from qwen_train.f2_protocol import classify_run_rediscovery
+
+        broken = _bundle(
+            F2_TREATMENT_ARM,
+            behavior=_write(
+                "behavior_bad.json", b"{not json", ROLE_TEST_OUTPUT
+            ),
+            delivery_ts="1791072005.8",
+        )
+        verdict, why = classify_run_rediscovery(broken, store=_store())
+        assert verdict is None and why
+
+    # -- the gate on the primary endpoint ---------------------------------
+    def test_rediscovery_run_yields_no_primary_result(self):
+        from qwen_train.f2_protocol import derive_f2_result
+
+        b = self._bundle_with(
+            [_step(2, "2026-10-04T00:00:04Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        result, why = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        assert result is None
+        assert "rediscovery" in why.lower()
+
+    def test_boundary_ambiguous_run_yields_no_primary_result(self):
+        # Delivery 1791072005.8; the step is recorded at :05. F0 section 6 reads the
+        # RECORDED value: 05 < 05.8 -> pre-delivery rediscovery, so no primary
+        # endpoint. `boundary_ambiguous` is also set, because the step's true time
+        # lies in [05.0,06.0) and the retained evidence cannot order it.
+        from qwen_train.f2_protocol import classify_run_rediscovery, derive_f2_result
+
+        b = self._bundle_with(
+            [_step(4, "2026-10-04T00:00:05Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        verdict, _ = classify_run_rediscovery(b, store=_store())
+        assert verdict["boundary_ambiguous"] is True
+        result, why = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        assert result is None
+        assert "rediscovery" in why.lower()
+
+    def test_boundary_ambiguity_alone_does_not_exclude_a_later_step(self):
+        # Delivery 05.8, step recorded :06 -> delta +0.2, inside one step period, so
+        # the classifier records boundary_ambiguous. The step's true time is in
+        # [06.0,07.0), definitively after 05.8, so F0 section 6 does NOT exclude the
+        # run. Only the strict earlier-than test excludes.
+        from qwen_train.f2_protocol import classify_run_rediscovery, derive_f2_result
+
+        b = self._bundle_with(
+            [_step(4, "2026-10-04T00:00:06Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        verdict, _ = classify_run_rediscovery(b, store=_store())
+        assert verdict["rediscovery"] is False
+        assert verdict["delta_seconds"] > 0
+        result, why = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        assert result is not None, why
+
+    def test_clean_post_delivery_run_still_derives_an_endpoint(self):
+        from qwen_train.f2_protocol import derive_f2_result
+
+        b = self._bundle_with(
+            [_step(4, "2026-10-04T00:00:06Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        result, why = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        assert result is not None, why
+        assert result.endpoint is True
+        assert result.first_edit_step == 4
+
+    # -- the endpoint window is unchanged by this integration -------------
+    def test_same_second_step_still_outside_the_endpoint_window(self):
+        # F2-CLARIFICATION-002: excluded from the window, per the existing rule.
+        from qwen_train.f2_protocol import derive_f2_result
+
+        b = self._bundle_with(
+            [_step(4, "2026-10-04T00:00:06Z", "twine/package.py")],
+            "1791072005.8",
+        )
+        clean, _ = derive_f2_result(b, store=_store(), relevant_file_set=RFS)
+        assert clean is not None and clean.first_edit_step == 4
+
+
+def test_isolation_fixtures_do_not_write_into_the_tests_own_tmp_path(tmp_path):
+    """The autouse isolation fixtures must not place state in the test's tmp_path.
+
+    Both root fixtures used to build their store under `tmp_path`, so any test
+    asserting on that directory's contents saw the fixtures' directories too.
+    """
+    assert list(tmp_path.iterdir()) == []
 
 
 # --------------------------------------------------------------------------

@@ -375,6 +375,14 @@ class TestProductionWiring:
 
         real = subprocess.Popen
         ORCH.subprocess.Popen = _Popen
+        # R12: an EXECUTING arm must be told, explicitly and fail-closed, which
+        # filesystem is the isolated task workspace (qwen_train/arm_workspace.py:
+        # :288-295). Supply a throwaway absolute directory so the guard passes on
+        # its own terms; nothing executes, because Popen above is stubbed. The
+        # orchestrator writes the value into os.environ at :202, so it is restored
+        # afterwards and cannot leak into another test.
+        prior_workspace_root = os.environ.get("SWARM_WORKSPACE_ROOT")
+        throwaway_workspace = Path(tempfile.mkdtemp()).resolve()
         # The F2 pre-flight readiness gate requires a declaration + evidence;
         # supply TEST values (not operator F2 values) so the arm reaches Popen.
         from runtime_v2.services.task_readiness import (
@@ -405,12 +413,17 @@ class TestProductionWiring:
                 render_t=lambda: (_ for _ in ()).throw(AssertionError("unused")),
                 lesson_l_id="", lesson_l_hash="",
                 task_id=task_id,
+                workspace_root=throwaway_workspace,
                 **kw,
             )
         except SystemExit:
             pass
         finally:
             ORCH.subprocess.Popen = real
+            if prior_workspace_root is None:
+                os.environ.pop("SWARM_WORKSPACE_ROOT", None)
+            else:
+                os.environ["SWARM_WORKSPACE_ROOT"] = prior_workspace_root
         return [str(c) for c in captured["cmd"]]
 
     def test_orchestrator_passes_the_structured_execute_flag(self):
