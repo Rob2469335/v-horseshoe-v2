@@ -281,7 +281,7 @@ def _record_verification_reflexion(
             from swarm_os.services.prompt_repairer import get_prompt_repairer
             import uuid
             
-            await get_prompt_repairer().process_failure(
+            get_prompt_repairer().process_failure(
                 run_id=str(uuid.uuid4()),
                 component=component,
                 failure_reason=reason,

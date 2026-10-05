@@ -442,7 +442,7 @@ async def control_recover(req: RecoverRequest) -> Dict[str, Any]:
                 from swarm_os.services.prompt_repairer import get_prompt_repairer
                 import uuid
 
-                await get_prompt_repairer().process_failure(
+                get_prompt_repairer().process_failure(
                     run_id=str(uuid.uuid4()),
                     component=f"system:{issue}",
                     failure_reason=f"system {issue} detected via probe",

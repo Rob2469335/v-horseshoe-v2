@@ -105,3 +105,26 @@ def test_file_set_of_process_failure_callers_is_exact():
         f"\nunexpected callers: {sorted(callers - _EXPECTED_FILE_SET)}\n"
         f"missing callers:    {sorted(_EXPECTED_FILE_SET - callers)}"
     )
+def test_process_failure_is_synchronous_and_never_awaited():
+    """CB-6: PromptRepairer.process_failure is a plain function. Every production
+    caller must call it without `await`; a silent sync/async mismatch raised
+    TypeError that callers masked at debug level."""
+    import ast
+    import inspect
+
+    from swarm_os.services.prompt_repairer import PromptRepairer
+
+    assert not inspect.iscoroutinefunction(PromptRepairer.process_failure)
+
+    offenders = []
+    for rel in _EXPECTED_FILE_SET:
+        p = ROOT / rel
+        if not p.exists():
+            continue
+        tree = ast.parse(p.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+                fn = node.value.func
+                if isinstance(fn, ast.Attribute) and fn.attr == "process_failure":
+                    offenders.append(f"{rel}:{node.lineno}")
+    assert not offenders, f"await process_failure remains at {offenders}"

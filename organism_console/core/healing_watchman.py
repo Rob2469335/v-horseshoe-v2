@@ -168,12 +168,13 @@ class HealingWatchman:
             from swarm_os.healing.failure_detector import run_coro_sync
             import uuid
 
+            # process_failure is synchronous; calling it must not be awaited.
             async def _store():
-                await get_prompt_repairer().process_failure(
+                get_prompt_repairer().process_failure(
                     run_id=str(uuid.uuid4()),
                     component=f"system:{issue}",
                     failure_reason=f"system {issue} detected via probe",
-                    hypothesized_action=correction,
+                    hypothesized_action=f"{correction} {do_not}",
                 )
 
             run_coro_sync(_store(), timeout=30.0)

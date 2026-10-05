@@ -842,7 +842,7 @@ class WatchLoop:
             async def _record():
                 from swarm_os.services.prompt_repairer import get_prompt_repairer
                 import uuid
-                await get_prompt_repairer().process_failure(
+                get_prompt_repairer().process_failure(
                     run_id=str(uuid.uuid4()),
                     component=agent_id,
                     failure_reason="agent ran out of turns before completing a compound goal.",

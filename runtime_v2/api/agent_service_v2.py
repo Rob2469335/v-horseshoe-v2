@@ -52,6 +52,18 @@ def _f2_replay_required() -> bool:
     return is_replay_required()
 
 
+def _f2_or_fresh_run_id() -> str:
+    """The per-invocation run id (CB-7).
+
+    An F2 arm's trajectory MUST be discoverable by the id P1 propagated
+    (``SWARM_F2_TRAJECTORY_RUN_ID``), because the worker and the calibration
+    reader look the file up by that id. Ordinary runs (unset) mint a fresh uuid4.
+    """
+    import uuid as _uuid
+
+    return os.environ.get("SWARM_F2_TRAJECTORY_RUN_ID", "").strip() or str(_uuid.uuid4())
+
+
 def _f2_abort_if_required_but_inactive() -> None:
     """Fail closed: F2 replay REQUIRED but inactive => ABORT before model
     delivery. Raises FreezeVerificationError (propagates through _call_llm's
@@ -915,7 +927,7 @@ class AgentServiceV2:
             try:
                 from runtime_v2.services.stream_runner import TASK_ID_CTX
 
-                await get_prompt_repairer().process_failure(
+                get_prompt_repairer().process_failure(
                     run_id=str(uuid.uuid4()),
                     component=agent_id,
                     failure_reason=str(error)[:300],
@@ -2608,11 +2620,9 @@ class AgentServiceV2:
         # node has a distinct run_id and points back at its parent. This is the
         # step-level fitness prerequisite (attribute a step to its exact run /
         # delegator). parent_id=None => top level.
-        import uuid as _uuid
-
-        run_id = str(
-            _uuid.uuid4()
-        )  # fresh per invocation; a child links back via parent_id
+        # CB-7: an F2 per-arm trajectory MUST be discoverable by the id P1
+        # propagated (SWARM_F2_TRAJECTORY_RUN_ID); ordinary runs mint a uuid4.
+        run_id = _f2_or_fresh_run_id()
         if not parent_id:
             parent_id = ""  # top-level normalized
 
@@ -3226,6 +3236,10 @@ class AgentServiceV2:
                     state,
                     research_discharged,
                 )
+            except FreezeVerificationError:
+                # F2 fail-closed invariant: required-but-inactive replay MUST abort
+                # the turn. Do not let the LLM-failure circuit breaker absorb it.
+                raise
             except (asyncio.TimeoutError, Exception) as exc:
                 # BUG FIX: Don't abort the run on a single LLM failure — count it and
                 # let the circuit breaker trigger the debugger, so a down backend heals
@@ -3381,7 +3395,7 @@ class AgentServiceV2:
                             from swarm_os.services.prompt_repairer import get_prompt_repairer
                             import uuid
                             
-                            await get_prompt_repairer().process_failure(
+                            get_prompt_repairer().process_failure(
                                 run_id=getattr(state, "run_id", str(uuid.uuid4())),
                                 component=agent_id,
                                 failure_reason="fix-intent coder repeated an exploration cycle without editing.",
@@ -3429,7 +3443,7 @@ class AgentServiceV2:
                             from swarm_os.services.prompt_repairer import get_prompt_repairer
                             import uuid
 
-                            await get_prompt_repairer().process_failure(
+                            get_prompt_repairer().process_failure(
                                 run_id=getattr(state, "run_id", str(uuid.uuid4())),
                                 component=agent_id,
                                 failure_reason="agent repeated an exploration cycle; forced to synthesize.",
@@ -3482,7 +3496,7 @@ class AgentServiceV2:
                         },
                         ensure_ascii=False,
                     )[:200]
-                    await get_prompt_repairer().process_failure(
+                    get_prompt_repairer().process_failure(
                         run_id=getattr(state, "run_id", str(uuid.uuid4())),
                         component=agent_id,
                         failure_reason=f"agent repeated the same tool decision >=3 times within the last 8 actions ({_loop_sig}) and tripped the circuit breaker.",
@@ -4171,7 +4185,7 @@ class AgentServiceV2:
             from swarm_os.services.prompt_repairer import get_prompt_repairer
             import uuid
 
-            await get_prompt_repairer().process_failure(
+            get_prompt_repairer().process_failure(
                 run_id=getattr(state, "run_id", str(uuid.uuid4())),
                 component=agent_id,
                 failure_reason="agent ran out of turns before completing the goal (likely a compound goal needing filesystem + web_search, or a slow LLM).",

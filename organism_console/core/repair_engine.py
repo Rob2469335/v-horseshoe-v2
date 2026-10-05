@@ -1442,7 +1442,7 @@ def _handle_event_line(engine: Any, data: dict) -> None:
             import uuid
 
             async def _record_turn_reflexion():
-                await get_prompt_repairer().process_failure(
+                get_prompt_repairer().process_failure(
                     run_id=str(uuid.uuid4()),
                     component=agent_id,
                     failure_reason="agent ran out of turns before completing a compound goal.",

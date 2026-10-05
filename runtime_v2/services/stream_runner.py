@@ -267,7 +267,7 @@ async def _store_decision_reflexion(
         except Exception as refl_err:
             log.debug("[%s] decision reflexion store skipped: %s", agent_id, refl_err)
         try:
-            await get_prompt_repairer().process_failure(
+            get_prompt_repairer().process_failure(
                 run_id=str(uuid.uuid4()),
                 component=agent_id,
                 failure_reason=str(failure_reason)[:300],
@@ -758,6 +758,12 @@ async def get_tool_decision(
                     agent_id,
                     _headroom,
                 )
+    except FreezeVerificationError:
+        # F2 fail-closed: a replay-required-but-inactive abort MUST NOT be
+        # swallowed by the broad memory-augmentation handler below. Re-raise
+        # before the generic except (this handler always sits outside the
+        # inner render try, so without this the abort was silently absorbed).
+        raise
     except Exception as mem_err:
         log.debug("Memory augmentation skipped: %s", mem_err)
 

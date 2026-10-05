@@ -346,7 +346,7 @@ class TestF2ReplaySuppressesLearningWrites:
                 calls["reflexion"] += 1
 
         class _Repairer:
-            async def process_failure(self, **k):
+            def process_failure(self, **k):  # production method is SYNCHRONOUS
                 calls["process_failure"] += 1
 
         monkeypatch.setattr(memory_core, "remember_fact", _remember)
@@ -373,7 +373,7 @@ class TestF2ReplaySuppressesLearningWrites:
         calls = {"process_failure": 0}
 
         class _Repairer:
-            async def process_failure(self, **k):
+            def process_failure(self, **k):  # production method is SYNCHRONOUS
                 calls["process_failure"] += 1
 
         class _Refl:

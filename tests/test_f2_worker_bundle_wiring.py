@@ -132,6 +132,22 @@ def _seam(rendered, arm="T"):
     }
 
 
+class TestRunIdentity:
+    def test_run_id_honors_propagated_f2_id(self, monkeypatch):
+        """CB-7: P2 must name the per-arm trajectory with the P1-propagated id."""
+        from runtime_v2.api.agent_service_v2 import _f2_or_fresh_run_id
+
+        monkeypatch.setenv("SWARM_F2_TRAJECTORY_RUN_ID", "rollout-abc")
+        assert _f2_or_fresh_run_id() == "rollout-abc"
+
+    def test_run_id_is_fresh_when_unset(self, monkeypatch):
+        from runtime_v2.api.agent_service_v2 import _f2_or_fresh_run_id
+
+        monkeypatch.delenv("SWARM_F2_TRAJECTORY_RUN_ID", raising=False)
+        a, b = _f2_or_fresh_run_id(), _f2_or_fresh_run_id()
+        assert a and b and a != b
+
+
 class TestBehavioralProjection:
     def test_step_tool_calls_are_projected(self):
         recs = _behavioral_records_from_trajectory(_trajectory())
