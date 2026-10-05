@@ -46,3 +46,25 @@ def test_patch_root_blocks_outside(tmp_path, monkeypatch):
     assert "SWARM_WRITE_ROOT" in blocked.get("error", "")
     # unchanged
     assert (tmp_path / "m.py").read_text(encoding="utf-8") == "a = 1\n"
+
+
+def test_patch_unified_diff_cannot_escape_write_root(tmp_path, monkeypatch):
+    """HC-1: a unified diff applied via git apply must not write paths outside
+    SWARM_WRITE_ROOT even when an in-root file is named as the patch target."""
+    (tmp_path / "allowed").mkdir()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "allowed" / "target.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setenv("SWARM_WRITE_ROOT", "allowed")
+    diff = (
+        "diff --git a/outside.txt b/outside.txt\n"
+        "--- /dev/null\n"
+        "+++ b/outside.txt\n"
+        "@@ -0,0 +1 @@\n"
+        "+evil\n"
+    )
+    res = filesystem_handler(
+        {"operation": "patch", "path": "allowed/target.py", "diff": diff}, tmp_path
+    )
+    assert not res.get("ok"), res
+    assert "SWARM_WRITE_ROOT" in res.get("error", ""), res
+    assert not (tmp_path / "outside.txt").exists()

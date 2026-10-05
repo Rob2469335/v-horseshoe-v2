@@ -9,6 +9,30 @@ from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 
+def _diff_target_paths(diff_text: str) -> list[str]:
+    """Relative paths a unified diff touches (HC-1).
+
+    Reads ``diff --git a/x b/x`` and ``--- a/x`` / ``+++ b/x`` headers so every
+    path can be validated against the write root BEFORE ``git apply`` runs.
+    ``/dev/null`` (new/deleted files) is ignored.
+    """
+    out: list[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split()
+            for cand in parts[2:4]:
+                if cand.startswith(("a/", "b/")):
+                    out.append(cand[2:])
+        elif line.startswith(("--- ", "+++ ")):
+            p = line[4:].strip()
+            if p == "/dev/null" or not p:
+                continue
+            if p.startswith(("a/", "b/")):
+                p = p[2:]
+            out.append(p)
+    return sorted(set(out))
+
+
 def filesystem_handler(
     params: Dict[str, Any], root: Path, trace_hook=None
 ) -> Dict[str, Any]:
@@ -382,6 +406,20 @@ def filesystem_handler(
                     return {
                         "ok": False,
                         "error": "Cannot apply a diff: no git repository above the target path.",
+                    }
+                # HC-1: git apply runs against repo_root and would otherwise write
+                # ANY file in the repository, bypassing SWARM_WRITE_ROOT. Validate
+                # every path in the diff, not just target_path.
+                unsafe = [
+                    rel
+                    for rel in _diff_target_paths(diff_text)
+                    if not _within_write_root((repo_root / rel).resolve())
+                ]
+                if unsafe:
+                    return {
+                        "ok": False,
+                        "error": "Patch blocked: diff touches paths outside "
+                        f"SWARM_WRITE_ROOT: {unsafe[:5]}",
                     }
                 tmp = None
                 try:
