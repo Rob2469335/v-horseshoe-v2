@@ -255,30 +255,45 @@ def paired_risk_difference(
     )
 
 
-def _binom_cdf_bisect(x: float, n: int, target: float, *, upper: bool) -> float:
-    """Solve P(X <= x) or P(X >= x) = target for x in [0, n] by bisection."""
-    lo, hi = 0.0, float(n)
+def _binom_cdf_bisect(k: int, n: int, target: float, *, upper: bool) -> float:
+    """Solve for the binomial probability ``p`` in [0, 1] whose tail equals target.
+
+    ``upper=True``  -> solve ``P(X >= k | n, p) = target`` (the CP LOWER bound)
+    ``upper=False`` -> solve ``P(X <= k | n, p) = target`` (the CP UPPER bound)
+
+    Both tails are monotone in ``p`` (P(X >= k) increases, P(X <= k) decreases), so
+    bisection over the PROBABILITY interval [0, 1] is valid. An earlier version
+    bisected over [0, n] and derived a count from the probability midpoint, which
+    produced impossible bounds (e.g. 2.0 for n = 20); see F2-IMPL-AUTH-015.
+    """
+    lo, hi = 0.0, 1.0
     for _ in range(200):
         mid = (lo + hi) / 2.0
-        k = int(math.floor(mid))
-        val = binom_cdf(k, n, x) if not upper else 1.0 - binom_cdf(k - 1, n, x)
-        if val < target:
-            lo = mid
+        if upper:
+            val = 1.0 - binom_cdf(k - 1, n, mid)
+            if val < target:
+                lo = mid
+            else:
+                hi = mid
         else:
-            hi = mid
+            val = binom_cdf(k, n, mid)
+            if val > target:
+                lo = mid
+            else:
+                hi = mid
     return (lo + hi) / 2.0
 
 
 def _clopper_pearson_lower(k: int, n: int, alpha: float) -> float:
     if k == 0:
         return 0.0
-    return _binom_cdf_bisect(k / n, n, alpha, upper=True)
+    return _binom_cdf_bisect(k, n, alpha, upper=True)
 
 
 def _clopper_pearson_upper(k: int, n: int, alpha: float) -> float:
     if k == n:
         return 1.0
-    return _binom_cdf_bisect(k / n, n, alpha, upper=False)
+    return _binom_cdf_bisect(k, n, alpha, upper=False)
 
 
 def exact_power(b: int, c: int, *, alpha: float = 0.05, sided: Sided = "two-sided") -> float:

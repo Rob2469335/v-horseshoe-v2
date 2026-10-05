@@ -289,6 +289,7 @@ left by a higher-authority document can be resolved without editing that documen
 | F2-IMPL-AUTH-013 | Statistical design authorization: F1 freeze, exact McNemar, pi_d=0.50, n=300 | AUTHORIZED | 2026-10-05 | Operator-authorized scientific parameters per this mission; documentation only; does not modify F0 |
 | F2-IMPL-AUTH-014 | Step 12 - explicit contamination classification vocabulary (CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); one file plus its tests; exposes a derived classification, changes no screening decision; does not modify F0 |
 | F2-CLARIFICATION-004 | Freeze the exact CI construction and the outcome-independence invariant | CLARIFICATION | 2026-10-05 | Dated F2 authorial interpretation per 13; records what the readiness plan already specifies; does not modify F0 |
+| F2-IMPL-AUTH-015 | Repair the Clopper-Pearson bisection (broken exact CI solver) | AUTHORIZED | 2026-10-05 | Separate implementation authorization per 13(4) and 13(7); correctness fix only, no scientific parameter changed; does not modify F0 |
 
 ### F2-CLARIFICATION-001 - F2 delivery-timestamp interpretation (Option A)
 
@@ -824,6 +825,31 @@ This is a DERIVED view: it changes no screening decision, no admission, no manif
 **Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, S8 admission, the statistical test, alpha, power, delta, pi_d, or n; no authorisation of Q5 or Q6; no task admitted; no gold patch read; no credential provisioned; no security evidence; no confirmatory F2.
 
 **Implementation status.** Recorded. It implements nothing.
+
+### F2-IMPL-AUTH-015 - Repair the Clopper-Pearson bisection
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit instruction of 2026-10-05, entered by the release agent. Correctness fix only. It records no new science and changes no scientific parameter.
+
+**Defect (PROVEN).** The readiness plan section 2.3 specifies a *"Clopper-Pearson exact conditional interval"*. `qwen_train/f2_statistics.py` implemented it through `_binom_cdf_bisect`, which bisected over the interval `[0, n]` (a COUNT range) instead of `[0, 1]` (a PROBABILITY range), derived a count `k = floor(mid)` from the probability midpoint, and then evaluated `binom_cdf(k, n, x)` mixing the count `k` with the probability `x`. Consequence: the solver returned impossible probability bounds - `_clopper_pearson_upper(6, 20, 0.025)` returned **2.0**, and `_clopper_pearson_upper(10, 20, 0.025)` returned **6.0** - so any interval built from it was invalid.
+
+**Fix.** `_binom_cdf_bisect(k, n, target, *, upper)` now solves for the probability `p` over `[0, 1]`:
+- `upper=True`  solves `P(X >= k | n, p) = target` (the CP LOWER bound);
+- `upper=False` solves `P(X <= k | n, p) = target` (the CP UPPER bound).
+Both tails are monotone in `p`, so bisection is valid. The callers now pass the COUNT `k` (not `k / n`). The `k = 0` and `k = n` edges remain clamped by the callers.
+
+**Verification.** The repaired bounds match R's `binom.test(k, n)$conf.int` at 95%: `(3,6) -> (0.1181, 0.8819)`; `(6,6) -> (0.5407, 1.0000)`; `(6,20) -> (0.1189, 0.5428)`; `(10,20) -> (0.2719, 0.7281)`. Bounds are valid probabilities and ordered for every `1 <= k < n` at `n` in {6, 20, 300}.
+
+**Scope note (reported, NOT changed).** `mcnemar_exact` computes its interval from `_wald_halfwidth`, while the module's own metadata string describes it as *"Clopper-Pearson conditional interval on the paired risk difference"*. That naming mismatch is **NOT** repaired here, because choosing which construction the primary result must report is a **scientific** decision, not a correctness fix. It is recorded as an open item.
+
+**File boundary.** `qwen_train/f2_statistics.py` (plus its tests in `tests/test_f2_statistics.py`). No other file.
+
+**Explicit non-authorization.** No change to F0, the endpoint, `k`, T/X/C0, alpha, power, delta, pi_d, n, the statistical test, or the frozen CI construction; no task admitted; no gold patch read; no credential provisioned; no confirmatory F2.
+
+**Implementation status.** Implemented, with 3 tests added (bounds match the standard interval; bounds are valid probabilities and ordered; edges clamped).
 
 ---
 

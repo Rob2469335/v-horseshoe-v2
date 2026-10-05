@@ -163,3 +163,59 @@ class TestPowerAndSampleSize:
         b = round((n + m * plan.delta) / 2.0)
         c = n - b
         assert exact_power(b, c, alpha=plan.alpha, sided=plan.sided) >= plan.power
+
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-015 - Clopper-Pearson bisection regression
+# ---------------------------------------------------------------------------
+
+
+class TestClopperPearsonBisection:
+    """The CP bounds must match the standard exact binomial interval.
+
+    Reference values are R's binom.test(k, n)$conf.int at 95%.
+    A prior bisection searched [0, n] instead of [0, 1] and derived a count from
+    the probability midpoint, returning impossible bounds (e.g. 2.0 for n=20).
+    """
+
+    CASES = [
+        (3, 6, 0.1181, 0.8819),
+        (6, 6, 0.5407, 1.0000),
+        (6, 20, 0.1189, 0.5428),
+        (10, 20, 0.2719, 0.7281),
+    ]
+
+    def test_bounds_match_the_standard_interval(self):
+        from qwen_train.f2_statistics import (
+            _clopper_pearson_lower,
+            _clopper_pearson_upper,
+        )
+
+        for k, n, lo_exp, hi_exp in self.CASES:
+            lo = _clopper_pearson_lower(k, n, 0.025)
+            hi = _clopper_pearson_upper(k, n, 0.025)
+            assert abs(lo - lo_exp) < 0.001, (k, n, lo, lo_exp)
+            assert abs(hi - hi_exp) < 0.001, (k, n, hi, hi_exp)
+
+    def test_bounds_are_valid_probabilities(self):
+        from qwen_train.f2_statistics import (
+            _clopper_pearson_lower,
+            _clopper_pearson_upper,
+        )
+
+        for n in (6, 20, 300):
+            for k in range(1, n):
+                lo = _clopper_pearson_lower(k, n, 0.025)
+                hi = _clopper_pearson_upper(k, n, 0.025)
+                assert 0.0 <= lo <= 1.0, (k, n, lo)
+                assert 0.0 <= hi <= 1.0, (k, n, hi)
+                assert lo <= hi, (k, n, lo, hi)
+
+    def test_edges_are_clamped(self):
+        from qwen_train.f2_statistics import (
+            _clopper_pearson_lower,
+            _clopper_pearson_upper,
+        )
+
+        assert _clopper_pearson_lower(0, 20, 0.025) == 0.0
+        assert _clopper_pearson_upper(20, 20, 0.025) == 1.0
