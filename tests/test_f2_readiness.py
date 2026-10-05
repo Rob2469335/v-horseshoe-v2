@@ -289,3 +289,115 @@ class TestStrengthenedPrerequisites:
         by = {c.item: c for c in rep2.checks}
         assert by["receipt_key"].satisfied
         assert "sentinel" not in by["receipt_key"].detail
+
+
+class TestIsolationAttestationIntegration:
+    """The readiness gate must be able to VERIFY an attestation rather than
+    trust a caller's seven strings."""
+
+    def _att(self, **over):
+        from qwen_train import f2_isolation as iso
+
+        denied = {
+            ("tcp", "example.com", 80): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "api.github.com", 443): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "winerror=10013", ""),
+            ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
+            ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
+            ("tcp", "127.0.0.1", 8000): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
+        }
+
+        def probe(protocol, host, port):
+            return denied.get((protocol, host, port), (iso.OUTCOME_UNKNOWN, "np", ""))
+
+        kwargs = dict(
+            probe=probe,
+            loopback_targets=(("127.0.0.1", 1),),
+            required_services=(("backend", "127.0.0.1", 8000),),
+            dns_probe=lambda: (iso.OUTCOME_DENIED, "resolver refused"),
+            ipv6_available=lambda: True,
+            interface_inventory=("Loopback Pseudo-Interface 1", "Wi-Fi"),
+            policy_identity="windows-defender-firewall",
+            policy_sha256="ab" * 32,
+            policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
+            arm_id="arm-T-001",
+            rollout_id="rollout-77",
+            workspace="C:/isolated/task-001",
+        )
+        kwargs.update(over)
+        return iso.run_egress_probes(**kwargs)
+
+    def test_verified_attestation_satisfies_the_gate(self):
+        from qwen_train.f2_readiness import _check_no_egress
+
+        ok, detail, _ = _check_no_egress({"no_egress_attestation": self._att().to_dict()})
+        assert ok, detail
+        assert "digest" in detail
+
+    def test_unenforced_attestation_fails_the_gate(self):
+        from qwen_train.f2_readiness import _check_no_egress
+
+        from qwen_train import f2_isolation as iso
+        denied = {("tcp", "api.github.com", 443): (iso.OUTCOME_PERMITTED, "connected", "10.0.0.5")}
+        att = self._att(probe=lambda p, h, pt: denied.get(
+            (p, h, pt), (iso.OUTCOME_DENIED, "refused", "")))
+        ok, detail, _ = _check_no_egress({"no_egress_attestation": att.to_dict()})
+        assert not ok
+        assert "https" in detail
+
+    def test_attestation_overrides_a_lying_string_receipt(self):
+        """A caller cannot claim 'denied' in strings while the attestation says
+        egress was reachable."""
+        from qwen_train.f2_readiness import _check_no_egress
+        from qwen_train import f2_isolation as iso
+
+        att = self._att(probe=lambda p, h, pt: (
+            (iso.OUTCOME_PERMITTED, "connected", "10.0.0.5")
+            if (p, h, pt) == ("tcp", "api.github.com", 443)
+            else (iso.OUTCOME_DENIED, "refused", "")
+        ))
+        supplied = {
+            "no_egress_attestation": att.to_dict(),
+            "no_egress": {"http": "denied", "https": "denied", "tcp": "denied",
+                          "udp": "denied", "ipv6": "denied", "proxy": "denied",
+                          "loopback": "ok"},
+        }
+        ok, detail, _ = _check_no_egress(supplied)
+        assert not ok, "the attestation must win over the caller's strings"
+
+    def test_malformed_attestation_fails_closed(self):
+        from qwen_train.f2_readiness import _check_no_egress
+
+        ok, detail, _ = _check_no_egress({"no_egress_attestation": {"schema": "wrong"}})
+        assert not ok
+        assert "malformed" in detail
+
+    def test_missing_required_service_coverage_fails(self):
+        from qwen_train.f2_readiness import _check_no_egress
+
+        ok, detail, _ = _check_no_egress({
+            "no_egress_attestation": self._att().to_dict(),
+            "required_local_services": ["qdrant 127.0.0.1:6333"],
+        })
+        assert not ok
+        assert "required_service_coverage" in detail or "UNPROVEN" in detail
+
+    def test_legacy_string_receipt_still_accepted_but_flagged(self):
+        from qwen_train.f2_readiness import _check_no_egress
+
+        ok, detail, _ = _check_no_egress({"no_egress": {
+            "http": "denied", "https": "denied", "tcp": "denied", "udp": "denied",
+            "ipv6": "denied", "proxy": "denied", "loopback": "ok"}})
+        assert ok
+        assert "caller-asserted" in detail
+        assert "attestation" in detail
+
+    def test_full_readiness_accepts_a_verified_attestation(self, tmp_path):
+        att = self._att().to_dict()
+        supplied = _all_supplied()
+        supplied["no_egress_attestation"] = att
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=supplied)
+        assert rep.ready is True, rep.blockers
+        by = {c.item: c for c in rep.checks}
+        assert "digest" in by["q9_no_egress"].detail

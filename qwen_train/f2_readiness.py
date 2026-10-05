@@ -324,17 +324,58 @@ def _check_clean_room(supplied: Mapping[str, Any]):
 
 
 def _check_no_egress(supplied: Mapping[str, Any]):
-    """Never inferred from configuration. Requires explicit probe receipts."""
+    """Never inferred from configuration.
+
+    Two accepted forms, in descending order of strength:
+
+    * ``no_egress_attestation`` -- a ``qwen_train.f2_isolation`` attestation.
+      The checker RE-DERIVES the verdict from the recorded probes, policy
+      identity, negative control and arm binding. The caller's claim is ignored
+      entirely; a supplied attestation can only ever be confirmed or refuted.
+    * ``no_egress`` -- the legacy seven-string receipt. Retained because it is
+      the AUTH-020 contract, but it is caller-asserted and strictly weaker.
+    """
+    att = supplied.get("no_egress_attestation")
+    if att is not None:
+        try:
+            from qwen_train.f2_isolation import verify_isolation_attestation
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return False, f"isolation attestation cannot be verified: {exc}", (
+                "Restore qwen_train/f2_isolation.py"
+            )
+        try:
+            verdict = verify_isolation_attestation(
+                att, required_services=tuple(supplied.get("required_local_services") or ())
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return False, f"isolation attestation is malformed: {exc}", (
+                "Provide a well-formed f2_isolation attestation record"
+            )
+        if verdict.satisfied:
+            return True, (
+                "no-egress attestation verified: "
+                f"{len(verdict.satisfied_dimensions)} observed and satisfied, "
+                f"{len(verdict.policy_declared_dimensions)} policy-asserted, "
+                f"digest {verdict.attestation_digest[:12]}"
+            ), ""
+        return False, f"isolation attestation not established: {verdict.detail}", (
+            "Enforce egress denial, then re-run the attestation probes"
+        )
+
     ev = supplied.get("no_egress")
     if not isinstance(ev, Mapping):
         return False, "no no-egress probe evidence supplied", (
-            "Run the confirmatory event under enforced no-egress and provide the probe receipt"
+            "Run the confirmatory event under enforced no-egress and provide "
+            "either an f2_isolation attestation or the probe receipt"
         )
     required_denied = ("https", "http", "tcp", "udp", "ipv6", "proxy")
     denied = all(ev.get(k) == "denied" for k in required_denied)
     loopback = ev.get("loopback") == "ok"
     if denied and loopback:
-        return True, "no-egress probe receipt: all egress denied, loopback ok", ""
+        return True, (
+            "no-egress probe receipt (caller-asserted): all egress denied, "
+            "loopback ok -- prefer an f2_isolation attestation"
+        ), ""
     return False, (
         "no-egress probe incomplete: "
         + ", ".join(f"{k}={ev.get(k)!r}" for k in required_denied + ("loopback",))

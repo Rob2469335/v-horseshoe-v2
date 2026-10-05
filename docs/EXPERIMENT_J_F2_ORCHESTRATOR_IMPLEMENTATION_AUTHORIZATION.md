@@ -1011,6 +1011,48 @@ No evaluator identity, implementation digest, trusted store, or task-outcome rep
 
 **Implementation status.** Implemented. 130 net new tests. The producer gap is closed; the remaining blockers are external (S8 base/gold execution evidence, population admission, Q9 host isolation, receipt key provisioning).
 
+### F2-IMPL-AUTH-022 - Q9 attestation layers and the model conversion-chain record
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-05 (F2 completion brief: "implement every non-privileged piece" around the privileged gate, and "implement the repository-side provenance machinery needed by F2"), entered by the agent. Records no new science and changes no frozen element.
+
+**The defect this replaces (Q9).** `f2_readiness._check_no_egress` consumed seven caller-asserted strings. Nothing in the repository observed a socket, so the strings could not distinguish "egress was denied" from "somebody typed the word denied", and there was no artifact, digest, binding or verification step for the clean-room claim at all.
+
+**Decision.** Add `qwen_train/f2_isolation.py`: the observer and verifier layers, deliberately excluding the privileged control. It **observes and verifies**; it creates no firewall rule, binds no interface, alters no DNS, and requires no Administrator.
+
+* *Real probes with recorded outcomes.* TCP and UDP over both a hostname and a **literal address** (a name that fails to resolve proves nothing about egress), IPv6, loopback, each declared local service, DNS behaviour, and the interface inventory. Every probe records dimension, target, protocol, outcome, detail, local address, observer PID and timestamp.
+* *Four outcomes, not two.* `denied` is recorded only when a probe was attempted and refused. Name-resolution failure is recorded `unknown`, never `denied`. A dimension with no global IPv6 is `unavailable` with a reason -- vacuously satisfied, but visibly not proven, and never laundered into `denied`.
+* *A negative control is mandatory.* If a probe to a destination that must be reachable when unisolated is not `permitted`, the entire attestation is unproven. Without it, an over-block that also breaks loopback is indistinguishable from correct isolation.
+* *Observed versus policy-declared are different epistemic categories.* `proxy` bypass and `alternate_interface` coverage are properties of the ENFORCED policy and are **not** observer-provable unprivileged. Rather than invent them, they are carried in `policy_assertions`, recorded as `source=enforced_policy`, and reported by the verdict in a separate `policy_declared_dimensions` list. An assertion with no identified policy identity and hash is rejected, and an assertion can never override an observed failure.
+* *Binding and coverage.* An attestation that cannot name its arm, rollout and workspace does not prove anything about that arm. Declared-but-uncovered required services are reported.
+* *Deterministic canonical bytes* and a content digest binding one specific observation.
+
+**Decision (readiness integration).** `_check_no_egress` now accepts, in descending strength, either a full `f2_isolation` attestation -- whose verdict it **re-derives itself**, ignoring the caller's claim entirely -- or the legacy seven-string receipt, which is retained for the AUTH-020 contract but is now labelled `caller-asserted` in its detail. A test proves an attestation **overrides a lying string receipt**: a caller cannot write `"https": "denied"` while the recorded probe shows the connection succeeded.
+
+**The defect this replaces (model provenance).** `experiment_model_identity` proves which GGUF bytes are served and under which alias. The governing document separately requires the LoRA identity as a REQUIRED RECORD, and no code verified any of: base model, adapter, training corpus, conversion, or served artifact as distinct links.
+
+**Decision.** Add `qwen_train/f2_model_provenance.py`, recording the chain **base -> adapter -> corpus -> conversion -> served** as five independent links, each `PROVEN`, `UNRECORDED` or `MISMATCH`.
+
+* *Corpus facts are metadata only.* Existence, byte size and mtime. **No line of any training corpus is ever opened**, and a test asserts the absence of a corpus hash.
+* *Timestamps are observations, never proof.* Filesystem mtimes and run timestamps are captured as observations and are explicitly **not** accepted as conversion evidence; a test pins this.
+* *Fails closed and names the fix.* Each broken link yields a specific remedy string, e.g. *"record an explicit adapter->merged-artifact->GGUF conversion step; a timestamp ordering is NOT a conversion record"*.
+* *Dimensions never collapse.* A served artifact that verifies does **not** make the chain satisfied.
+
+**Live current-revision result against the real `robs4b` artifacts.** `base_model` **PROVEN** (`Qwen3.5-4B` snapshot `851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`, from the adapter config); `adapter` **PROVEN** (`robs4b_final_adapter`, config digest, r=16, alpha=32); `training_corpus` **PROVEN** (`robs4b_mixed_final.jsonl`, named by the training-run ledger and present at 1,472,356 bytes, content not read); `served_artifact` **PROVEN** (SHA-256 matches `65202f37...b242d41`); `conversion` **UNRECORDED**. Verdict: **not satisfied**, with the conversion link named. This is the honest state: the served artifact is verifiable and the corpus is identifiable, but **nothing on disk records which adapter produced the served GGUF**.
+
+**Verification.** `tests/test_f2_isolation.py` (32 tests): full dimension coverage, observer PID, literal-IP probing, name-resolution not counted as denial, IPv6 unavailable not counted as denial, reachable egress failing its dimension, unprobed dimensions, missing negative control, undeclared DNS, missing binding, required-service coverage, policy-declared vs observed separation (including rejection of anonymous, wrong-valued, and override attempts), readiness projection mapping, projection failing the real checker, and round-trip/digest/schema tests. No test opens a socket. `tests/test_f2_model_provenance.py` (24 tests): link construction from real on-disk metadata, corpus content never hashed, conversion unrecorded without an explicit record, timestamps never closing the link, every remedy named, mismatch separation, round-trip and schema rejection.
+
+**Live current-revision results.** `pytest tests/ -k f2` -> **1176 passed, 4 skipped** (baseline before AUTH-021: 962 passed, 4 skipped). `ruff check --select E9,F swarm_os runtime_v2 organism_console` -> **All checks passed**.
+
+**File boundary.** `qwen_train/f2_isolation.py` (new), `qwen_train/f2_model_provenance.py` (new), `qwen_train/f2_readiness.py`, `tests/test_f2_isolation.py` (new), `tests/test_f2_model_provenance.py` (new), `tests/test_f2_readiness.py`, and this document.
+
+**Explicit non-authorization.** Does NOT enforce egress denial, touch firewall/routing/DNS/adapters, require or use Administrator, execute F2/Q10/Q12/T/X/C0, admit any task, provision a store or receipt key, read gold, or alter F0/F1/the frozen statistical design. Enforcing Q9 remains a privileged host operation and is still outstanding; this entry supplies only the unprivileged layers around it.
+
+**Implementation status.** Implemented. 64 net new tests. Q9's observation, verification, provenance, gating and fail-closed layers are in place; the privileged enforcement and the conversion record remain outstanding.
+
 ---
 
 *Authorized: 2026-09-29*
