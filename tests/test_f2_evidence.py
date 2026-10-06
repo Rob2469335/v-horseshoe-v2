@@ -431,7 +431,7 @@ class TestArtifactContainment:
         rec = _rec(tmp_path, state="base", result="fail")
         payload = rec.to_dict()
         payload["test_output_artifact"]["name"] = "link.txt"
-        assert _v(payload, root).state == STATE_ARTIFACT_ESCAPES_ROOT
+        assert _v(_rebind(payload), root).state == STATE_ARTIFACT_ESCAPES_ROOT
 
     def test_crlf_and_lf_are_distinct_bytes(self, tmp_path):
         assert _sha("a\r\nb") != _sha("a\nb")
