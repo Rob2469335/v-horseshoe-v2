@@ -51,6 +51,7 @@ __all__ = [
     "CONVERSION_FIELD_REMEDY",
     "CONVERSION_BINDINGS",
     "validate_conversion_record",
+    "derive_conversion_record",
     "ChainLink",
     "ConversionChain",
     "ProvenanceVerdict",
@@ -155,6 +156,108 @@ def validate_conversion_record(record: Mapping[str, Any] | None) -> tuple[str, .
         elif isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
             missing.append(name)
     return tuple(missing)
+
+
+def _artifact_digest_if_file(path: Path) -> str:
+    """SHA-256 of a single-file artifact, or "" when it is absent or a directory.
+
+    A directory of weights has no cheap whole-content digest, so this refuses to
+    invent one rather than substituting a stand-in (for example a config file's
+    digest) that would look like provenance it is not.
+    """
+    try:
+        if path.is_file():
+            return file_digest(path)[0]
+    except OSError:
+        return ""
+    return ""
+
+
+def derive_conversion_record(
+    *,
+    source_adapter: str | Path | None = None,
+    merged_artifact: str | Path | None = None,
+    served_gguf: str | Path | None = None,
+    conversion_tool: str | Path | None = None,
+    conversion_tool_version: str = "",
+    merge_operation: str = "",
+    operator: str = "",
+    conversion_inputs: Iterable[str] = (),
+    source_base: str | Path | None = None,
+    source_base_sha256: str = "",
+) -> dict[str, Any]:
+    """Derive a conversion record from artifacts actually present on disk.
+
+    Every value emitted here is READ FROM A REAL ARTIFACT. A field that cannot be
+    observed is **omitted**, never guessed, so the conversion link stays
+    UNRECORDED through :func:`validate_conversion_record`. This is what makes the
+    legitimate remediation route -- re-perform the merge and conversion under a
+    witnessed operation -- machine-checkable instead of hand-typed.
+
+    Facts about the OPERATION (converter version, the merge command, who ran it,
+    the input order) are **not derivable from files**. Whoever witnesses the
+    operation must supply them. Supplying them is a human attestation; this
+    function only assembles and never originates them.
+
+    It cannot be used to recover the historical record for an artifact whose
+    merged weights are gone: ``merged_artifact`` is omitted when that path does
+    not exist, which leaves the link UNRECORDED.
+    """
+    record: dict[str, Any] = {}
+
+    if source_adapter:
+        adir = Path(source_adapter)
+        cfg = adir / "adapter_config.json"
+        if cfg.is_file():
+            record["source_adapter"] = adir.name
+            try:
+                record["source_adapter_sha256"] = file_digest(cfg)[0]
+            except OSError:
+                pass
+            facts = _adapter_facts(adir)
+            declared = str(facts.get("base_model_name_or_path") or "").strip()
+            if declared:
+                record["source_base"] = Path(declared).name
+
+    if source_base and not record.get("source_base"):
+        bpath = Path(source_base)
+        record["source_base"] = bpath.name
+        derived = _artifact_digest_if_file(bpath)
+        if derived:
+            record["source_base_sha256"] = derived
+    if source_base_sha256:
+        record["source_base_sha256"] = source_base_sha256
+
+    if merged_artifact:
+        mpath = Path(merged_artifact)
+        if mpath.exists():
+            record["merged_artifact"] = mpath.name
+            derived = _artifact_digest_if_file(mpath)
+            if derived:
+                record["merged_artifact_sha256"] = derived
+
+    if served_gguf:
+        gpath = Path(served_gguf)
+        if gpath.is_file():
+            record["served_gguf"] = str(gpath)
+            try:
+                record["served_gguf_sha256"] = file_digest(gpath)[0]
+            except OSError:
+                pass
+
+    if conversion_tool:
+        record["conversion_tool"] = Path(conversion_tool).name
+    if str(conversion_tool_version).strip():
+        record["conversion_tool_version"] = str(conversion_tool_version).strip()
+    if str(merge_operation).strip():
+        record["merge_operation"] = str(merge_operation).strip()
+    if str(operator).strip():
+        record["operator"] = str(operator).strip()
+    inputs = [str(i).strip() for i in conversion_inputs if str(i).strip()]
+    if inputs:
+        record["conversion_inputs"] = inputs
+
+    return record
 
 
 class ProvenanceError(RuntimeError):
