@@ -1,7 +1,16 @@
 # Experiment J — F2 Readiness and Frozen Statistical Analysis Plan
 
-**Status:** ENGINEERING + METHOD READY — SCIENTIFIC AUTHORIZATION **NOT GRANTED**
-**Date:** 2026-10-04
+**Status: ENGINEERING MACHINERY IMPLEMENTED — METHOD AND SCIENTIFIC AUTHORIZATION
+NOT GRANTED.** Corrected 2026-10-05: this line previously read "ENGINEERING + METHOD
+READY", which overstated readiness while Q5/Q6 remain unauthorized (§6) and while
+this document's own §2.4 states its statistical section governs nothing until
+authorized. **A green software suite is not experimental readiness.**
+**Operator handoff (what to provide, and in what order):**
+`docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` — the single authoritative answer to
+"may we run yet?". This document explains *how the gates work*; the handoff owns the
+execution order and the readiness checklist.
+**Machine-readable status:** `python -m qwen_train.f2_preflight` (`f2_preflight_v1`).
+**Date:** 2026-10-04 (reconciled 2026-10-05 against `3218ffbc`)
 **Engineering baseline:** `1dd07120` (readiness pass), on top of `1b8b4a59`
 **Does NOT modify:** `docs/EXPERIMENT_J.md` (F0, `4EAFD2FAF2BA7907…`, frozen),
 `docs/LEARNING_EXPERIMENT_STATE.md`, `docs/EXPERIMENT_J_TASK_READINESS_CONTRACT.md`.
@@ -74,7 +83,9 @@ repository standard (AGENTS.md §3.8).
   *credential* leakage from the subprocess env, and rows 6 + the existing MCP
   denylist remove *tool-mediated* network access, but a shell that can run
   arbitrary code still has the host's network unless the operator isolates it.
-  See §5. **GOVERNANCE GAP (partially closed).**
+  See §5. **GOVERNANCE GAP — enforcement only;** observation, independent
+  verification, attestation and the readiness gate are IMPLEMENTED
+  (`F2-IMPL-AUTH-022/023`).
 * **`web_search` outside a governed run.** Unchanged and intentional.
 
 ---
@@ -246,10 +257,13 @@ identical infrastructure rules. Reruns only for one of eight predefined
 infrastructure causes. Records are frozen and content-hashed. Records measured
 by different endpoint specifications are refused as incomparable.
 
-**Status: the schema, guard rails and analysis are implemented and tested
-(27 tests). The arm runner is deliberately absent.**
+**Status: the schema, guard rails and analysis are implemented and tested. The arm
+runner is implemented** (`run_calibration`, `make_calibration_runner` in
+`f2_calibration.py`, fail-closed on `CalibrationAuthorization`) **but was deliberately
+not executed.** Corrected 2026-10-05: this previously read "The arm runner is
+deliberately absent"; the absent thing was the *execution*, not the runner.
 
-**Why the runner is absent.** Executing it creates Experiment J observations.
+**Why nothing was executed.** Executing it creates Experiment J observations.
 `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md` explicitly excludes
 "Experiment J observations (T/X/C0)", and the pilot precedent (F1-OP-001 … F1-OP-004)
 shows a no-lesson run requires its own explicit operator authorization naming the
@@ -272,19 +286,21 @@ repositories) against the rules in `f2_population.py`:
 | Pool rows / distinct repositories | 14 / 14 |
 | Tasks with a frozen `relevant_file_set` (R8) | **12 derived, 2 refused** — updated 2026-10-05; see §4b. This row previously read "0 — none designated". |
 | Admitted today | **0** (R8 is delivered for 12; the remaining eligibility gates are not) |
-| Admitted once endpoints + evidence digests are supplied | 12 of 14 |
+| Admitted once evidence digests are supplied | 12 of 14 (endpoints already delivered) |
 | Refused (correct, fail-closed) | 2 — `pytest-dev__pyfakefs-916` (no child of the base has a test-file diff equal to the declared reference test patch) and `pallets__click-2380` (reference fix commit AMBIGUOUS: 2 children match). Both **refused rather than guessed**. Corrected 2026-10-05: this row previously named `pyqtgraph__pyqtgraph-1845`. |
 
 Two independent reasons the current population cannot be confirmatory:
 
-1. **R8 is unmet for every task.** No designated task carries a frozen
-   `relevant_file_set`, so the primary endpoint is uncomputable for all of them.
-   `screen_entry` now *rejects* such a task rather than letting it silently
-   measure "no qualifying edit".
+1. **S8 evidence provenance is unmet for every task.** `S8` passes **0/14** — no
+   verified base/gold execution pair exists, and base/gold evidence digests require
+   actual base and gold test runs. This is the *sole* remaining eligibility gate for
+   the 12 tasks whose `relevant_file_set` is already derived; **R8 is delivered for
+   12 of 14** (§4b). Corrected 2026-10-05: this item previously read "R8 is unmet for
+   every task", which contradicted rows above and §4b.
 2. **Arithmetic.** Even fully remediated, 13–14 pairs against a requirement of
    **19–85** (δ = 0.20…0.30, π_d = 0.30…0.50, two-sided) is short by roughly an
-   order of magnitude, and at ≤ 5 pairs it is *arithmetically impossible* to
-   reach significance at any effect size (§2.4).
+   order of magnitude, and at ≤ 5 pairs it is *arithmetically impossible* to reach
+   significance at any effect size (§2.4).
 
 **Expansion is therefore required, and it is a research/supply task, not a
 code task.** `screen_pool_rows` accepts an externally supplied
@@ -409,7 +425,7 @@ operation: add the remote and fetch the default branch, no tags.
 
 No checkout, reset, rebase, merge, or working-tree modification. Pre/post
 `git status --porcelain` was recorded for each and is byte-identical. The fetched
-repositories remain **curator-side**: the arm-workspace contamination channel
+repositories remain on the **curator side** (authority undefined): the arm-workspace contamination channel
 (future history) is still closed at arm time by `_strip_future_history`.
 
 ### Two construct-validity observations for the operator
@@ -643,10 +659,13 @@ OS/operator-level controls). `RECONSTRUCTABLE_IDENTITY` holds;
 `VERIFIABLE_ARTIFACTS` holds; `DERIVABLE_RESULT` holds only for a registered
 protocol; full `REEXECUTION` is intentionally not performed.
 
-**GOVERNANCE GAP:** the authorized evaluator identity and implementation digest;
-the real result-derivation protocol and its format; the trusted store location and
-OS-level immutability; retention duration and deletion detection; curator and
-independent-verifier authority.
+**GOVERNANCE GAP:** the **operator act of naming** the authorized evaluator identity and
+implementation digest for a specific run; the trusted store location and OS-level
+immutability; retention duration and deletion detection; curator and
+independent-verifier authority. Corrected 2026-10-05: this list previously also
+included "the real result-derivation protocol and its format", which is no longer a gap
+— `qwen_train/f2_evaluator.py` implements it and it is registered as the authoritative
+protocol `f2_evaluator_report_v1`.
 
 **REQUIRES AUTHORIZATION:** naming the authorized evaluator/procedure and
 protocol, provisioning the trusted store, and generating any real evidence.
@@ -705,7 +724,7 @@ Raw ordered behavioral step records
 `{step_id, timestamp, function_name, operation, path}`; the task-outcome report
 `{fail_to_pass: {node: passed|failed|error|skipped}}`; the rendered treatment
 artifact; the lesson block artifact (arm T); the evaluator implementation
-artifact. The `relevant_file_set` is supplied **curator-side** from the frozen Q8
+artifact. The `relevant_file_set` is supplied on the **curator side** (authority undefined) from the frozen Q8
 manifest and must hash to the bundle's declared `relevant_file_set_hash`.
 
 ### Verifier procedure
@@ -754,7 +773,7 @@ editing the retained bytes fails closed (`PROVENANCE_NOT_ESTABLISHED`).
 
 `EXECUTION_STATE_BY_ARM`: **T → `treatment`**, **X → `control`**, **C0 →
 `control_empty`**. X is the control arm (the identical artifact with L removed) and
-is **not** the gold/reference state; gold is curator-side and never enters the
+is **not** the gold/reference state; gold is curator-side (authority undefined) and never enters the
 worker-facing identity model. Changing the arm changes the execution identity.
 
 ### Timestamp semantics
@@ -827,17 +846,17 @@ the behavioural endpoint, and the paired within-task design.
   `TestBundleAssembly` (9), including a full assemble→regrade round-trip and the
   T/X clean room.
 
-**Remaining wiring (engineering, bounded):** `f2_arm_worker.py` must call
-`assemble_f2_bundle` with its receipt data (it already produces
-`delivery_identity`, `delivered_artifact`, `outcome_evidence`, and reads P2
-delivery evidence from the trajectory) and persist the bundle. Until that call is
-wired and exercised end-to-end, the *live* path is `NOT ESTABLISHED` even though
-the assembly and regrade mechanisms are PROVEN. This is a wiring step, not a
-scientific or authorization decision.
+**Wiring: COMPLETE.** `f2_arm_worker.py` calls `assemble_f2_bundle` with its receipt
+data (it produces `delivery_identity`, `delivered_artifact`, `outcome_evidence`, and
+reads P2 delivery evidence from the trajectory) and persists the bundle, behind the
+opt-in `SWARM_F2_EMIT_BUNDLE` gate. Corrected 2026-10-05: this previously read
+"Remaining wiring … must call `assemble_f2_bundle`", which was closed by `F2-IMPL-AUTH-017`
+and exercised end-to-end.
 
 > **No property above is upgraded to PROVEN merely because a test exists.** The
-> assembly and regrade mechanisms are PROVEN; the live end-to-end path remains
-> `NOT ESTABLISHED` until the worker emits the bundle.
+> assembly and regrade mechanisms are PROVEN. Running them against a **real model in a
+> real arm** remains `NOT ESTABLISHED` — for external reasons (no S8 evidence, no
+> admitted population, no enforced isolation), not for want of wiring.
 
 ### What a digest proves (SOTA honesty)
 
@@ -955,13 +974,19 @@ reason. `clean_learning_env` is allowlist-based, and an allowlist entry still
 cannot smuggle a credential-named variable through. 35 adversarial tests,
 including an unanticipated credential name.
 
-**Still open.** MCP/tool-mediated network access is denied and credentials no
-longer leak, but a shell that can execute arbitrary code retains the **host's
-network** unless the operator isolates it. MCP denial alone therefore still does
-not establish that a learning event was network-free. Closing this needs an
-operator-level control (air-gapped run, egress firewall, or an offline-only
-task environment) — it is not a code change I can make unilaterally.
-**GOVERNANCE GAP.**
+**Still open — and only enforcement.** MCP/tool-mediated network access is denied and
+credentials no longer leak, but a shell that can execute arbitrary code retains the
+**host's network** unless the operator isolates it. MCP denial alone therefore still
+does not establish that a learning event was network-free.
+
+Four unprivileged layers now exist beneath that gap (`F2-IMPL-AUTH-022/023`): probe
+**observation** (`python -m qwen_train.f2_isolation`), **independent verification**,
+a **cryptographically bound attestation** carrying a required negative control, and a
+**readiness gate that refuses a caller-typed `"denied"`**. What remains is
+**PRIVILEGED enforcement**, which is an operator/administrator action and cannot be
+written in Python. Corrected 2026-10-05: this previously read "it is not a code change
+I can make unilaterally", which understated the four layers now implemented.
+**GOVERNANCE GAP — enforcement only.**
 
 ---
 
@@ -974,10 +999,10 @@ task environment) — it is not a code change I can make unilaterally.
 | **Q3** | δ (smallest effect of interest) | **δ = 0.20**, pre-registered, conditional on Q1. | No frozen N is possible. |
 | **Q4** | Primary endpoint: keep F0's binary, or move to censored steps-to-first-edit? | **Keep F0's binary** and report the survival analysis as a pre-specified secondary — F0 §16 protects the primary, and saturation is a *hypothesis the calibration tests*, not an established fact. | Either is defensible; this is a scientific judgment. |
 | **Q5** | Ratify **block-level** exclusion (invalid arm ⇒ invalid pair) | Ratify. McNemar requires complete pairs. | Analysis undefined for partially-invalid blocks. |
-| **Q6** | Infrastructure-failure budget (proposed ≤ 30 %) | Authorize, with stop-and-diagnose on breach. | At F1's 50 % loss rate the design cannot hold together. |
+| **Q6** | Infrastructure-failure budget (proposed ≤ 30 %) | Authorize, with stop-and-diagnose on breach. The *statistical* gate is IMPLEMENTED at threshold 0.30 and pinned by tests to change no statistic and drop no pair — but it has **no appointed curator** to answer to it. | At F1's 50 % loss rate the design cannot hold together. |
 | **Q7** | Distiller model identity + weights digest | Fix both now; `SWARM_DISTILLER_MODEL` and `SWARM_DISTILLER_WEIGHTS_DIGEST` (or explicit unavailability). | Synthesis fails closed; no lesson can be produced. |
 | **Q8** | Per-task `relevant_file_set` (R8) | **DELIVERED** — see §4b. Governed reference-modified-file derivation, hash-frozen before any trajectory. | 12 derived; 2 refused (fail-closed); `reference_digest` recorded. Corrected 2026-10-05: this cell previously read "8/14 derived; 6 fail closed" and contradicted §4b. |
-| **Q9** | Shell network-egress isolation for the learning event | Authorize an operator-level control. | "Clean-room" remains an assumption. |
+| **Q9** | Shell network-egress isolation for the learning event | Authorize an operator-level control. **PRIVILEGED enforcement** is the only missing layer; observation, independent verification, cryptographically bound attestation and the readiness gate are already IMPLEMENTED. | "Clean-room" remains an assumption. |
 | **Q10** | **No-lesson X/C0 calibration run** (run count, tasks, replicates, censoring convention) | Authorize — cheapest, highest-value measurement available. | δ and the other F1 statistical parameters remain to be authorized. `π_d` is NOT identifiable from the lesson-free pilot (no T arm), so the `π_d` planning value must be an **F1-authorized planning decision** (or another explicitly F1-authorized resolution); `N` cannot be frozen until then. Corrected 2026-10-05. |
 | **Q11** | `SWARM_RECEIPT_KEY` provisioning | Only **after** Q7 and Q8. | Promotion stays fail-closed; no ACTIVE lesson. |
 | **Q12** | The learning event itself (exactly one, clean-room) | After Q9–Q11. | No genuine L; F2 cannot freeze. |

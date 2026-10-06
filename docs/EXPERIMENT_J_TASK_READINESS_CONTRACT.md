@@ -72,6 +72,16 @@ workspace with SHA-256. A substitute probe (`swe_rebench_probe.probe()`) does
 **not** satisfy this; it does not run `_test_result`, does not evaluate P2P, and
 is labelled as substitute evidence.
 
+> *Reconciled 2026-10-05.* R5 is governed in full by §4c/§4d of
+> `docs/EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md`. Archiving plus a
+> SHA-256 is necessary but **not sufficient**. A valid pair additionally requires
+> the same authorized task identity; correct base/gold binding; correct arm
+> identity; base = **FAIL** and gold = **PASS**; retained **JUnit** test output; a
+> **run log**; artifact digests and sizes bound by role; evaluator **identity and
+> version**; containment under a trusted root; clean-room/integrity evidence;
+> **no re-execution during regrade**; and refusal of a caller-supplied
+> `{"verified": true}` shortcut. **Zero valid pairs exist today.**
+
 **R6 — Learning-signal sufficiency.** The run classifies `BEHAVIORAL` under
 `evaluation_bridge.classify_evaluation_failure`, which since `5f703869` gates on
 the authoritative evaluator verdict first: `evaluator_passed=True → SOLVED`
@@ -104,8 +114,10 @@ docker-free-usable (`probe()` verdict `USABLE (docker-free)`).
 | `pallets__werkzeug-2583` | pallets/werkzeug | `1ce57f64c9` | 1 | 114 | ✅ | ✅ | ✅ 0 broken | ✅ |
 | `xknx__xknx-470` | XKNX/xknx | `715856fdb6` | 1 | 136 | ✅ | ✅ | ✅ 0 broken | ✅ |
 
-R5 is **substitute-probe only** for all five. R6, R7 and R8 are unmet pending
-§5 and §6.
+R5 is **substitute-probe only** for all five, and **zero valid base/gold pairs'
+exist**. R6 and R7 are unmet pending §5 and §6. Corrected 2026-10-05: this'
+previously also said R8 is unmet — R8 (`relevant_file_set`) is delivered for 12'
+of 14 tasks, and S8 evidence provenance is the sole remaining eligibility gate.
 
 Observed F2P base failure types — recorded for provenance, **not** as a
 criterion: `AssertionError`, `KeyError`, `ERROR`/`TypeError`,

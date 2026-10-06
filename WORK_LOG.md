@@ -577,4 +577,87 @@ host control, not established; contamination-resistant post-cutoff population (Q
 
 ---
 
+---
+
+## 2026-10-05 — F2 engineering completion, then documentation reconciliation
+
+Two logical passes, both repository-side. Neither executed an experiment, authorized
+anything, or fabricated evidence.
+
+### Pass 1 — `e6562622` … `3218ffbc` (F2-IMPL-AUTH-021/022/023)
+
+Repository-side F2 machinery completed and pushed. Recorded here because this file
+previously had **no** entry for any of it.
+
+| Commit | What |
+|---|---|
+| `26a450ef` | **AUTH-021** — the authoritative independent test-outcome evaluator (`qwen_train/f2_evaluator.py`, registered `f2_evaluator_report_v1`) |
+| `e6562622` | **AUTH-022** — Q9 observation/verification/attestation layers; the model conversion-chain record |
+| `3218ffbc` | **AUTH-023** — execution preflight, anti-reward-hacking integrity gate, report self-integrity, evidence-based readiness |
+
+Two genuine defects were found and fixed rather than documented around:
+
+* **Producer/verifier drift.** The evaluator emits `missing` for a declared test
+  absent from the evidence, but three pre-existing consumers
+  (`_derive_json_test_report_v1`, `_derive_task_outcome`, `_task_success_from_report`)
+  each rejected `missing` as an unrecognised status. A legitimate report could be
+  refused downstream as a protocol error instead of scoring as the failure it is. All
+  three now delegate to one authority, `verdict_from_report_payload`.
+* **Report forgery.** `parse_report` re-derived the verdict from the report's own
+  `fail_to_pass` map, so rewriting `declared_result` on an all-passed map produced an
+  internally consistent *forged* report. Reports now carry a SHA-256
+  `report_digest`.
+
+An existing worker test used a hand-written report fixture. It was replaced with a
+genuinely evaluator-produced report rather than weakening the new check.
+
+Suite: `pytest tests/ -k f2` → **1274 passed, 4 skipped** (baseline before: 1176 + 4).
+Ruff `E9,F` clean.
+
+### Pass 2 — documentation reconciliation and execution readiness
+
+A contradiction audit against the real code found documentation that had drifted in
+both directions: claims that implemented things do not exist, and one internal
+contradiction. All findings were verified against source before being fixed.
+
+**Contradiction corrected.** The readiness plan's §4 stated "R8 is unmet for every
+task" while its own rows and §4b said `relevant_file_set` is derived for **12 of 14**.
+R8 is delivered; **S8 evidence provenance is the sole remaining eligibility gate**.
+
+**Stale "not implemented" claims corrected** (each verified against source first):
+the arm runner, the F2 execution adapter, the delivery-abstraction remediation,
+`exclude_ids`, the bundle-emission wiring, the "result-derivation protocol is a
+governance gap" claim, and Q9's "not a code change I can make unilaterally".
+
+**New:** `docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` — the single authoritative
+readiness checklist and the exact 16-step execution order A–P, each step carrying
+STATUS / OWNER / INPUTS / OUTPUT / FAIL-CLOSED / NEXT STEP.
+
+**Conversion provenance made machine-checkable.** Previously a record naming only a
+merged artifact plus free-text `detail` closed the link, so prose asserting a
+converter could stand in for a recorded operation. The record now requires 13 named
+fields and its recorded digests are cross-checked against the links the chain already
+proves — a record naming a *different* adapter is `MISMATCH`, not a pass. Timestamp
+ordering remains refused as conversion evidence. **No conversion script exists in the
+repository and none was invented; the link stays `UNRECORDED`.**
+
+**State and history reconciled.** `docs/LEARNING_EXPERIMENT_STATE.md` gained entries
+D-17…D-20 (it had recorded none of the 2026-10-05 work); `AGENTS_LEGACY.md` was
+**not** edited despite containing a timestamp-ordering inference about the conversion
+— `docs/INFERENCE_TOPOLOGY.md` §2 now labels that inference `INFERRED` and states the
+gap.
+
+### The state this leaves behind
+
+Preflight: **BLOCKED, 18 blocking findings** — 12 `OPERATOR ACTION REQUIRED`,
+4 `EXTERNAL EVIDENCE REQUIRED`, 1 `PRIVILEGED HOST ACTION REQUIRED`,
+1 `AUTHORIZATION REQUIRED`; plus 2 `NOT EXECUTED` and 16 `IMPLEMENTED`.
+
+**A green software suite is not experimental readiness.** The repository can *verify*
+isolation but not impose it, and can *validate* evidence but not produce it. S8
+evidence, egress enforcement, an ACTIVE lesson, the receipt key, population
+admission, curator authority and the conversion record all remain outstanding, and no
+document or code path pretends otherwise.
+
+Not executed: S8, Q10, Q12, Q13.
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

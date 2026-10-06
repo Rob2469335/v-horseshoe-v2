@@ -152,12 +152,11 @@ Guaranteed behavior:
 
 ### 2.4 `exclude_ids` — explicit resolution
 
-`exclude_ids` is **NOT used** for X. It is neither required nor implemented in
-this design. `render_active_lessons()` currently has no `exclude_ids` parameter
-(signature: task_context, max_chars, eval_id — lesson_manager.py:358-363), and
-this design does not add one. The design makes it impossible to interpret X as
-"rerun retrieval with L excluded": X is defined as a **pure text/hash derivation
-of the frozen T manifest**, with no renderer call in the derivation path, and the
+`exclude_ids` is **NOT used** for X. It is neither required nor needed by
+this design, and this design does not depend on it. The design makes it impossible
+to interpret X as "rerun retrieval with L excluded": X is defined as a **pure
+text/hash derivation of the frozen T manifest**, with no renderer call in the
+derivation path, and the
 X receipt records `source_t_manifest` provenance proving the frozen source.
 
 ### 2.5 Rejection conditions (fail closed)
@@ -480,12 +479,12 @@ No concurrency implementation changes are designed.
 |---|---|---|
 | A. Freeze T first | §1.4, §2.3 (derive from frozen T only) | RESOLVED |
 | B. Cross-process replay | §4 env transport; child load+verify+install | RESOLVED |
-| C. One delivery abstraction | §5 `get_delivery_artifact()` singleton; bypasses documented + remediation defined | RESOLVED in design; remediation not implemented (separate auth) |
+| C. One delivery abstraction | §5 `get_delivery_artifact()` singleton; bypasses documented + remediation defined | RESOLVED and IMPLEMENTED — `_f2_replay_required()` abort at `stream_runner.py` and `agent_service_v2.py` |
 | D. Separate hashes | §1.3, §2.3, §3.3; manifest self-exclusion | RESOLVED |
 | E. Freeze provenance | §1 manifest fields | RESOLVED |
 | F. Fail closed | §8 matrix | RESOLVED |
 | G. Retrieval mutation isolation | replay returns frozen artifact regardless of live mutation (existing tests) | RESOLVED (test-level); orchestrator inherits |
-| H. Rediscovery evidence | §6 delivery_timestamp + §7 receipt | RESOLVED in design; implementation not authorized |
+| H. Rediscovery evidence | §6 delivery_timestamp + §7 receipt | RESOLVED in design; `qwen_train/f2_rediscovery.py` and `classify_run_rediscovery` are IMPLEMENTED and on the verification path, but *persisting* the rediscovery block is still not authorized |
 
 No invariant silently changed.
 
@@ -826,7 +825,7 @@ P0 — F2 orchestrator
 ↓
 P1 — F2 arm worker / controller
 ↓
-F2 execution adapter            (qwen_train/f2_execution_adapter.py, FUTURE)
+F2 execution adapter            (qwen_train/f2_execution_adapter.py, IMPLEMENTED)
 ↓
 fresh backend P2
 ├─ P2 environment contains:
@@ -904,10 +903,11 @@ The following are **reusable technical machinery; NOT F2 authorization**:
 The future worker-execution authorization MUST explicitly authorize their use. No
 modification to those F1 files is authorized or implied.
 
-### 14.7 Adapter design contract (future `qwen_train/f2_execution_adapter.py`)
+### 14.7 Adapter contract (`qwen_train/f2_execution_adapter.py`)
 
-Defined contract (NOT implemented). The adapter must eventually be responsible
-for:
+**IMPLEMENTED** under `EXPERIMENT_J_F2_WORKER_EXECUTION_AUTHORIZATION.md`;
+`f2_arm_worker.py` imports and instantiates `F2ExecutionAdapter` on the production
+arm path. This section records the contract it is responsible for:
 
 1. receiving a verified F2 arm/manifest from the worker;
 2. preserving arm identity;
@@ -968,8 +968,10 @@ receipt schema itself is NOT modified by this amendment.
 
 The architecture selection does NOT authorize:
 
-- creation of `qwen_train/f2_execution_adapter.py`;
-- changes to `f2_arm_worker.py` / `f2_arm_orchestrator.py`;
+- creation of `qwen_train/f2_execution_adapter.py` — **since granted**, see
+  `EXPERIMENT_J_F2_WORKER_EXECUTION_AUTHORIZATION.md` §18;
+- changes to `f2_arm_worker.py` / `f2_arm_orchestrator.py` — **since granted** for
+  the authorized delivery-seam and bundle-emission scope;
 - use of `_reset_instance`;
 - use of `start_backend_fresh`;
 - use of `wait_for_backend`;

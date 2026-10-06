@@ -74,6 +74,30 @@ GGUF | `qwen_train/robs4b_q4km.gguf` |
 size | `2708803840` bytes |
 **SHA-256** | `65202F372110DDE854B40CE15DCD1B6AB56A1FE9EA542B84B6A9CC745B242D41` |
 
+**Conversion provenance is NOT established by this table.** The table proves the
+served artifact's *identity*, not what produced it. The full chain
+(`base_model` → `adapter` → `training_corpus` → `conversion` → `served_artifact`)
+is checked by `qwen_train/f2_model_provenance.py`, and its current verdict is:
+
+| Link | State |
+|---|---|
+| `base_model` | **PROVEN** |
+| `adapter` | **PROVEN** |
+| `training_corpus` | **PROVEN** by recorded metadata |
+| `served_artifact` | **PROVEN** by digest |
+| `conversion` | **UNRECORDED** |
+
+There is no conversion script in this repository, and none was invented. A file or
+run **timestamp ordering is not a conversion record** and must never be cited as
+one. The remedy — the 13 required fields and their binding to the proven links — is
+in `docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` §3.
+
+> A historical note in `AGENTS_LEGACY.md` reasons from timestamp ordering to
+> "most plausibly" conclude which adapter the served GGUF carries. That inference is
+> **`INFERRED`, not proven**, and the conversion link stays `UNRECORDED` regardless.
+> `AGENTS_LEGACY.md` is immutable and is not edited; this note supersedes its
+> inference for all current purposes.
+
 Current local runtime configuration (secondary; see §3):
 
 | Property | Value |

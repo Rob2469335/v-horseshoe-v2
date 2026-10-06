@@ -37,6 +37,37 @@ def build(**over):
     return mp.build_conversion_chain(**kw)
 
 
+def full_record(chain=None):
+    """A conversion record binding to the digests the chain actually proves.
+
+    Built from the chain rather than hardcoded, so the test exercises the
+    binding logic against the real artifacts instead of against constants that
+    would silently rot when an artifact changes.
+    """
+    chain = chain or build()
+    base = chain.link(mp.LINK_BASE)
+    adapter = chain.link(mp.LINK_ADAPTER)
+    served = chain.link(mp.LINK_SERVED)
+    return {
+        "source_base": base.identity,
+        "source_base_sha256": base.digest,
+        "source_adapter": adapter.identity,
+        "source_adapter_sha256": adapter.digest,
+        "merge_operation": "merge_v6.py --adapter robs4b_final_adapter",
+        "conversion_tool": "convert_hf_to_gguf.py",
+        "conversion_tool_version": "b4589",
+        "conversion_inputs": [
+            f"{adapter.identity} (adapter)",
+            f"{base.identity} (base)",
+        ],
+        "merged_artifact": "robs4b_merged_q4km.safetensors",
+        "merged_artifact_sha256": "c" * 64,
+        "served_gguf": served.identity,
+        "served_gguf_sha256": served.digest,
+        "operator": "operator@unrecorded-host",
+    }
+
+
 class TestChainConstruction:
     def test_all_five_links_present(self):
         chain = build()
@@ -105,17 +136,88 @@ class TestVerdict:
         assert mp.LINK_SERVED in v.proven_links
         assert not v.satisfied
 
-    def test_explicit_conversion_record_closes_the_link(self):
+    def test_complete_conversion_record_closes_the_link(self):
+        rec = full_record()
+        chain = build(conversion_record=rec)
+        assert chain.link(mp.LINK_CONVERSION).state == "PROVEN"
+        v = mp.verify_conversion_chain(chain)
+        assert v.satisfied, v.detail
+        assert not v.remedies
+
+    def test_merged_artifact_name_alone_does_not_close_the_link(self):
+        """Naming what exists is not naming what produced it.
+
+        The pre-2026-10-05 contract accepted a merged-artifact identity, its
+        digest, and a free-text `detail` that merely *asserted* a converter.
+        That let a prose claim stand in for a recorded operation.
+        """
         rec = {
             "merged_artifact": "robs4b_q4km.gguf",
             "merged_artifact_sha256": "65202f37" + "0" * 56,
             "detail": "merged from robs4b_final_adapter by convert script rev X",
         }
         chain = build(conversion_record=rec)
-        assert chain.link(mp.LINK_CONVERSION).state == "PROVEN"
+        assert chain.link(mp.LINK_CONVERSION).state == "UNRECORDED"
+        assert not mp.verify_conversion_chain(chain).satisfied
+
+    def test_incomplete_conversion_record_names_the_absent_fields(self):
+        rec = {"detail": "said something but named no artifact"}
+        chain = build(conversion_record=rec)
+        link = chain.link(mp.LINK_CONVERSION)
+        assert link.state == "UNRECORDED"
+        assert "incomplete" in link.detail
+        # It must report the true count and name the absent fields, so the
+        # operator is told what to record rather than merely that it failed.
+        n = len(mp.CONVERSION_REQUIRED_FIELDS)
+        assert f"{n} of {n} required field(s) absent" in link.detail
+        assert mp.CONVERSION_REQUIRED_FIELDS[0] in link.detail
+        # The free-text key that WAS supplied is not a required field and must
+        # not be mistaken for one.
+        assert "detail" not in mp.CONVERSION_REQUIRED_FIELDS
+
+    def test_timestamps_alone_never_close_the_conversion_link(self):
+        """A record whose only content is ordering is not a conversion record."""
+        rec = {
+            "merged_artifact": "robs4b_q4km.gguf",
+            "merged_artifact_sha256": "65202f37" + "0" * 56,
+            "adapter_mtime": "2026-09-05T13:25:00+00:00",
+            "gguf_mtime": "2026-09-05T13:25:00+00:00",
+            "detail": "the adapter is older than the gguf, so it was converted",
+        }
+        chain = build(conversion_record=rec)
+        assert chain.link(mp.LINK_CONVERSION).state == "UNRECORDED"
+
+    def test_record_naming_a_different_adapter_is_a_mismatch(self):
+        """A complete-looking record must bind to the artifact the chain proves."""
+        rec = full_record()
+        rec["source_adapter_sha256"] = "b" * 64
+        chain = build(conversion_record=rec)
+        link = chain.link(mp.LINK_CONVERSION)
+        assert link.state == "MISMATCH", link.detail
+        assert "disagrees" in link.detail
         v = mp.verify_conversion_chain(chain)
-        assert v.satisfied, v.detail
-        assert not v.remedies
+        assert not v.satisfied
+        assert mp.LINK_CONVERSION in v.mismatched_links
+
+    def test_every_required_field_has_its_own_remedy(self):
+        assert set(mp.CONVERSION_FIELD_REMEDY) == set(mp.CONVERSION_REQUIRED_FIELDS)
+        for field, text in mp.CONVERSION_FIELD_REMEDY.items():
+            assert isinstance(text, str) and text.strip(), field
+
+    def test_blank_and_empty_collection_values_count_as_absent(self):
+        rec = full_record()
+        rec["conversion_tool"] = "   "
+        rec["conversion_inputs"] = []
+        missing = mp.validate_conversion_record(rec)
+        assert set(missing) == {"conversion_tool", "conversion_inputs"}
+
+    def test_a_record_naming_only_timestamps_is_entirely_absent(self):
+        missing = mp.validate_conversion_record({"when": "2026-09-05"})
+        assert set(missing) == set(mp.CONVERSION_REQUIRED_FIELDS)
+
+    def test_no_record_at_all_is_entirely_absent(self):
+        assert mp.validate_conversion_record(None) == mp.CONVERSION_REQUIRED_FIELDS
+        assert mp.validate_conversion_record({}) == mp.CONVERSION_REQUIRED_FIELDS
 
     def test_incomplete_conversion_record_stays_unrecorded(self):
         rec = {"detail": "said something but named no artifact"}

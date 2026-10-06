@@ -47,6 +47,10 @@ __all__ = [
     "LINK_SERVED",
     "ALL_LINKS",
     "LINK_REMEDY",
+    "CONVERSION_REQUIRED_FIELDS",
+    "CONVERSION_FIELD_REMEDY",
+    "CONVERSION_BINDINGS",
+    "validate_conversion_record",
     "ChainLink",
     "ConversionChain",
     "ProvenanceVerdict",
@@ -82,6 +86,75 @@ LINK_REMEDY: dict[str, str] = {
     ),
     LINK_SERVED: "record the served GGUF path and its SHA-256",
 }
+
+#: Every field a conversion record must carry. A record is only a *conversion*
+#: record if it names the whole operation: naming a merged artifact says what
+#: exists, not what produced it. Missing any of these leaves the link
+#: UNRECORDED -- a free-text ``detail`` asserting a tool is not a field.
+CONVERSION_REQUIRED_FIELDS: tuple[str, ...] = (
+    "source_base",
+    "source_base_sha256",
+    "source_adapter",
+    "source_adapter_sha256",
+    "merge_operation",
+    "conversion_tool",
+    "conversion_tool_version",
+    "conversion_inputs",
+    "merged_artifact",
+    "merged_artifact_sha256",
+    "served_gguf",
+    "served_gguf_sha256",
+    "operator",
+)
+
+#: Conversion-record field -> what it must actually contain.
+CONVERSION_FIELD_REMEDY: dict[str, str] = {
+    "source_base": "identity of the base artifact that was adapted",
+    "source_base_sha256": "SHA-256 of that base artifact",
+    "source_adapter": "identity of the adapter that was merged",
+    "source_adapter_sha256": "SHA-256 of that adapter's config/weights",
+    "merge_operation": "identity of the merge operation (script + arguments)",
+    "conversion_tool": "identity of the converter used",
+    "conversion_tool_version": "version of that converter",
+    "conversion_inputs": "ordered input identities the converter consumed",
+    "merged_artifact": "identity of the merged/intermediate artifact",
+    "merged_artifact_sha256": "SHA-256 of that merged artifact",
+    "served_gguf": "identity of the GGUF actually served",
+    "served_gguf_sha256": "SHA-256 of that GGUF",
+    "operator": "operator or process identity, where governed",
+}
+
+#: Fields whose recorded digest must agree with the chain link that proves the
+#: same artifact. This is what makes the record checkable rather than a
+#: checklist: a record naming a *different* adapter than the chain proves is a
+#: MISMATCH, not a pass.
+CONVERSION_BINDINGS: tuple[tuple[str, str], ...] = (
+    ("source_base_sha256", LINK_BASE),
+    ("source_adapter_sha256", LINK_ADAPTER),
+    ("served_gguf_sha256", LINK_SERVED),
+)
+
+
+def validate_conversion_record(record: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Return the required conversion fields that are absent or blank.
+
+    Fail-closed. ``CONVERSION_REQUIRED_FIELDS`` names the whole operation, so a
+    record that supplies only a merged artifact or only prose stays
+    UNRECORDED. Timestamps are never consulted here: they are observations, not
+    conversion evidence.
+    """
+    if not record:
+        return CONVERSION_REQUIRED_FIELDS
+    missing: list[str] = []
+    for name in CONVERSION_REQUIRED_FIELDS:
+        value = record.get(name)
+        if value is None:
+            missing.append(name)
+        elif isinstance(value, str) and not value.strip():
+            missing.append(name)
+        elif isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
+            missing.append(name)
+    return tuple(missing)
 
 
 class ProvenanceError(RuntimeError):
@@ -304,12 +377,27 @@ def build_conversion_chain(
             "searched roots"
         )
 
-    # --- conversion: only an explicit record closes this ---
+    # --- conversion: only a complete, chain-bound record closes this ---
     if conversion_record:
         conv_id = str(conversion_record.get("merged_artifact") or "")
         conv_digest = str(conversion_record.get("merged_artifact_sha256") or "")
-        conv_state = "PROVEN" if conv_id and conv_digest else "UNRECORDED"
-        conv_detail = str(conversion_record.get("detail") or "explicit conversion record")
+        absent = validate_conversion_record(conversion_record)
+        if absent:
+            conv_state = "UNRECORDED"
+            conv_detail = (
+                f"conversion record is incomplete: {len(absent)} of "
+                f"{len(CONVERSION_REQUIRED_FIELDS)} required field(s) absent "
+                f"({', '.join(absent[:4])}"
+                f"{', ...' if len(absent) > 4 else ''}). Naming a merged artifact "
+                "says what exists, not what produced it."
+            )
+        else:
+            conv_state = "PROVEN"
+            conv_detail = (
+                f"{conversion_record.get('conversion_tool')} "
+                f"{conversion_record.get('conversion_tool_version')} via "
+                f"{conversion_record.get('merge_operation')}"
+            )
     else:
         conv_id, conv_digest = "", ""
         conv_state = "UNRECORDED"
@@ -350,6 +438,33 @@ def build_conversion_chain(
         ChainLink(LINK_CONVERSION, conv_state, conv_id, conv_digest, conv_detail),
         ChainLink(LINK_SERVED, served_state, served_id, served_dg, served_detail),
     )
+
+    # The record must bind to the SAME artifacts the rest of the chain proves.
+    # Without this, a complete-looking record naming a different adapter than
+    # the one PROVEN above would close the link on its own authority.
+    if conversion_record and conv_state == "PROVEN":
+        by_name = {l.name: l for l in links}
+        for field, link_name in CONVERSION_BINDINGS:
+            claimed = str(conversion_record.get(field) or "").strip().lower()
+            other = by_name[link_name]
+            if not claimed or not other.digest or other.state != "PROVEN":
+                continue
+            if claimed != other.digest.strip().lower():
+                links = tuple(
+                    ChainLink(
+                        l.name,
+                        "MISMATCH",
+                        l.identity,
+                        l.digest,
+                        f"conversion record {field}={claimed[:16]}... disagrees with "
+                        f"the proven {link_name} digest {other.digest[:16]}...",
+                    )
+                    if l.name == LINK_CONVERSION
+                    else l
+                    for l in links
+                )
+                break
+
     return ConversionChain(
         schema=SCHEMA,
         model_alias=model_alias,

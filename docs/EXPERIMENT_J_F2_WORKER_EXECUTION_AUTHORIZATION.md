@@ -429,7 +429,19 @@ D) and the minimum integration described above, within the exact scope.
 **NOT AUTHORIZED** for any item in §16 and for F2 scientific execution, N=2, or
 Experiment J.
 
-## 18. Implementation has NOT yet occurred
+## 18. Implementation status — SUPERSEDED
+
+> **Reconciled 2026-10-05.** This section previously read "Implementation has NOT yet
+> occurred". That was true when written and is **no longer true**. Implementation
+> **has** occurred under this authorization: `qwen_train/f2_execution_adapter.py`
+> exists and is committed, `f2_arm_worker.py` imports and instantiates
+> `F2ExecutionAdapter` on the production arm path, and the delivery-seam enforcement
+> and bundle emission it authorized are in place. See
+> `EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md` entries
+> `F2-IMPL-AUTH-017` (live worker → governed bundle assembly) and `-018`.
+>
+> The statements below about *scientific* execution remain true and are retained as
+> the governing constraint.
 
 This document authorizes implementation work within the exact scope above.
 

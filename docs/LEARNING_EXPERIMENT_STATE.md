@@ -1,4 +1,4 @@
-# Experiment J — State & Plan (Updated 2026-09-28)
+# Experiment J — State & Plan (Updated 2026-10-05)
 
 Handoff/state doc. If you are resuming, **read this first**, then
 `docs/EXPERIMENT_J.md`, `docs/EXPERIMENT_J_F1_AUTHORIZATION.md`, `docs/EXPERIMENTS.md`.
@@ -1443,3 +1443,79 @@ decisions. No agent action can clear either.
 
 This entry changes no experiment-state conclusion and no scientific parameter. It
 records decisions, verified state, and gaps; it grants no authorization.
+
+---
+
+## F2 Execution-Readiness Transition (2026-10-05, repository `3218ffbc` + reconciliation)
+
+This entry records the documentation-reconciliation and execution-readiness pass. It
+grants no authorization and executes nothing. It exists because this document is the
+owner of *current* Experiment J state (AGENTS.md §1) and previously recorded **none**
+of the 2026-10-05 engineering work.
+
+### D-17. Where F2 actually stands at `3218ffbc`
+
+The engineering is substantially complete. The experiment is **not** ready, and no
+part of the shortfall is a code problem.
+
+**IMPLEMENTED:** authoritative independent evaluator; evaluator-produced reports;
+report self-integrity (SHA-256 `report_digest`); stale-report defence; independent
+evidence reconstruction; producer/verifier agreement; integrity/anti-tamper gate;
+Q6 infrastructure gate; Q9 observation; Q9 independent verification;
+evidence-based readiness; T/X/C0 enforcement; model-provenance framework; execution
+preflight; frozen-design guard.
+
+**NOT YET EXPERIMENTALLY ESTABLISHED:** S8 base/gold evidence; actual outbound-egress
+enforcement; a genuine ACTIVE lesson; receipt-key provisioning; population admission;
+Q5/Q6 curator authority; the adapter→GGUF conversion record.
+
+**NOT EXECUTED:** S8 execution; Q10 calibration; Q12 learning event; Q13 confirmatory F2.
+
+`python -m qwen_train.f2_preflight` reports **BLOCKED, 18 blocking findings**:
+12 `OPERATOR ACTION REQUIRED`, 4 `EXTERNAL EVIDENCE REQUIRED`,
+1 `PRIVILEGED HOST ACTION REQUIRED`, 1 `AUTHORIZATION REQUIRED`; plus 2 `NOT EXECUTED`
+and 16 `IMPLEMENTED`. **PROVEN IN CURRENT REVISION.**
+
+### D-18. Governance conclusions this pass established
+
+1. **Curator authority is undefined, and Q6 therefore has no addressee.** The Q6
+   *statistical* gate is implemented at threshold 0.30 and pinned by tests to change
+   no statistic and drop no pair — that is machinery awaiting an authority, not an
+   authority. No curator has been appointed, and an agent or the operator must not
+   silently become one by default. Depends on: Q6's verdict and the regrade's
+   provenance story.
+2. **Population admission remains unauthorized.** `F2-IMPL-AUTH-013` explicitly does
+   not authorize acquiring the population. Admitted population is **0**.
+3. **Q9 enforcement is the only missing layer,** and it is privileged. Observation,
+   independent verification, cryptographically bound attestation and a readiness gate
+   that refuses a caller-typed `"denied"` are implemented. Live result on this host:
+   `NOT ESTABLISHED` — `http`, `https`, `udp`, `loopback` and `required_service` all
+   observed **REACHABLE**, and must never be reclassified as denied.
+4. **Conversion provenance is UNRECORDED and now machine-checkable.** The record must
+   carry 13 named fields (source base, adapter, merge operation, converter tool and
+   version, ordered inputs, merged artifact, served GGUF, operator), and its recorded
+   digests are cross-checked against the links the chain already proves — a record
+   naming a different adapter is `MISMATCH`, not a pass. Timestamp ordering is not
+   conversion evidence. No conversion script exists in the repo and none was invented.
+5. **R8 is delivered for 12 of 14 tasks; S8 evidence is the sole remaining
+   eligibility gate.** A prior statement in the readiness plan that "R8 is unmet for
+   every task" contradicted its own §4b and has been corrected.
+
+### D-19. Authoritative operator handoff now exists
+
+`docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` is the single authoritative answer to
+"what must I provide before we may run, and in what order": a readiness checklist
+(the 11 execution variables, the one secret handled by presence-check only, the 4
+externally-sourced evidence items, the 1 authorization, the 1 host control) and the
+exact 16-step order A–P, each step carrying STATUS / OWNER / INPUTS / OUTPUT /
+FAIL-CLOSED CONDITION / NEXT STEP. Where any other document disagrees about current
+state or ordering, the handoff and the readiness plan govern.
+
+### D-20. What this entry does not decide
+
+It does not authorize S8, Q10, Q12 or Q13; enforce egress; admit a task; provision a
+receipt key; appoint a curator; create a conversion record or an ACTIVE lesson; alter
+F0, F1, or the frozen statistical design. **A green software suite is not experimental
+readiness.** Preflight remains the final fail-closed gate: READY means the evidence
+and environmental prerequisites have actually been established, never that the code
+capable of checking readiness exists.
