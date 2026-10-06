@@ -54,7 +54,7 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 __all__ = [
     "IMPLEMENTED",
@@ -65,6 +65,8 @@ __all__ = [
     "AUTHORIZATION",
     "NOT_EXECUTED",
     "CATEGORIES",
+    "F2_REQUIRED_CONTROLS",
+    "F2_ADAPTER_CONTROLS",
     "Finding",
     "run_preflight",
     "render",
@@ -86,6 +88,48 @@ CATEGORIES = (
 
 #: Categories that BLOCK a GO. IMPLEMENTED and READY never block.
 _BLOCKING = frozenset({OPERATOR_ACTION, PRIVILEGED_HOST, EXTERNAL_EVIDENCE, AUTHORIZATION})
+
+#: Execution controls whose REQUIRED F2 value is established, with provenance.
+#:
+#: Only controls with a PROVEN required value belong here; a control the
+#: repository does not require is deliberately absent rather than invented:
+#:
+#: * ``SWARM_SEMANTIC_CACHE=0`` -- a REQUIRED CONTROL in the frozen F0 design
+#:   document (section 8, Contamination Framework, the "Semantic cache" row);
+#: * the other six -- ``qwen_train/f2_execution_adapter.py:490-496``, the P2
+#:   child environment the F2 arm is actually started with.
+#:
+#: ``SWARM_ROUTING_MODE`` and ``SWARM_ANALYSIS_CLOUD`` are NOT listed: no
+#: repository source requires a value for them on the F2 path.
+F2_REQUIRED_CONTROLS: dict[str, str] = {
+    "SWARM_AUTONOMY": "0",
+    "SWARM_EVOLUTION": "0",
+    "SWARM_GENETIC_MUTATION": "0",
+    "SWARM_SEMANTIC_CACHE": "0",
+    "SWARM_MEMORY_INJECT": "0",
+    "SWARM_NO_TOASTS": "1",
+    "SWARM_F1_NO_WEB_TOOLS": "1",
+}
+
+#: The values the F2 execution adapter forces into the P2 child environment.
+#:
+#: Mirrors ``qwen_train/f2_execution_adapter.py:490-496`` (the ``env[...] = ...``
+#: block, in source order) and the in-child launcher repeat at ``:298-303``.
+#: These are copied rather than imported because the adapter assigns them as
+#: inline literals with no module-level name.
+F2_ADAPTER_CONTROLS: dict[str, str] = {
+    "SWARM_MEMORY_INJECT": "0",
+    "SWARM_AUTONOMY": "0",
+    "SWARM_NO_TOASTS": "1",
+    "SWARM_SEMANTIC_CACHE": "0",
+    "SWARM_GENETIC_MUTATION": "0",
+    "SWARM_EVOLUTION": "0",
+    "SWARM_F1_NO_WEB_TOOLS": "1",
+}
+
+#: Every proven control above is a 0/1 flag, so any other string is
+#: unrecognised and therefore fails closed rather than being coerced.
+_F2_CONTROL_VALUES = frozenset({"0", "1"})
 
 
 @dataclass(frozen=True)
@@ -230,6 +274,100 @@ def _env_findings() -> list[Finding]:
     return out
 
 
+def _env_control_findings(
+    root: Path,
+    adapter_controls: Mapping[str, str] | None = None,
+) -> list[Finding]:
+    """Effective-value check for the F2 execution controls (``env.controls``).
+
+    Why this is not a presence check
+    -------------------------------
+    The F2 child environment is built in three steps, and only the last one can
+    change a value the adapter has already forced:
+
+    1. ``env = os.environ.copy()``            ``f2_execution_adapter.py:488``
+    2. ``env["SWARM_..."] = <required>``      ``f2_execution_adapter.py:490-496``
+    3. inside the child,
+       ``load_dotenv(override=True)``         ``swarm_os/app/main.py:20``
+       then ``settings._load_dotenv()``       ``swarm_os/config/settings.py:20,23``
+
+    Step 3 runs in the child AFTER step 2 and overwrites, so the precedence the
+    child actually sees is::
+
+        repository .env  >  adapter-forced value  >  inherited process env  >  ABSENT
+
+    (Step 3 resolves ``.env`` from the current working directory when the host
+    process is ``python -c``, which is exactly how the adapter spawns P2 --
+    ``f2_execution_adapter.py:522`` with ``cwd=repo_root`` at ``:526``. Both
+    loaders assign unconditionally, so a ``.env`` entry always wins.)
+
+    A presence-only check reports PASS for ``SWARM_AUTONOMY=1`` merely because
+    the name exists; that is precisely the contradiction this finding blocks.
+
+    Only the seven non-secret controls above are ever read or reported.
+    Credential-bearing names that appear in ``.env`` are never selected, never
+    echoed and never placed in the finding.
+    """
+    adapter = dict(F2_ADAPTER_CONTROLS if adapter_controls is None else adapter_controls)
+    file_env = _parse_operator_env(root)
+    environ = os.environ
+
+    expected = sorted(F2_REQUIRED_CONTROLS)
+    matched: list[str] = []
+    failures: list[tuple[str, str]] = []  # (kind, human text); kind drives status
+
+    for name in expected:
+        required = F2_REQUIRED_CONTROLS[name]
+        if name in file_env:
+            effective, source = file_env[name], "from .env"
+        elif name in adapter:
+            effective, source = adapter[name], "from the F2 adapter"
+        elif name in environ:
+            effective, source = environ[name], "from the inherited process env"
+        else:
+            failures.append((
+                "missing",
+                f"{name} is absent from .env, the F2 adapter and the process "
+                f"environment (required {required})",
+            ))
+            continue
+
+        if effective not in _F2_CONTROL_VALUES:
+            failures.append((
+                "invalid",
+                f"{name}={effective} ({source}) is not a recognised 0/1 value "
+                f"(required {required})",
+            ))
+        elif effective != required:
+            failures.append((
+                "mismatch",
+                f"{name}={effective} ({source}) but required {required}",
+            ))
+        else:
+            matched.append(f"{name}={required}")
+
+    total = len(expected)
+    if not failures:
+        return [Finding(
+            READY, "env.controls", "match",
+            f"{len(matched)} of {total} controls match the required value: "
+            + ", ".join(matched),
+            "",
+        )]
+
+    kinds = {kind for kind, _ in failures}
+    status = "missing" if "missing" in kinds else (
+        "invalid" if "invalid" in kinds else "mismatch"
+    )
+    return [Finding(
+        OPERATOR_ACTION, "env.controls", status,
+        f"{len(failures)} of {total} controls fail: "
+        + "; ".join(text for _, text in failures),
+        f"correct the listed control(s) in {root / '.env'} so the F2 child "
+        f"receives the required value",
+    )]
+
+
 def _evidence_findings(root: Path) -> list[Finding]:
     """External evidence and authorization gates. Nothing here can be satisfied
     by repository work."""
@@ -312,8 +450,15 @@ def run_preflight(
     root: Path | None = None,
     attestation: Path | None = None,
     env: dict[str, str] | None = None,
+    adapter_controls: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Run every preflight check and return a deterministic report."""
+    """Run every preflight check and return a deterministic report.
+
+    ``adapter_controls`` overrides the adapter-forced control values that
+    ``env.controls`` resolves against. Like ``env`` it exists so a test can
+    model a hypothetical child environment; omitting it uses the real adapter
+    values from ``F2_ADAPTER_CONTROLS``.
+    """
     repo = Path(root) if root else Path(__file__).resolve().parents[1]
     if env is not None:
         # Only used by tests, so the report stays hermetic.
@@ -323,6 +468,7 @@ def run_preflight(
     findings: list[Finding] = []
     findings += _code_findings()
     findings += _env_findings()
+    findings += _env_control_findings(repo, adapter_controls=adapter_controls)
     findings += _evidence_findings(repo)
 
     # Q9 attestation, when supplied, is VERIFIED here rather than trusted.
@@ -387,6 +533,41 @@ def render(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _parse_operator_env(root: Path) -> dict[str, str]:
+    """Parse ``<root>/.env`` into a ``name -> value`` mapping. Strictly read-only.
+
+    This is the parsing half of :func:`_load_operator_env`, factored out so the
+    loader and the ``env.controls`` check cannot drift apart about what a line
+    means: comment/blank skipping, whitespace stripping, surrounding quote
+    stripping, and first-occurrence-wins for a duplicated key are defined in
+    exactly one place.
+
+    It never touches ``os.environ`` and never writes anything. Whether a caller
+    is allowed to look at a given key is the caller's decision -- see
+    :func:`_env_control_findings`, which selects only the seven non-secret
+    control names.
+    """
+    env_path = root / ".env"
+    try:
+        raw = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or key in out:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        out[key] = value
+    return out
+
+
 def _load_operator_env(root: Path) -> None:
     """Populate ``os.environ`` from the repository's ``.env`` for variables not set.
 
@@ -420,22 +601,9 @@ def _load_operator_env(root: Path) -> None:
       nothing happens and every check proceeds exactly as before. No check is
       weakened, skipped, or bypassed.
     """
-    env_path = root / ".env"
-    try:
-        raw = env_path.read_text(encoding="utf-8")
-    except OSError:
-        return
-    for raw_line in raw.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    for key, value in _parse_operator_env(root).items():
+        if key in os.environ:
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if not key or key in os.environ:
-            continue
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-            value = value[1:-1]
         os.environ[key] = value
 
 

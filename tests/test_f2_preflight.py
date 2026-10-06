@@ -142,6 +142,135 @@ class TestEnvChecking:
         assert by["env.evaluator_impl"]["status"] == "missing"
 
 
+class TestEnvControlsFinding:
+    """``env.controls`` reports the value the F2 child will ACTUALLY receive.
+
+    The child is spawned with the adapter-forced environment and then runs
+    ``load_dotenv(override=True)`` (``swarm_os/app/main.py:20``), so a ``.env``
+    entry overrides the adapter. These tests pin that precedence, pin the
+    fail-closed outcomes, and pin that credential-bearing names in ``.env``
+    never reach the finding.
+    """
+
+    _BLOCKING_CATEGORIES = (pf.OPERATOR_ACTION, pf.PRIVILEGED_HOST,
+                            pf.EXTERNAL_EVIDENCE, pf.AUTHORIZATION)
+
+    @pytest.fixture(autouse=True)
+    def isolate_controls(self, monkeypatch):
+        """No control may be inherited from the ambient process environment."""
+        for name in tuple(pf.F2_REQUIRED_CONTROLS):
+            monkeypatch.delenv(name, raising=False)
+        yield monkeypatch
+
+    @staticmethod
+    def _write_env(tmp_path, text):
+        (tmp_path / ".env").write_text(text, encoding="utf-8")
+
+    @staticmethod
+    def _finding(report):
+        return {f["id"]: f for f in report["findings"]}["env.controls"]
+
+    def test_dotenv_carrying_every_required_value_passes(self, tmp_path):
+        self._write_env(tmp_path, "".join(
+            f"{name}={value}\n"
+            for name, value in pf.F2_REQUIRED_CONTROLS.items()
+        ))
+        f = self._finding(pf.run_preflight(root=tmp_path))
+        assert f["category"] == pf.READY
+        assert f["status"] == "match"
+        assert f["action"] == ""
+        for name in pf.F2_REQUIRED_CONTROLS:
+            assert name in f["detail"]
+
+    def test_dotenv_contradicting_the_adapter_is_blocking(self, tmp_path):
+        # The adapter forces 0; .env says 1. The child loads .env with
+        # override=True AFTER the adapter, so the effective value is 1.
+        assert pf.F2_ADAPTER_CONTROLS["SWARM_AUTONOMY"] == "0"
+        self._write_env(tmp_path, "SWARM_AUTONOMY=1\n")
+
+        f = self._finding(pf.run_preflight(root=tmp_path))
+
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert f["category"] in self._BLOCKING_CATEGORIES
+        assert f["status"] == "mismatch"
+        assert "SWARM_AUTONOMY=1 (from .env) but required 0" in f["detail"]
+        assert f["action"]
+
+    def test_invalid_value_is_blocking(self, tmp_path):
+        self._write_env(tmp_path, "SWARM_AUTONOMY=garbage\n")
+
+        f = self._finding(pf.run_preflight(root=tmp_path))
+
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert f["category"] in self._BLOCKING_CATEGORIES
+        assert f["status"] == "invalid"
+        assert "SWARM_AUTONOMY=garbage" in f["detail"]
+
+    def test_absent_from_dotenv_but_forced_by_the_adapter_passes(self, tmp_path):
+        self._write_env(tmp_path, "UNRELATED_THING=1\n")
+
+        f = self._finding(pf.run_preflight(root=tmp_path))
+
+        assert f["category"] == pf.READY
+        assert f["status"] == "match"
+        assert "from the F2 adapter" not in f["detail"]
+
+    def test_absent_from_dotenv_and_adapter_is_blocking(self, tmp_path):
+        self._write_env(tmp_path, "UNRELATED_THING=1\n")
+
+        f = self._finding(pf.run_preflight(root=tmp_path, adapter_controls={}))
+
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert f["category"] in self._BLOCKING_CATEGORIES
+        assert f["status"] == "missing"
+        assert "absent from .env, the F2 adapter and the process environment" in f["detail"]
+
+    def test_credential_bearing_names_are_never_read_into_the_finding(self, tmp_path):
+        sentinel = "sk-SENTINEL-MUST-NEVER-APPEAR"
+        self._write_env(tmp_path, "".join(
+            f"{name}={value}\n"
+            for name, value in pf.F2_REQUIRED_CONTROLS.items()
+        ) + f"OPENAI_API_KEY={sentinel}\n")
+
+        report = pf.run_preflight(root=tmp_path)
+        f = self._finding(report)
+
+        assert f["category"] == pf.READY
+        assert sentinel not in json.dumps(report)
+        assert "OPENAI_API_KEY" not in json.dumps(report)
+        assert "OPENAI_API_KEY" not in f["detail"]
+        # Exactly the seven controls are named -- nothing else from .env is.
+        import re
+
+        assert set(re.findall(r"(SWARM_[A-Z0-9_]+)=", f["detail"])) == set(
+            pf.F2_REQUIRED_CONTROLS
+        )
+
+    def test_value_check_blocks_where_a_presence_only_check_would_pass(self, tmp_path, monkeypatch):
+        """Regression against presence-only reporting.
+
+        Every control is present in the process environment at its required
+        value, so the old "the name exists" rule reports satisfied -- yet .env
+        forces SWARM_AUTONOMY to 1, which the child will actually receive.
+        """
+        for name, required in pf.F2_REQUIRED_CONTROLS.items():
+            monkeypatch.setenv(name, required)
+        self._write_env(tmp_path, "SWARM_AUTONOMY=1\n")
+
+        # The old presence-only rule, expressed exactly as it was evaluated:
+        # a non-empty environment value counted as satisfied.
+        presence_only_would_pass = all(
+            pf._env(name) for name in pf.F2_REQUIRED_CONTROLS
+        )
+        assert presence_only_would_pass
+
+        f = self._finding(pf.run_preflight(root=tmp_path))
+
+        assert f["category"] != pf.READY
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert "SWARM_AUTONOMY=1 (from .env) but required 0" in f["detail"]
+
+
 class TestProvenanceReporting:
     def test_proven_links_are_implemented_not_external(self):
         rep = pf.run_preflight()
