@@ -41,6 +41,7 @@ import platform
 import socket
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 __all__ = [
@@ -642,3 +643,126 @@ def host_summary() -> dict[str, Any]:
 def _iter_dimensions(att: IsolationAttestation) -> Iterable[tuple[str, str]]:
     for p in att.probes:
         yield p.dimension, p.outcome
+
+
+# --------------------------------------------------------------------------
+# CLI. The operator runs this INSIDE the enforced egress policy, from inside the
+# arm's execution context, and hands the resulting artifact to the readiness
+# gate. It opens sockets and changes nothing.
+# --------------------------------------------------------------------------
+def main(argv: Sequence[str] | None = None) -> int:
+    """Emit a clean-room attestation. Exit 0 when isolation is established.
+
+    Deliberately does NOT accept a flag that declares dimensions denied. A
+    declaration is possible only via ``--policy-assert``, which is recorded as a
+    POLICY ASSERTION and reported separately from observed probes, and which is
+    rejected unless ``--policy-identity`` and ``--policy-sha256`` are supplied.
+    """
+    import argparse
+    import json as _json
+
+    ap = argparse.ArgumentParser(
+        prog="python -m qwen_train.f2_isolation",
+        description="Observe and verify F2 clean-room network isolation.",
+    )
+    ap.add_argument("--out", required=True, help="path to write the attestation JSON")
+    ap.add_argument("--arm-id", default="", help="arm identity to bind to")
+    ap.add_argument("--rollout-id", default="", help="rollout identity to bind to")
+    ap.add_argument("--workspace", default="", help="arm workspace path to bind to")
+    ap.add_argument("--policy-identity", default="",
+                    help="identity of the ENFORCED policy (required for assertions)")
+    ap.add_argument("--policy-sha256", default="",
+                    help="sha256 of the enforced policy artifact")
+    ap.add_argument("--policy-assert", action="append", default=[],
+                    metavar="DIM=VALUE",
+                    help="policy-declared outcome for a non-observer-provable "
+                         "dimension (e.g. proxy=denied). Recorded as an assertion, "
+                         "never as an observation.")
+    ap.add_argument("--interface", action="append", default=[],
+                    help="a non-loopback network interface name (repeatable)")
+    ap.add_argument("--required-service", action="append", default=[],
+                    metavar="NAME=HOST:PORT",
+                    help="a local service that MUST remain reachable (repeatable)")
+    ap.add_argument("--external", action="append", default=[],
+                    metavar="HOST:PORT",
+                    help="an external destination that must be denied (repeatable)")
+    args = ap.parse_args(list(argv) if argv is not None else None)
+
+    assertions: dict[str, str] = {}
+    for item in args.policy_assert:
+        if "=" not in item:
+            print(f"f2_isolation: bad --policy-assert {item!r}; expected DIM=VALUE")
+            return 2
+        dim, val = item.split("=", 1)
+        assertions[dim.strip()] = val.strip()
+
+    services: list[tuple[str, str, int]] = []
+    for item in args.required_service:
+        try:
+            name, hostport = item.split("=", 1)
+            host, port = hostport.rsplit(":", 1)
+            services.append((name, host, int(port)))
+        except Exception:  # noqa: BLE001
+            print(f"f2_isolation: bad --required-service {item!r}; expected NAME=HOST:PORT")
+            return 2
+
+    externals: list[tuple[str, int]] = []
+    for item in args.external:
+        try:
+            host, port = item.rsplit(":", 1)
+            externals.append((host, int(port)))
+        except Exception:  # noqa: BLE001
+            print(f"f2_isolation: bad --external {item!r}; expected HOST:PORT")
+            return 2
+
+    def dns_probe() -> tuple[str, str]:
+        raw, detail, _ = default_egress_probe("dns", "8.8.8.8", 53)
+        return raw, detail
+
+    def ipv6_available() -> bool:
+        try:
+            infos = socket.getaddrinfo("2606:4700:4700::1111", 443, socket.AF_INET6)
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(infos)
+
+    try:
+        att = run_egress_probes(
+            external_targets=tuple(externals) or (("api.github.com", 443),),
+            loopback_targets=(("127.0.0.1", 1),),
+            required_services=tuple(services),
+            dns_probe=dns_probe,
+            ipv6_available=ipv6_available,
+            interface_inventory=tuple(args.interface),
+            policy_assertions=assertions,
+            policy_identity=args.policy_identity,
+            policy_sha256=args.policy_sha256,
+            arm_id=args.arm_id,
+            rollout_id=args.rollout_id,
+            workspace=args.workspace,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"f2_isolation: probe run failed: {type(exc).__name__}: {exc}")
+        return 2
+
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    blob = render_attestation(att)
+    tmp = out.with_name(out.name + ".tmp")
+    tmp.write_bytes(blob)
+    import os as _os
+
+    _os.replace(tmp, out)
+
+    verdict = verify_isolation_attestation(att)
+    print(_json.dumps(verdict.to_dict(), sort_keys=True, indent=2))
+    print(f"\nattestation written: {out}")
+    print(f"attestation digest : {verdict.attestation_digest}")
+    if not verdict.satisfied:
+        print(f"NOT ESTABLISHED: {verdict.detail}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

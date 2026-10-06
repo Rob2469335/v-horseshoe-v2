@@ -8,6 +8,8 @@ are supplied. Uses explicit test-scoped fixtures; no real evidence.
 from __future__ import annotations
 
 import hashlib
+import pathlib
+from pathlib import Path
 
 import pytest
 
@@ -50,14 +52,27 @@ def _x_manifest():
     )
 
 
+def tmp_path_for(case):
+    """A per-call temporary directory (unique per test invocation)."""
+    import tempfile
+    return pathlib.Path(tempfile.mkdtemp(prefix="f2rd_"))
+
+
 def _all_env(tmp_path=None):
+    # The AUTHORITATIVE evaluator now exists, so the fixture names it rather
+    # than the placeholders that stood in before it did.
+    from qwen_train.f2_evaluator import identity_fields as _ident
+
+    _f = _ident()
     env = {
         "SWARM_DISTILLER_MODEL": "qwen3.5-4b-distiller",
         "SWARM_DISTILLER_WEIGHTS_DIGEST": _HEX,
-        "SWARM_F2_EVALUATOR_ID": "f2_experiment_j_v1",
-        "SWARM_F2_EVALUATOR_VERSION": "1.0.0",
-        "SWARM_F2_EVALUATOR_PROCEDURE": "f2_experiment_j_eval",
-        "SWARM_F2_ARTIFACT_ROOT": "C:\\trusted\\f2_store",
+        "SWARM_F2_EVALUATOR_ID": _f["evaluator_id"],
+        "SWARM_F2_EVALUATOR_VERSION": _f["version"],
+        "SWARM_F2_EVALUATOR_PROCEDURE": _f["procedure_id"],
+        "SWARM_F2_ARTIFACT_ROOT": str(
+            (tmp_path / "store") if tmp_path is not None else Path("C:/trusted/f2_store")
+        ),
         "SWARM_F2_ARTIFACT_RETENTION_DAYS": "365",
         "SWARM_RECEIPT_KEY": "test-scoped-receipt-key",
         # Governed bundle emission must be ENABLED and the evaluator's report
@@ -72,26 +87,142 @@ def _all_env(tmp_path=None):
     return env
 
 
-def _all_supplied():
+def _clean_attestation():
+    """A verified clean-room attestation: every dimension observed and satisfied.
+
+    The readiness gate refuses a caller-ASSERTED string receipt, so a READY
+    fixture must carry real observed evidence.
+    """
+    from qwen_train import f2_isolation as iso
+
+    denied = {
+        ("tcp", "example.com", 80): (iso.OUTCOME_DENIED, "refused", ""),
+        ("tcp", "api.github.com", 443): (iso.OUTCOME_DENIED, "refused", ""),
+        ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "winerror=10013", ""),
+        ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
+        ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
+        ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
+        ("tcp", "127.0.0.1", 8000): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
+    }
+
+    def probe(protocol, host, port):
+        return denied.get((protocol, host, port), (iso.OUTCOME_UNKNOWN, "not probed", ""))
+
+    return iso.run_egress_probes(
+        probe=probe,
+        loopback_targets=(("127.0.0.1", 1),),
+        required_services=(("backend", "127.0.0.1", 8000),),
+        dns_probe=lambda: (iso.OUTCOME_DENIED, "resolver refused"),
+        ipv6_available=lambda: True,
+        interface_inventory=("Loopback Pseudo-Interface 1", "Wi-Fi"),
+        policy_identity="windows-defender-firewall",
+        policy_sha256="ab" * 32,
+        policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
+        arm_id="arm-T-001",
+        rollout_id="rollout-77",
+        workspace="C:/isolated/task-001",
+    ).to_dict()
+
+
+def _verified_evidence(state: str, result: str, store: Path | None = None):
+    """A real, VERIFIED execution evidence record built by f2_evidence itself.
+
+    Readiness validates base/gold with the same validator the independent
+    verifier uses, against the REAL trusted store -- so the retained artifacts
+    must actually exist. Writing them here is what makes the fixture genuine.
+    """
+    from qwen_train.f2_evidence import build_evidence_record
+    from qwen_train.f2_governance import (
+        ROLE_RUN_LOG,
+        ROLE_TEST_OUTPUT,
+        ArtifactRef,
+        build_execution_identity,
+    )
+
+    out_body = f"{state} retained test output\n".encode()
+    log_body = f"{state} retained run log\n".encode()
+    ref = ArtifactRef(
+        name=f"{state}-test.out", digest=hashlib.sha256(out_body).hexdigest(),
+        size_bytes=len(out_body), role=ROLE_TEST_OUTPUT,
+    )
+    log = ArtifactRef(
+        name=f"{state}-run.log", digest=hashlib.sha256(log_body).hexdigest(),
+        size_bytes=len(log_body), role=ROLE_RUN_LOG,
+    )
+    if store is not None:
+        store.mkdir(parents=True, exist_ok=True)
+        (store / ref.name).write_bytes(out_body)
+        (store / log.name).write_bytes(log_body)
+
+    ident = build_execution_identity(
+        instance_id="inst-1", repository="o/r", base_commit="c0ffee",
+        execution_state_identity=state,
+        execution_state_digest="d" * 64,
+        evaluator=_test_authorization(),
+        environment_identity="test-env", test_command="pytest -q",
+        test_output=ref, run_log=log,
+    )
+    rec = build_evidence_record(
+        instance_id="inst-1", repository="o/r", base_commit="c0ffee",
+        execution_state_identity=state, execution_state_digest=ident.digest(),
+        test_command="pytest -q", environment_identity="test-env",
+        evaluator_identity=_test_authorization().evaluator_id,
+        evaluator_version=_test_authorization().version,
+        execution_started_at="2026-10-04T00:00:00Z",
+        execution_finished_at="2026-10-04T00:01:00Z",
+        execution_result=result, failure_class="",
+        test_output_artifact=ref, run_log_artifact=log,
+    )
+    return rec.to_dict()
+
+
+def _test_authorization():
+    from qwen_train.f2_evaluator import identity_fields
+    from qwen_train.f2_governance import EvaluatorAuthorization
+
+    f = identity_fields()
+    return EvaluatorAuthorization(
+        evaluator_id=f["evaluator_id"], version=f["version"],
+        implementation_digest=f["implementation_digest"],
+        procedure_id=f["procedure_id"], protocol_version=f["protocol_version"],
+    )
+
+
+def _clean_mutation():
+    return {
+        "captured": True, "repository": "C:/task/repo",
+        "touched_paths": ["src/pkg/mod.py"], "touched_count": 1,
+        "base_commit_expected": "c0ffee", "head_after": "c0ffee",
+        "head_unchanged": True, "refs_after": [],
+        "ignored_paths_sample": [], "ignored_count": 0,
+    }
+
+
+def _all_supplied(store: Path | None = None):
     return {
         "population": {"admitted": FROZEN_MIN_PAIRS},
-        "base_artifacts": {"verified": True},
-        "gold_artifacts": {"verified": True},
+        "base_artifacts": _verified_evidence("base", "fail", store),
+        "base_evidence": _verified_evidence("base", "fail", store),
+        "gold_artifacts": _verified_evidence("gold", "pass", store),
+        "gold_evidence": _verified_evidence("gold", "pass", store),
         "t_manifest": _t_manifest(),
         "x_manifest": _x_manifest(),
         "c0_manifest": _t_manifest(),  # any verify_manifest-valid artifact exercises the check
-        "clean_room": {"isolated": True},
-        "no_egress": {
-            "https": "denied",
-            "http": "denied",
-            "tcp": "denied",
-            "udp": "denied",
-            "ipv6": "denied",
-            "proxy": "denied",
-            "loopback": "ok",
-        },
+        "clean_room_mutation": _clean_mutation(),
+        "declared_test_files": ["tests/test_mod.py"],
+        "relevant_file_set": ["src/pkg/mod.py"],
+        "no_egress_attestation": _clean_attestation(),
         "authorizations": {"q10": True, "q12": True, "q13": True},
     }
+
+
+@pytest.fixture()
+def ready(tmp_path):
+    """A READY environment + supplied set backed by a REAL trusted store."""
+    store = tmp_path / "store"
+    supplied = _all_supplied(store)
+    env = _all_env(tmp_path)
+    return env, supplied
 
 
 class TestFailClosed:
@@ -150,13 +281,33 @@ class TestValidation:
 
     def test_no_egress_config_is_not_evidence(self):
         s = _all_supplied()
-        del s["no_egress"]
+        del s["no_egress_attestation"]
         by = {c.item: c for c in evaluate_f2_readiness(env=_all_env(), supplied=s).checks}
         assert by["q9_no_egress"].satisfied is False
+        assert "PRIVILEGED HOST ACTION" in by["q9_no_egress"].operator_action
 
     def test_partial_no_egress_probe_rejected(self):
+        """An incomplete observation must not satisfy the gate."""
         s = _all_supplied()
-        s["no_egress"]["udp"] = "unknown"
+        from qwen_train import f2_isolation as iso
+
+        att = iso.parse_attestation(s["no_egress_attestation"])
+        broken = list(att.probes)
+        for i, p in enumerate(broken):
+            if p.dimension == "udp":
+                broken[i] = iso.ProbeResult(
+                    dimension=p.dimension, target=p.target, protocol=p.protocol,
+                    outcome=iso.OUTCOME_UNKNOWN, detail="unprobed", pid=p.pid, at=p.at,
+                )
+        s["no_egress_attestation"] = iso.IsolationAttestation(
+            schema=att.schema, arm_id=att.arm_id, rollout_id=att.rollout_id,
+            workspace=att.workspace, observer_pid=att.observer_pid,
+            policy_identity=att.policy_identity, policy_sha256=att.policy_sha256,
+            interface_inventory=att.interface_inventory, dns_behavior=att.dns_behavior,
+            negative_control=att.negative_control, probes=tuple(broken),
+            required_services=att.required_services,
+            policy_assertions=att.policy_assertions,
+        ).to_dict()
         by = {c.item: c for c in evaluate_f2_readiness(env=_all_env(), supplied=s).checks}
         assert by["q9_no_egress"].satisfied is False
 
@@ -171,12 +322,12 @@ class TestValidation:
 
 class TestFullySupplied:
     def test_all_prerequisites_supplied_is_ready(self, tmp_path):
-        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied())
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied(tmp_path / "store"))
         assert rep.ready is True, rep.blockers
         assert rep.blockers == ()
 
     def test_report_never_contains_the_receipt_secret(self, tmp_path):
-        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied())
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied(tmp_path / "store"))
         blob = str(rep.to_dict())
         assert "test-scoped-receipt-key" not in blob
 
@@ -255,7 +406,7 @@ class TestStrengthenedPrerequisites:
         assert len(READINESS_ITEMS) == 18
 
     def test_readiness_never_echoes_the_receipt_key(self, tmp_path):
-        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied())
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied(tmp_path / "store"))
         assert rep.ready is True
         blob = repr(rep)
         assert "test-scoped-receipt-key" not in blob
@@ -275,7 +426,7 @@ class TestStrengthenedPrerequisites:
 
         monkeypatch.setattr(_os.environ, "get", spy, raising=False)
 
-        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied())
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied(tmp_path / "store"))
         assert rep.ready is True
         assert seen == [], f"explicit env must not fall through to os.environ: {seen}"
 
@@ -383,21 +534,187 @@ class TestIsolationAttestationIntegration:
         assert not ok
         assert "required_service_coverage" in detail or "UNPROVEN" in detail
 
-    def test_legacy_string_receipt_still_accepted_but_flagged(self):
+    def test_string_receipt_is_REFUSED_not_accepted(self):
+        """A typed word must never masquerade as measured isolation."""
         from qwen_train.f2_readiness import _check_no_egress
 
-        ok, detail, _ = _check_no_egress({"no_egress": {
+        ok, detail, action = _check_no_egress({"no_egress": {
             "http": "denied", "https": "denied", "tcp": "denied", "udp": "denied",
             "ipv6": "denied", "proxy": "denied", "loopback": "ok"}})
-        assert ok
-        assert "caller-asserted" in detail
-        assert "attestation" in detail
+        assert not ok, "an asserted string receipt must not satisfy the gate"
+        assert "caller-ASSERTED" in detail
+        assert "PRIVILEGED HOST ACTION" in action
 
     def test_full_readiness_accepts_a_verified_attestation(self, tmp_path):
         att = self._att().to_dict()
         supplied = _all_supplied()
         supplied["no_egress_attestation"] = att
-        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=supplied)
+        rep = evaluate_f2_readiness(env=_all_env(tmp_path), supplied=_all_supplied(tmp_path / "store"))
         assert rep.ready is True, rep.blockers
         by = {c.item: c for c in rep.checks}
         assert "digest" in by["q9_no_egress"].detail
+
+
+class TestEvidenceIsVerifiedNotAsserted:
+    """Base/gold and clean-room must be VERIFIED, never taken on trust."""
+
+    def test_asserted_base_evidence_is_refused(self):
+        from qwen_train.f2_readiness import _check_artifacts
+
+        ok, detail, action = _check_artifacts(
+            {"base_artifacts": {"verified": True}}, _all_env(), "base_artifacts", "base"
+        )
+        assert not ok, "a caller-asserted boolean must not satisfy base evidence"
+        assert "caller-ASSERTED" in detail
+        assert "EvidenceRecord" in action
+
+    def test_asserted_gold_evidence_is_refused(self):
+        from qwen_train.f2_readiness import _check_artifacts
+
+        ok, detail, _ = _check_artifacts(
+            {"gold_artifacts": {"verified": True}}, _all_env(), "gold_artifacts", "gold"
+        )
+        assert not ok
+        assert "caller-ASSERTED" in detail
+
+    def test_base_declaring_pass_is_refused(self):
+        """base=FAIL and gold=PASS are the frozen contract."""
+        from qwen_train.f2_readiness import _check_artifacts
+
+        tmp = tmp_path_for(self)
+        rec = _verified_evidence("base", "pass", tmp / "store")
+        ok, detail, _ = _check_artifacts(
+            {"base_artifacts": rec}, _all_env(tmp), "base_artifacts", "base"
+        )
+        assert not ok
+        assert "requires base=FAIL" in detail
+
+    def test_gold_declaring_fail_is_refused(self):
+        from qwen_train.f2_readiness import _check_artifacts
+
+        tmp = tmp_path_for(self)
+        rec = _verified_evidence("gold", "fail", tmp / "store")
+        ok, detail, _ = _check_artifacts(
+            {"gold_artifacts": rec}, _all_env(tmp), "gold_artifacts", "gold"
+        )
+        assert not ok
+        assert "gold=PASS" in detail
+
+    def test_evidence_missing_from_the_store_is_refused(self):
+        """A record whose retained artifacts are absent cannot establish provenance."""
+        from qwen_train.f2_readiness import _check_artifacts
+
+        tmp = tmp_path_for(self)
+        rec = _verified_evidence("base", "fail", None)  # nothing written
+        ok, detail, _ = _check_artifacts(
+            {"base_artifacts": rec}, _all_env(tmp), "base_artifacts", "base"
+        )
+        assert not ok
+        assert "not VERIFIED" in detail
+
+    def test_unauthorized_evaluator_version_is_refused(self):
+        """Evidence whose declared evaluator version is not authorized is refused.
+
+        The evidence record carries evaluator identity and version but NOT the
+        procedure id, so this gate can bind identity+version and must not claim
+        more. Asserting a procedure check here would be false assurance.
+        """
+        from qwen_train.f2_readiness import _check_artifacts
+
+        tmp = tmp_path_for(self)
+        rec = _verified_evidence("base", "fail", tmp / "store")
+        env = _all_env(tmp)
+        env["SWARM_F2_EVALUATOR_VERSION"] = "9.9.9-not-authorized"
+        ok, detail, _ = _check_artifacts(
+            {"base_artifacts": rec}, env, "base_artifacts", "base"
+        )
+        assert not ok
+        assert "UNAUTHORIZED_PROCEDURE" in detail
+
+    def test_unrecognized_evaluator_identity_is_refused(self):
+        from qwen_train.f2_readiness import _check_artifacts
+
+        tmp = tmp_path_for(self)
+        rec = _verified_evidence("base", "fail", tmp / "store")
+        env = _all_env(tmp)
+        env["SWARM_F2_EVALUATOR_ID"] = "some_other_evaluator"
+        ok, detail, _ = _check_artifacts(
+            {"base_artifacts": rec}, env, "base_artifacts", "base"
+        )
+        assert not ok
+        assert "not an authorized procedure" in detail
+
+    def test_missing_artifact_root_is_refused(self):
+        from qwen_train.f2_readiness import _check_artifacts
+
+        tmp = tmp_path_for(self)
+        rec = _verified_evidence("base", "fail", tmp)
+        env = _all_env(tmp)
+        env.pop("SWARM_F2_ARTIFACT_ROOT", None)
+        ok, detail, _ = _check_artifacts(
+            {"base_artifacts": rec}, env, "base_artifacts", "base"
+        )
+        assert not ok
+        assert "artifact root" in detail
+
+    def test_real_evidence_satisfies_the_item(self, tmp_path):
+        from qwen_train.f2_readiness import _check_artifacts
+
+        store = tmp_path / "store"
+        rec = _verified_evidence("base", "fail", store)
+        ok, detail, _ = _check_artifacts(
+            {"base_artifacts": rec}, _all_env(tmp_path), "base_artifacts", "base"
+        )
+        assert ok, detail
+        assert "trusted store" in detail
+
+
+class TestCleanRoomIsVerifiedNotAsserted:
+    def test_asserted_isolated_boolean_is_refused(self):
+        from qwen_train.f2_readiness import _check_clean_room
+
+        ok, detail, action = _check_clean_room({"clean_room": {"isolated": True}})
+        assert not ok, "a caller-asserted boolean must not satisfy clean-room"
+        assert "caller-ASSERTED" in detail
+        assert "clean_room_mutation" in action
+
+    def test_no_evidence_is_refused(self):
+        from qwen_train.f2_readiness import _check_clean_room
+
+        ok, detail, _ = _check_clean_room({})
+        assert not ok
+        assert "no clean-room evidence" in detail
+
+    def test_verified_clean_mutation_satisfies_the_item(self):
+        from qwen_train.f2_readiness import _check_clean_room
+
+        ok, detail, _ = _check_clean_room({
+            "clean_room_mutation": _clean_mutation(),
+            "declared_test_files": ["tests/test_mod.py"],
+            "relevant_file_set": ["src/pkg/mod.py"],
+        })
+        assert ok, detail
+        assert "observed workspace evidence" in detail
+
+    def test_test_tampering_refuses_clean_room_despite_any_claim(self):
+        from qwen_train.f2_readiness import _check_clean_room
+
+        tampered = dict(_clean_mutation())
+        tampered["touched_paths"] = ["tests/test_mod.py"]
+        tampered["touched_count"] = 1
+        ok, detail, _ = _check_clean_room({
+            "clean_room_mutation": tampered,
+            "declared_test_files": ["tests/test_mod.py"],
+            "clean_room": {"isolated": True},
+        })
+        assert not ok
+        assert "REFUSED" in detail
+
+    def test_unobservable_mutation_refuses_clean_room(self):
+        from qwen_train.f2_readiness import _check_clean_room
+
+        ok, detail, _ = _check_clean_room({
+            "clean_room_mutation": {"captured": False, "error": "git missing"},
+        })
+        assert not ok
+        assert "REFUSED" in detail

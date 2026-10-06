@@ -603,29 +603,25 @@ def _derive_json_test_report_v1(
 ) -> tuple[str | None, str]:
     """REFERENCE protocol ``json_test_report_v1``.
 
-    Expects a JSON object ``{"fail_to_pass": {"<nodeid>": "passed"|"failed"|
-    "error"}}``. Returns ``pass`` iff every declared FAIL_TO_PASS node passed,
-    ``fail`` if any failed or errored, and ``None`` when the artifact cannot
-    establish the result.
+    Retained for compatibility with bundles produced before the authoritative
+    evaluator existed. The AUTHORITATIVE protocol is ``f2_evaluator_report_v1``
+    (registered just below), which is what the F2 execution path emits and what
+    ``derive_result`` should be pointed at.
 
-    This is a REFERENCE deriver: the real F2 evaluator output format is not yet
-    authorized, so a bundle naming any unregistered protocol fails closed.
+    The verdict itself is delegated to
+    ``qwen_train.f2_evaluator.verdict_from_report_payload`` rather than being
+    re-derived here. This function used to carry its own status set, which had
+    drifted from the evaluator's -- it rejected ``missing``, a status the
+    evaluator legitimately emits -- so a valid report could be refused as an
+    unrecognised status instead of being scored.
     """
     try:
         payload = json.loads(data.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         return None, f"test-output artifact is not parseable JSON: {exc}"
-    if not isinstance(payload, Mapping):
-        return None, "test-output artifact is not a JSON object"
-    f2p = payload.get("fail_to_pass")
-    if not isinstance(f2p, Mapping) or not f2p:
-        return None, "test-output artifact has no non-empty 'fail_to_pass' map"
-    statuses = {str(v).lower() for v in f2p.values()}
-    if not statuses <= {"passed", "failed", "error", "skipped"}:
-        return None, f"unrecognised test statuses: {sorted(statuses)}"
-    if statuses <= {"passed"}:
-        return "pass", "all declared FAIL_TO_PASS nodes passed"
-    return "fail", f"FAIL_TO_PASS statuses: {sorted(statuses)}"
+    from qwen_train.f2_evaluator import verdict_from_report_payload
+
+    return verdict_from_report_payload(payload)
 
 
 register_result_protocol("json_test_report_v1", _derive_json_test_report_v1)

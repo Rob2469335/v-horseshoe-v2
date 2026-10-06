@@ -46,6 +46,7 @@ __all__ = [
     "LINK_CONVERSION",
     "LINK_SERVED",
     "ALL_LINKS",
+    "LINK_REMEDY",
     "ChainLink",
     "ConversionChain",
     "ProvenanceVerdict",
@@ -71,7 +72,7 @@ ALL_LINKS: tuple[str, ...] = (
 
 #: What record would close each broken link. Surfaced verbatim in the verdict so
 #: the operator is told exactly what is missing.
-_LINK_REMEDY: dict[str, str] = {
+LINK_REMEDY: dict[str, str] = {
     LINK_BASE: "record the base model id and immutable snapshot revision",
     LINK_ADAPTER: "record the adapter directory, its config digest, rank and alpha",
     LINK_CORPUS: "record the training-run 'data' field naming the consumed corpus",
@@ -412,7 +413,7 @@ def verify_conversion_chain(chain: ConversionChain | Mapping[str, Any]) -> Prove
             parts.append(f"MISMATCHED: {mismatched}")
         detail = "model provenance NOT established -- " + "; ".join(parts)
         remedies = tuple(
-            _LINK_REMEDY[n] for n in ALL_LINKS if n in unrecorded or n in mismatched
+            LINK_REMEDY[n] for n in ALL_LINKS if n in unrecorded or n in mismatched
         )
 
     return ProvenanceVerdict(

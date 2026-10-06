@@ -414,12 +414,19 @@ class TestReportRoundTrip:
         res, why = ev.derive_result_protocol(tampered, {})
         assert res is None and "produced by" in why
 
-    def test_derive_rejects_digest_mismatch(self):
-        blob = self._report([("t.py::test_a", None)])
-        good = ev.implementation_digest()
-        tampered = blob.replace(good.encode(), ("0" * 64).encode())
-        assert tampered != blob
-        res, why = ev.derive_result_protocol(tampered, {})
+    def test_derive_rejects_implementation_digest_mismatch(self):
+        # Rendered GENUINELY, then the implementation_digest is replaced AND the
+        # report_digest recomputed so the self-integrity check passes. This
+        # isolates the evaluator-bytes check.
+        data = junit([("t", "test_a", None)])
+        o = ev.evaluate_execution(data, fail_to_pass=["t.py::test_a"])
+        import json as _json
+
+        payload = _json.loads(ev.render_report(o, instance_id="i").decode())
+        payload["implementation_digest"] = "0" * 64
+        payload[ev.REPORT_DIGEST_FIELD] = ev.compute_report_digest(payload)
+        blob = _json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        res, why = ev.derive_result_protocol(blob, {})
         assert res is None and "implementation_digest" in why
 
     def test_derive_rejects_state_identity_mismatch(self):
@@ -428,10 +435,30 @@ class TestReportRoundTrip:
         assert res is None and "execution_state_identity" in why
 
     def test_derive_rejects_instance_mismatch(self):
-        blob = self._report([("t.py::test_a", None)])
-        tampered = blob.replace(b'"instance_id":"i"', b'"instance_id":"other"')
-        res, why = ev.derive_result_protocol(tampered, {"instance_id": "i"})
+        # Rendered GENUINELY with the wrong instance_id, so the report_digest is
+        # valid and this test isolates the identity-mismatch check rather than
+        # tripping the self-integrity check first.
+        data = junit([("t", "test_a", None)])
+        o = ev.evaluate_execution(data, fail_to_pass=["t.py::test_a"])
+        blob = ev.render_report(o, instance_id="other", execution_state_identity="gold")
+        res, why = ev.derive_result_protocol(blob, {"instance_id": "i"})
         assert res is None and "instance_id" in why
+
+    def test_derive_rejects_self_integrity_tampering(self):
+        """Rewriting declared_result on an all-passed map must be REFUSED.
+
+        Without the report digest this forgery is internally consistent: the
+        re-derivation reads the same attacker-controlled map and agrees.
+        """
+        data = junit([("t", "test_a", None)])
+        o = ev.evaluate_execution(data, fail_to_pass=["t.py::test_a"])
+        blob = ev.render_report(o, instance_id="i", execution_state_identity="gold")
+        # Any field edit without recomputing the digest must be refused.
+        tampered = blob.replace(b'"emitted_identities":1', b'"emitted_identities":9')
+        assert tampered != blob
+        res, why = ev.derive_result_protocol(tampered, {})
+        assert res is None and "report_digest" in why
+        assert ev.parse_report(blob)["declared_result"] == "pass"
 
     def test_derive_rejects_garbage(self):
         assert ev.derive_result_protocol(b"", {})[0] is None

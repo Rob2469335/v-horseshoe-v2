@@ -289,14 +289,107 @@ def _check_population(supplied: Mapping[str, Any]):
     return True, f"admitted={admitted} >= {FROZEN_MIN_PAIRS}", ""
 
 
-def _check_artifacts(supplied: Mapping[str, Any], key: str, label: str):
+def _check_artifacts(
+    supplied: Mapping[str, Any], env: Mapping[str, str], key: str, label: str
+):
+    """Base/gold evidence must be VERIFIED, not asserted.
+
+    A bare ``{"verified": True}`` is a caller CLAIM and no longer satisfies the
+    gate: nothing in it was checked, so accepting it would let a typed word stand
+    in for real base/gold executions. Real evidence is accepted instead and
+    validated with ``f2_evidence`` -- the same validator the independent verifier
+    uses, so readiness cannot pass something the regrade would reject.
+
+    Validation is run against the REAL trusted store named by
+    ``SWARM_F2_ARTIFACT_ROOT``. That is the point: an evidence record whose
+    retained artifacts are absent cannot establish provenance, and the validator
+    says so.
+    """
     ev = supplied.get(key)
-    ok = bool(ev.get("verified")) if isinstance(ev, Mapping) else bool(ev)
-    if ok:
-        return True, f"{label} evidence supplied and verified", ""
-    return False, f"{label} evidence absent/unverified", (
-        f"Provide protected {label} evidence verified by the authorized evaluator"
+    if ev is None:
+        return False, f"no {label} evidence supplied", (
+            f"Supply the retained {label} execution evidence record "
+            f"('{key}') produced by a real execution"
+        )
+
+    if isinstance(ev, Mapping) and "verified" in ev and len(ev) == 1:
+        return False, (
+            f"supplied {label} evidence is a caller-ASSERTED boolean "
+            f"({ev!r}); nothing was verified"
+        ), (
+            f"Supply the retained {label} EvidenceRecord (execution identity, "
+            "evaluator identity, retained artifacts and digests) so it can be "
+            "validated by f2_evidence.verify_evidence_record"
+        )
+
+    state_key = "base_evidence" if label == "base" else "gold_evidence"
+    record = supplied.get(state_key, ev)
+    if not isinstance(record, Mapping) or "execution_result" not in record:
+        return False, f"{label} evidence is not an execution evidence record", (
+            "Supply a record carrying execution_result, execution_state_identity "
+            "and the retained artifact references"
+        )
+    try:
+        from qwen_train import f2_evidence as f2ev
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return False, f"evidence validator unavailable: {exc}", (
+            "Restore qwen_train/f2_evidence.py"
+        )
+
+    expected = "fail" if label == "base" else "pass"
+    state = str(record.get("execution_state_identity") or "")
+    if state and state != label:
+        return False, (
+            f"{label} evidence declares execution_state_identity={state!r}"
+        ), f"Supply the {label} execution evidence"
+    result = str(record.get("execution_result") or "")
+    if result and result != expected:
+        return False, (
+            f"{label} evidence declares execution_result={result!r}, but the "
+            f"frozen contract requires base=FAIL and gold=PASS"
+        ), f"Supply the {label} execution evidence reaching {expected.upper()}"
+
+    root = _env(env, "SWARM_F2_ARTIFACT_ROOT")
+    if not root:
+        return False, (
+            f"no trusted artifact root supplied, so {label} artifact provenance "
+            "cannot be established"
+        ), "Set SWARM_F2_ARTIFACT_ROOT to the store holding the retained evidence"
+
+    # The evaluator the operator authorized. ``f2_evidence.verify_evidence_record``
+    # takes {evaluator_id: (authorized versions...)} and binds the evidence's
+    # declared evaluator to it. Note what the evidence record does NOT carry: the
+    # evaluator *procedure* id. A record therefore cannot attest which procedure
+    # ran, so this check enforces evaluator identity and version and makes no
+    # claim about the procedure. Overstating that here would be false assurance.
+    auth_id = _env(env, "SWARM_F2_EVALUATOR_ID")
+    auth_ver = _env(env, "SWARM_F2_EVALUATOR_VERSION")
+    auth_proc = _env(env, "SWARM_F2_EVALUATOR_PROCEDURE")
+    if not (auth_id and auth_ver and auth_proc):
+        return False, (
+            f"no authorized evaluator supplied, so the {label} evidence's evaluator "
+            "cannot be established"
+        ), "Set SWARM_F2_EVALUATOR_ID / _VERSION / _PROCEDURE"
+    authorized = {auth_id: (auth_ver,)}
+
+    try:
+        verdict = f2ev.verify_evidence_record(
+            record, artifact_root=root, authorized_evaluators=authorized
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return False, f"{label} evidence could not be verified: {exc}", (
+            f"Supply a well-formed {label} EvidenceRecord"
+        )
+    got = getattr(verdict, "state", None) or (
+        verdict.get("state") if isinstance(verdict, Mapping) else None
     )
+    if got != f2ev.STATE_VERIFIED:
+        detail = getattr(verdict, "detail", "") or ""
+        return False, f"{label} evidence is {got!r}, not VERIFIED ({detail})", (
+            f"Retain the {label} test output and run log in the trusted store so "
+            "the evidence reaches STATE_VERIFIED"
+        )
+    return True, f"{label} execution evidence verified against the trusted store", ""
 
 
 def _check_manifest(supplied: Mapping[str, Any], key: str, label: str):
@@ -315,11 +408,53 @@ def _check_manifest(supplied: Mapping[str, Any], key: str, label: str):
 
 
 def _check_clean_room(supplied: Mapping[str, Any]):
+    """Clean-room must be VERIFIED from observed evidence, not asserted.
+
+    ``{"isolated": True}`` carries no observation and no longer satisfies the
+    gate. An operator may instead supply the arm's workspace-mutation record,
+    which is checked here against the anti-tampering gate: if the arm was
+    observed modifying the test surface or moving history, clean-room isolation
+    is REFUSED regardless of any claim.
+    """
+    mutation = supplied.get("clean_room_mutation")
+    if mutation is not None:
+        try:
+            from qwen_train.f2_integrity import assess_arm_integrity
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return False, f"integrity gate unavailable: {exc}", (
+                "Restore qwen_train/f2_integrity.py"
+            )
+        try:
+            verdict = assess_arm_integrity(
+                mutation,
+                declared_test_files=supplied.get("declared_test_files") or (),
+                relevant_file_set=supplied.get("relevant_file_set") or (),
+                authorized_paths=supplied.get("authorized_paths") or (),
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return False, f"clean-room mutation evidence unusable: {exc}", (
+                "Supply the arm workspace-mutation record"
+            )
+        if not verdict.admissible:
+            return False, f"clean-room integrity REFUSED: {verdict.detail}", (
+                "Resolve the flagged workspace activity; an arm that modified the "
+                "test surface or moved history cannot be admitted"
+            )
+        return True, (
+            f"clean-room verified from observed workspace evidence ({verdict.verdict})"
+        ), ""
+
     ev = supplied.get("clean_room")
     if isinstance(ev, Mapping) and ev.get("isolated") is True:
-        return True, "clean-room isolation attested", ""
-    return False, "clean-room isolation not attested", (
-        "Run the arm under the parent-owned clean-room boundary and attest it"
+        return False, (
+            "supplied clean-room evidence is a caller-ASSERTED boolean "
+            "({'isolated': True}); no workspace was observed"
+        ), (
+            "Supply 'clean_room_mutation' -- the arm's workspace-mutation record -- "
+            "so qwen_train.f2_integrity can verify it"
+        )
+    return False, "no clean-room evidence supplied", (
+        "Supply the arm workspace-mutation record as 'clean_room_mutation'"
     )
 
 
@@ -363,23 +498,30 @@ def _check_no_egress(supplied: Mapping[str, Any]):
         )
 
     ev = supplied.get("no_egress")
-    if not isinstance(ev, Mapping):
-        return False, "no no-egress probe evidence supplied", (
-            "Run the confirmatory event under enforced no-egress and provide "
-            "either an f2_isolation attestation or the probe receipt"
+    if isinstance(ev, Mapping):
+        # A seven-string receipt is caller-ASSERTED. It is reported as exactly
+        # that and it does NOT satisfy the gate: nothing in it was observed, so
+        # accepting it would let a typed word masquerade as measured isolation.
+        # Retained as an accepted INPUT so an operator can see what they supplied,
+        # but the verdict is decided only by a verified attestation.
+        present = sorted(k for k in ev if ev.get(k))
+        return False, (
+            "supplied no_egress is a caller-ASSERTED string receipt "
+            f"({', '.join(present)}), not an observation; it cannot establish "
+            "isolation"
+        ), (
+            "Run qwen_train.f2_isolation probes under the enforced policy and "
+            "supply the attestation as 'no_egress_attestation'. Enforcing egress "
+            "denial is a PRIVILEGED HOST ACTION REQUIRED; this repository can "
+            "observe and verify isolation but cannot impose it."
         )
-    required_denied = ("https", "http", "tcp", "udp", "ipv6", "proxy")
-    denied = all(ev.get(k) == "denied" for k in required_denied)
-    loopback = ev.get("loopback") == "ok"
-    if denied and loopback:
-        return True, (
-            "no-egress probe receipt (caller-asserted): all egress denied, "
-            "loopback ok -- prefer an f2_isolation attestation"
-        ), ""
-    return False, (
-        "no-egress probe incomplete: "
-        + ", ".join(f"{k}={ev.get(k)!r}" for k in required_denied + ("loopback",))
-    ), "Provide complete enforced no-egress probe evidence"
+
+    return False, "no no-egress probe evidence supplied", (
+        "Run `python -m qwen_train.f2_preflight` (or qwen_train.f2_isolation) under "
+        "the enforced egress policy and supply the resulting attestation as "
+        "'no_egress_attestation'. Enforcing egress denial is a PRIVILEGED HOST "
+        "ACTION; this repository can observe and verify it but cannot impose it."
+    )
 
 
 def _check_authorizations(supplied: Mapping[str, Any]):
@@ -422,8 +564,8 @@ def evaluate_f2_readiness(
         "trusted_artifact_store": _check_trusted_store(env),
         "receipt_key": _check_receipt_key(env),
         "protected_population": _check_population(supplied),
-        "base_artifacts": _check_artifacts(supplied, "base_artifacts", "base"),
-        "gold_artifacts": _check_artifacts(supplied, "gold_artifacts", "gold"),
+        "base_artifacts": _check_artifacts(supplied, env, "base_artifacts", "base"),
+        "gold_artifacts": _check_artifacts(supplied, env, "gold_artifacts", "gold"),
         "t_manifest": _check_manifest(supplied, "t_manifest", "T"),
         "x_derivation": _check_manifest(supplied, "x_manifest", "X"),
         "c0_independent": _check_manifest(supplied, "c0_manifest", "C0"),

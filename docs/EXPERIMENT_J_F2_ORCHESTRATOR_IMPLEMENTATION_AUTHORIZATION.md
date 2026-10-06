@@ -1053,6 +1053,88 @@ No evaluator identity, implementation digest, trusted store, or task-outcome rep
 
 **Implementation status.** Implemented. 64 net new tests. Q9's observation, verification, provenance, gating and fail-closed layers are in place; the privileged enforcement and the conversion record remain outstanding.
 
+### F2-IMPL-AUTH-023 - Execution preflight, integrity gate, report self-integrity, and evidence-based readiness
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-05
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-05 (F2 completion brief: "make the execution handoff SOTA", "fix every genuine repository-side defect", "anti-reward-hacking hardening"), entered by the agent. Records no new science and changes no frozen element.
+
+#### 1. One-command execution handoff
+
+`python -m qwen_train.f2_preflight` produces a deterministic, machine-readable report (`--json`, `--provenance`, `--attestation PATH`) whose exit code is 0 only on `READY`. It separates six states that must never be collapsed: `IMPLEMENTED` (12 repository capabilities), `READY` (machinery that can consume evidence), `OPERATOR ACTION REQUIRED`, `PRIVILEGED HOST ACTION REQUIRED`, `EXTERNAL EVIDENCE REQUIRED`, `AUTHORIZATION REQUIRED`, and `NOT EXECUTED`. Every blocking finding carries an action string; every finding carries a detail. The receipt key is tested for **presence only** and its value never enters the report. The report states in its own footer that READY is a statement about capability, not about the experiment being executable.
+
+**Live current-revision result: `BLOCKED`, 18 blocking findings.** That is the correct verdict, not a bug.
+
+#### 2. Anti-reward-hacking integrity gate (`qwen_train/f2_integrity.py`)
+
+`f2_arm_worker._classify_workspace_mutation` already observed what an arm touched and its own docstring named the attack it recorded evidence for -- *"nothing else notices a write outside the authorized surface - for example an arm editing the evaluator's own test files to manufacture a pass"* -- but explicitly called itself "Integrity evidence, not a gate". Nothing consumed it. `assess_arm_integrity` turns that observation into a fail-closed admission decision:
+
+* a **declared test file** modified by the arm is REJECT, including when the declaration is given as an absolute or backslash path;
+* a **test-shaped path outside the authorized endpoint surface** is REJECT (the conftest/fixture neutering vector);
+* **HEAD movement** and **surviving refs** are REJECT, because a commit can hide a dirty tree;
+* **git internals** are REJECT; **ignored artifacts** force REVIEW, since they can carry fabricated evidence;
+* **`captured: False` is never a pass** -- an arm that can prevent its own audit has already won;
+* test-path detection **reuses `f2_endpoint_derivation.is_test_path`**, so the integrity gate and the Q8 endpoint can never disagree about what a test file is;
+* the verdict exposes **no statistic**; it decides admission only.
+
+#### 3. Report self-integrity and stale-report defence
+
+A real forgery path was found and closed. `parse_report` re-derived the verdict from the report's own `fail_to_pass` map, so rewriting `declared_result` on an all-passed map produced an **internally consistent** forged report. Reports now carry a `report_digest` -- SHA-256 over the canonical content excluding the digest field -- so any post-hoc edit breaks verification. `f2_arm_worker` additionally refuses a hand-written report outright, and where `SWARM_F2_JUNIT_EVIDENCE` and `SWARM_F2_TASK_CONTRACT` are present it **re-derives the verdict from the retained evidence** and refuses a report that disagrees with it, which closes the stale-report attack.
+
+An existing worker test used a hand-written report fixture; that fixture was **replaced with a genuine one produced by the evaluator** rather than weakening the new check.
+
+#### 4. Producer/verifier drift eliminated
+
+The authoritative evaluator emits `missing` for a declared test absent from the evidence, but three pre-existing consumers (`f2_governance._derive_json_test_report_v1`, `f2_protocol._derive_task_outcome`, `f2_arm_worker._task_success_from_report`) each carried a hard-coded status tuple that **rejected `missing`**. A legitimately produced report could therefore be refused downstream as an unrecognised status -- a protocol error -- instead of scoring as the failure it is. All three now delegate to the single authority `f2_evaluator.verdict_from_report_payload`. Re-implementing that rule in three places is precisely how a producer and its verifier come to disagree.
+
+The stale `"the real F2 evaluator output format is not yet authorized"` claim in the reference deriver's docstring was false once AUTH-021 landed and has been corrected.
+
+#### 5. Readiness: evidence instead of assertion
+
+Three items previously accepted a caller-supplied boolean and now require verification:
+
+* **`q9_no_egress`** -- a seven-string receipt is now REFUSED as caller-asserted. Only a verified `f2_isolation` attestation satisfies the gate, and its verdict is re-derived by the checker itself. An operator can no longer type `"https": "denied"` and be believed.
+* **`base_artifacts` / `gold_artifacts`** -- `{"verified": True}` is REFUSED. Real evidence is validated by **`f2_evidence.verify_evidence_record` against the real trusted store** with the **operator-authorized evaluator**, so readiness cannot pass something the independent regrade would reject. `base` must declare `fail`, `gold` must declare `pass`; a record whose retained artifacts are absent reports `ARTIFACT_MISSING` and is refused. The evidence record carries evaluator identity and version but **not** the procedure id, so this check binds identity+version and deliberately claims nothing about the procedure.
+* **`clean_room_isolation`** -- `{"isolated": True}` is REFUSED. The arm's workspace-mutation record is verified through the new integrity gate, so an arm that edited the test surface or moved history is refused regardless of any claim.
+
+#### 6. Conversion-chain provenance
+
+`LINK_REMEDY` is now public. A conversion record is accepted only when it names both a merged artifact **and** its digest; timestamps are recorded as observations and explicitly rejected as conversion evidence. Live verdict against the real `robs4b` artifacts is unchanged and honest: `base_model`, `adapter`, `training_corpus` and `served_artifact` **PROVEN**; `conversion` **UNRECORDED**, with the remedy "record an explicit adapter->merged-artifact->GGUF conversion step; a timestamp ordering is NOT a conversion record".
+
+#### 7. Q9 probe CLI
+
+`python -m qwen_train.f2_isolation` emits an attestation from real probes, bound to arm/rollout/workspace, with an atomic write and a required negative control. There is deliberately **no flag that declares a dimension denied**: a policy-declared outcome is possible only via `--policy-assert`, which is recorded with `source=enforced_policy`, reported separately from observations, and rejected unless `--policy-identity` and `--policy-sha256` are supplied.
+
+**Live current-revision result on this host: NOT ESTABLISHED** -- `http`, `https`, `udp`, `loopback` and `required_service` all observed REACHABLE, which is the truthful reading of a host with no egress enforcement. The CLI does not flatter the machine it runs on.
+
+#### 8. Frozen-design guard (`tests/test_f2_frozen_design_guard.py`)
+
+New tests exist to fail loudly if a later change drifts the design: alpha = .05, confidence = .95, Q6 threshold = 0.30, `FROZEN_MIN_PAIRS` = 300, two-sided exact McNemar with no continuity-correction parameter, the b/c/n00/n01/n10/n11 contingency definitions, producer/reconstruction agreement (integers exactly; floats at the repository's established `1e-9` tolerance, the observed divergence being ~1 ULP from different floating-point routes), **Q6 changing no statistic and dropping no pair**, X removing exactly one lesson while preserving survivor bytes and the un-renumbered position gap, single-lesson T failing closed, C0 independently empty and sharing no manifest hash with T or X, the evaluator importing no verifier or analysis module, `independent_reconstruction` not calling `mcnemar_exact`, regrade not re-executing, and `READINESS_ITEMS` still exactly 18.
+
+**Verification.** `pytest tests/ -k f2` -> **1274 passed, 4 skipped** (baseline before this entry: 1176 passed, 4 skipped; 962 before AUTH-021). `ruff check --select E9,F swarm_os runtime_v2 organism_console` -> **All checks passed**. No test opens a socket, reads a training file, reads a secret value, or contacts a network service.
+
+**File boundary.** `qwen_train/f2_integrity.py` (new), `qwen_train/f2_preflight.py` (new), `qwen_train/f2_evaluator.py`, `qwen_train/f2_isolation.py`, `qwen_train/f2_readiness.py`, `qwen_train/f2_arm_worker.py`, `qwen_train/f2_protocol.py`, `qwen_train/f2_governance.py`, `qwen_train/f2_model_provenance.py`, `tests/test_f2_integrity.py` (new), `tests/test_f2_preflight.py` (new), `tests/test_f2_frozen_design_guard.py` (new), `tests/test_f2_evaluator.py`, `tests/test_f2_readiness.py`, `tests/test_f2_worker_bundle_wiring.py`, and this document.
+
+**Explicit non-authorization.** Does NOT execute F2/Q10/Q12/T/X/C0, enforce network egress, touch firewall/routing/DNS, require Administrator, admit a task, fabricate S8 evidence, provision a receipt key, invent a conversion record or an ACTIVE lesson, or alter F0/F1/the frozen statistical design.
+
+**Implementation status.** Implemented. 98 net new tests.
+
+#### Current truth, stated plainly
+
+| State | What it means |
+|---|---|
+| **IMPLEMENTED** | evaluator + producer + CLI; report self-integrity; evidence-chain verification; integrity/anti-tamper gate; Q6 gate; Q9 observation and independent verification; conversion-chain provenance; T/X/C0 enforcement; readiness gate; preflight |
+| **READY BUT REQUIRES OPERATOR ACTION** | the ten `SWARM_*` execution variables; the evaluator implementation path; the trusted store |
+| **PRIVILEGED HOST ACTION REQUIRED** | actual outbound-egress enforcement. This host has none; `python -m qwen_train.f2_isolation` reports it honestly |
+| **EXTERNAL EVIDENCE REQUIRED** | S8 base=FAIL/gold=PASS executions with retained output, run log and evaluator bytes; a genuine ACTIVE lesson; a supplied Q9 attestation |
+| **AUTHORIZATION REQUIRED** | population acquisition, which `F2-IMPL-AUTH-013` explicitly does not authorize; Q5/Q6 curator authority, still undefined; Q10, then Q12, then Q13 |
+| **NOT EXECUTED** | calibration (Q10); the learning event (Q12); confirmatory F2 (Q13); S8 executions |
+| **REMAINING PROVENANCE GAP** | the adapter-to-GGUF conversion record. No conversion script exists in the repository and none is invented. |
+
+**Green software gates are NOT experimental readiness.** The repository can verify isolation but not impose it, and can validate evidence but not produce it.
+
 ---
 
 *Authorized: 2026-09-29*

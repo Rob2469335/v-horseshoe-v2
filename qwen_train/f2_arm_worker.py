@@ -492,21 +492,19 @@ def _behavioral_records_from_trajectory(
 def _task_success_from_report(report: Mapping[str, Any]) -> bool:
     """Derive the SECONDARY outcome from the evaluator's retained report.
 
-    Mirrors ``f2_protocol._derive_task_outcome``: every declared FAIL_TO_PASS
-    node must be ``passed``. Fail closed on a missing/empty/oddly-typed map.
+    Delegates to ``qwen_train.f2_evaluator.verdict_from_report_payload`` -- the
+    single authority for interpreting a report. The previous local copy of this
+    rule carried its own status set that had drifted from the evaluator's (it
+    rejected ``missing``, which the evaluator emits for a declared test absent
+    from the evidence), so a legitimate report could raise here instead of
+    scoring as the failure it is.
     """
-    f2p = report.get("fail_to_pass") if isinstance(report, Mapping) else None
-    if not isinstance(f2p, Mapping) or not f2p:
-        raise FreezeVerificationError(
-            "task-outcome report has no non-empty 'fail_to_pass' map"
-        )
-    statuses = {str(v).lower() for v in f2p.values()}
-    allowed = {"passed", "failed", "error", "skipped"}
-    if not statuses <= allowed:
-        raise FreezeVerificationError(
-            f"task-outcome report has unrecognised test statuses: {sorted(statuses)}"
-        )
-    return statuses <= {"passed"}
+    from qwen_train.f2_evaluator import verdict_from_report_payload
+
+    result, detail = verdict_from_report_payload(report)
+    if result is None:
+        raise FreezeVerificationError(detail)
+    return result == "pass"
 
 
 def assemble_worker_bundle(
@@ -643,14 +641,20 @@ def _load_bundle_governance() -> dict[str, Any]:
     registry = EvaluatorRegistry([evaluator])
 
     report_path = Path(os.environ[F2_TASK_OUTCOME_ENV])
-    if not report_path.is_file():
+    if report_path.is_file():
+        # Anti-fabrication: a report that ALREADY exists is untrusted input. An
+        # arm that could write a passing report before the worker looked would
+        # own its own verdict. So it is verified against the authoritative
+        # evaluator's own parsing before use, and -- when the retained JUnit
+        # evidence is also supplied -- it is RE-DERIVED and the two must agree.
+        task_outcome_report = _verify_or_redo_outcome_report(report_path)
+    else:
         # The report is a RUN product. When the harness has retained the raw
-        # pytest/JUnit evidence and the declared test contract, the AUTHORITATIVE
-        # evaluator produces it here rather than the arm failing for want of a
-        # producer. This closes the producer gap that previously made every
-        # bundle emission depend on an out-of-band report generator.
+        # pytest/JUnit evidence and the declared test contract, the
+        # AUTHORITATIVE evaluator produces it here rather than the arm failing
+        # for want of a producer.
         report_path = _produce_outcome_report_from_evidence(report_path)
-    task_outcome_report = _json.loads(report_path.read_text(encoding="utf-8"))
+        task_outcome_report = _json.loads(report_path.read_text(encoding="utf-8"))
 
     return {
         "store": store,
@@ -659,6 +663,82 @@ def _load_bundle_governance() -> dict[str, Any]:
         "implementation_bytes": implementation_bytes,
         "task_outcome_report": task_outcome_report,
     }
+
+
+def _verify_or_redo_outcome_report(report_path: Path) -> dict[str, Any]:
+    """Authenticate a pre-existing task-outcome report, re-deriving when possible.
+
+    Two independent protections:
+
+    1. The report must parse as an authoritative evaluator report AND carry a
+       verdict the evaluator itself would produce from its ``fail_to_pass`` map.
+       A hand-written JSON blob with no provenance is refused.
+    2. If ``SWARM_F2_JUNIT_EVIDENCE`` and ``SWARM_F2_TASK_CONTRACT`` are present,
+       the verdict is RE-DERIVED from the retained raw evidence and must equal
+       what the report claims. A report that disagrees with the evidence it
+       purports to summarise is refused rather than believed.
+
+    This is verification only; it never fabricates and never re-executes tests.
+    """
+    raw = report_path.read_bytes()
+    try:
+        from qwen_train.f2_evaluator import parse_report, verdict_from_report_payload
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        raise FreezeVerificationError(
+            f"F2 fail-closed: authoritative evaluator unavailable: {exc}"
+        ) from exc
+
+    try:
+        claimed = parse_report(raw)
+    except Exception as exc:  # noqa: BLE001
+        raise FreezeVerificationError(
+            f"F2 fail-closed: task-outcome report is not an authentic evaluator "
+            f"report and is refused: {report_path}: {exc}"
+        ) from exc
+
+    verdict, why = verdict_from_report_payload(claimed)
+    if verdict is None:
+        raise FreezeVerificationError(
+            f"F2 fail-closed: task-outcome report cannot establish a result: {why}"
+        )
+    if verdict != claimed.get("declared_result"):
+        raise FreezeVerificationError(
+            f"F2 fail-closed: task-outcome report declares "
+            f"{claimed.get('declared_result')!r} but its own FAIL_TO_PASS map "
+            f"implies {verdict!r}"
+        )
+
+    junit = os.environ.get("SWARM_F2_JUNIT_EVIDENCE", "").strip()
+    contract = os.environ.get("SWARM_F2_TASK_CONTRACT", "").strip()
+    if junit and contract:
+        expected = _verdict_from_evidence(junit, contract)
+        if expected is not None and expected != verdict:
+            raise FreezeVerificationError(
+                f"F2 fail-closed: task-outcome report claims {verdict!r} but the "
+                f"retained evidence re-derives {expected!r}; the report is not "
+                "believed over the evidence"
+            )
+    return claimed
+
+
+def _verdict_from_evidence(junit: str, contract: str) -> str | None:
+    """Independently re-derive the verdict from retained raw evidence."""
+    from qwen_train.f2_evaluator import evaluate_execution
+
+    try:
+        payload = json.loads(Path(contract).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    f2p = payload.get("fail_to_pass") or payload.get("FAIL_TO_PASS") or []
+    if not f2p:
+        return None
+    try:
+        outcome = evaluate_execution(
+            Path(junit).read_bytes(), fail_to_pass=list(f2p)
+        )
+    except Exception:  # noqa: BLE001 - the report path remains authoritative here
+        return None
+    return outcome.declared_result
 
 
 def _produce_outcome_report_from_evidence(report_path: Path) -> Path:

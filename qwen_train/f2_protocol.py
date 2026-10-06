@@ -676,22 +676,22 @@ def _read_json(store: TrustedArtifactStore, ref: ArtifactRef, label: str) -> tup
 def _derive_task_outcome(store: TrustedArtifactStore, ref: ArtifactRef) -> tuple[bool | None, str]:
     """Independently derive the SECONDARY task outcome from retained evidence.
 
-    Expects ``{"fail_to_pass": {"<nodeid>": "passed"|"failed"|"error"|"skipped"}}``.
-    Returns ``True`` only when every declared FAIL_TO_PASS node passed; ``None``
-    when the evidence cannot establish it (fail closed).
+    Delegates the verdict to ``qwen_train.f2_evaluator`` -- the single authority
+    for interpreting a task-outcome report. This function previously carried its
+    own hard-coded status tuple, which had already drifted from the evaluator's
+    (it did not accept ``missing``, a status the evaluator legitimately emits for
+    a declared test absent from the evidence). Re-implementing the rule here is
+    exactly how a producer and its verifier come to disagree.
     """
     payload, why = _read_json(store, ref, "task-outcome artifact")
     if payload is None:
         return None, why
-    if not isinstance(payload, Mapping):
-        return None, "task-outcome artifact is not a JSON object"
-    f2p = payload.get("fail_to_pass")
-    if not isinstance(f2p, Mapping) or not f2p:
-        return None, "task-outcome artifact has no non-empty 'fail_to_pass' map"
-    statuses = {str(v).lower() for v in f2p.values()}
-    if not statuses <= set(_TASK_OUTCOME_STATUSES):
-        return None, f"unrecognised test statuses: {sorted(statuses)}"
-    return statuses <= {"passed"}, "all declared FAIL_TO_PASS nodes passed" if statuses <= {"passed"} else f"statuses {sorted(statuses)}"
+    from qwen_train.f2_evaluator import verdict_from_report_payload
+
+    result, detail = verdict_from_report_payload(payload)
+    if result is None:
+        return None, detail
+    return result == "pass", detail
 
 
 def _verified_delivery(

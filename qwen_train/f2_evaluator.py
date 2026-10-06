@@ -74,6 +74,7 @@ __all__ = [
     "evaluate_execution",
     "render_report",
     "parse_report",
+    "verdict_from_report_payload",
     "derive_result_protocol",
     "implementation_digest",
     "identity_fields",
@@ -417,6 +418,27 @@ def implementation_digest() -> str:
     return hashlib.sha256(here.read_bytes()).hexdigest()
 
 
+#: Self-integrity digest over a report's own content. Without it, anyone able to
+#: write the report file can rewrite ``declared_result`` and still pass the
+#: internal consistency check, because that check re-derives from the same
+#: attacker-controlled map. The digest binds every other field, so any edit
+#: breaks verification.
+REPORT_DIGEST_FIELD = "report_digest"
+
+#: Fields excluded from the digest (the digest itself, obviously).
+_DIGEST_EXCLUDED = frozenset({REPORT_DIGEST_FIELD})
+
+
+def compute_report_digest(payload: Mapping[str, Any]) -> str:
+    """SHA-256 over the canonical report content, excluding the digest field."""
+    body = {k: v for k, v in payload.items() if k not in _DIGEST_EXCLUDED}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+            "ascii"
+        )
+    ).hexdigest()
+
+
 def render_report(
     outcome: EvaluationOutcome,
     *,
@@ -448,6 +470,7 @@ def render_report(
         "fail_to_pass": dict(sorted(outcome.fail_to_pass.items())),
         "pass_to_pass": dict(sorted(outcome.pass_to_pass.items())),
     }
+    payload[REPORT_DIGEST_FIELD] = compute_report_digest(payload)
     return json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("ascii")
@@ -475,7 +498,58 @@ def parse_report(data: bytes) -> dict[str, Any]:
     result = payload.get("declared_result")
     if result not in ("pass", "fail"):
         raise EvaluatorError(f"evaluator report declares an invalid result {result!r}")
+
+    # Self-integrity: any edit to any field (including declared_result) breaks
+    # this digest. Without it a hand-written report could be internally
+    # consistent and believed.
+    declared_digest = payload.get(REPORT_DIGEST_FIELD)
+    if not declared_digest:
+        raise EvaluatorError(
+            "evaluator report carries no report_digest; it cannot be shown to be "
+            "unmodified since the evaluator produced it"
+        )
+    actual = compute_report_digest(payload)
+    if declared_digest != actual:
+        raise EvaluatorError(
+            f"evaluator report report_digest {declared_digest!r} does not match its "
+            f"own content ({actual!r}); the report has been altered after the "
+            "evaluator produced it"
+        )
     return dict(payload)
+
+
+def verdict_from_report_payload(
+    payload: Mapping[str, Any],
+) -> tuple[str | None, str]:
+    """THE single authority for "what does this report say?".
+
+    Returns ``("pass"|"fail"|None, detail)``. ``None`` means the payload cannot
+    establish a result, which every caller must treat as fail-closed.
+
+    This function exists to eliminate producer/verifier drift. Three other F2
+    modules previously re-implemented "are all FAIL_TO_PASS nodes passed?" with
+    their own hard-coded status sets, and those sets had already diverged: none
+    of them accepted ``missing``, which this evaluator emits for a declared test
+    absent from the evidence. A legitimately produced report could therefore be
+    rejected downstream as an *unrecognised status* -- a protocol error -- rather
+    than scored as the ``fail`` it actually is. All consumers now call this.
+    """
+    if not isinstance(payload, Mapping):
+        return None, "report is not a JSON object"
+    f2p = payload.get("fail_to_pass")
+    if not isinstance(f2p, Mapping) or not f2p:
+        return None, "report carries no non-empty 'fail_to_pass' map"
+    statuses = {str(k): str(v) for k, v in f2p.items()}
+    unknown = sorted({v for v in statuses.values() if v != STATUS_PASSED} - NOT_PASSED)
+    if unknown:
+        return None, f"report carries unknown test statuses: {unknown}"
+    not_passed = {k: v for k, v in sorted(statuses.items()) if v in NOT_PASSED}
+    if not not_passed:
+        return "pass", f"all {len(statuses)} declared FAIL_TO_PASS nodes passed"
+    return "fail", (
+        f"{len(not_passed)} of {len(statuses)} FAIL_TO_PASS nodes not passed: "
+        + ", ".join(f"{k}={v}" for k, v in list(not_passed.items())[:8])
+    )
 
 
 def derive_result_protocol(

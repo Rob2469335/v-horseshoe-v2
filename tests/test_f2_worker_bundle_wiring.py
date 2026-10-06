@@ -266,10 +266,30 @@ class TestEmitWorkerBundleEndToEnd:
         impl_path = tmp_path / "evaluator_impl.py"
         impl_path.write_bytes(IMPL_BYTES)
         report_path = tmp_path / "task_outcome.json"
-        report_path.write_text(
-            json.dumps({"fail_to_pass": {"tests/test_package.py::t": "passed"}}),
-            encoding="utf-8",
-        )
+        if report:
+            # A GENUINE evaluator report, produced from retained JUnit evidence by
+            # the authoritative evaluator. The worker now refuses a hand-written
+            # report that carries no provenance, so a fabricated fixture would test
+            # nothing but the refusal path.
+            from qwen_train.f2_evaluator import produce_report
+
+            junit = tmp_path / "junit.xml"
+            junit.write_bytes(
+                b'<?xml version="1.0" encoding="utf-8"?><testsuites>'
+                b'<testcase classname="tests.test_package" name="t"/>'
+                b"</testsuites>"
+            )
+            produce_report(
+                junit_path=junit,
+                fail_to_pass=["tests/test_package.py::t"],
+                out_path=report_path,
+                execution_state_identity="gold",
+            )
+        else:
+            report_path.write_text(
+                json.dumps({"fail_to_pass": {"tests/test_package.py::t": "passed"}}),
+                encoding="utf-8",
+            )
         monkeypatch.setenv(F2_ARTIFACT_ROOT_ENV, str(tmp_path / "store"))
         monkeypatch.setenv(F2_ARTIFACT_RETENTION_DAYS_ENV, "365")
         monkeypatch.setenv(F2_EVALUATOR_ID_ENV, "f2_test_evaluator")
@@ -343,3 +363,129 @@ class TestEmitWorkerBundleEndToEnd:
                 trajectory_run_id="missing-run",
                 system_prompt="",
             )
+
+
+class TestReportIsNotSelfAttesting:
+    """An arm must not be able to hand the worker a verdict it wrote itself."""
+
+    def _env(self, tmp_path, monkeypatch):
+        impl = tmp_path / "impl.py"
+        impl.write_bytes(b"# evaluator impl\n")
+        monkeypatch.setenv(F2_ARTIFACT_ROOT_ENV, str(tmp_path / "store"))
+        monkeypatch.setenv(F2_ARTIFACT_RETENTION_DAYS_ENV, "365")
+        monkeypatch.setenv(F2_EVALUATOR_ID_ENV, "f2_test_evaluator")
+        monkeypatch.setenv(F2_EVALUATOR_VERSION_ENV, "v1")
+        monkeypatch.setenv(F2_EVALUATOR_IMPL_ENV, str(impl))
+        monkeypatch.setenv(F2_EVALUATOR_PROCEDURE_ENV, "p")
+        monkeypatch.delenv("SWARM_F2_JUNIT_EVIDENCE", raising=False)
+        monkeypatch.delenv("SWARM_F2_TASK_CONTRACT", raising=False)
+        return tmp_path
+
+    def _load(self, monkeypatch, report_path):
+        from qwen_train.f2_arm_worker import _load_bundle_governance
+
+        monkeypatch.setenv(F2_TASK_OUTCOME_ENV, str(report_path))
+        return _load_bundle_governance
+
+    def test_hand_written_report_is_refused(self, tmp_path, monkeypatch):
+        """A bare fail_to_pass map has no provenance and must not be believed."""
+        from qwen_train.f2_arm_worker import FreezeVerificationError
+
+        self._env(tmp_path, monkeypatch)
+        forged = tmp_path / "forged.json"
+        forged.write_text(
+            json.dumps({"fail_to_pass": {"t": "passed"}}), encoding="utf-8"
+        )
+        with pytest.raises(FreezeVerificationError) as ei:
+            self._load(monkeypatch, forged)()
+        assert "not an authentic evaluator report" in str(ei.value)
+
+    def test_report_altered_after_production_is_refused(self, tmp_path, monkeypatch):
+        """Editing declared_result after the evaluator wrote the report breaks
+        the report_digest, so the forgery cannot be believed."""
+        from qwen_train.f2_evaluator import produce_report
+        from qwen_train.f2_arm_worker import FreezeVerificationError
+
+        self._env(tmp_path, monkeypatch)
+        junit = tmp_path / "j.xml"
+        junit.write_bytes(
+            b'<?xml version="1.0"?><testsuites>'
+            b'<testcase classname="t" name="x"/></testsuites>'
+        )
+        report = tmp_path / "r.json"
+        produce_report(junit_path=junit, fail_to_pass=["t.py::x"], out_path=report,
+                       execution_state_identity="gold")
+        blob = report.read_bytes()
+        assert b'"declared_result":"pass"' in blob
+        # Flip the claim to fail while the map still says all-passed.
+        tampered = blob.replace(b'"declared_result":"pass"', b'"declared_result":"fail"')
+        assert tampered != blob
+        report.write_bytes(tampered)
+        with pytest.raises(FreezeVerificationError) as ei:
+            self._load(monkeypatch, report)()
+        assert "report_digest" in str(ei.value)
+
+    def test_stale_report_is_refused_when_evidence_has_changed(self, tmp_path, monkeypatch):
+        """The STALE-REPORT attack: a report produced from passing evidence is
+        re-presented after the evidence turns failing. The worker re-derives from
+        the retained evidence and refuses."""
+        from qwen_train.f2_evaluator import produce_report
+        from qwen_train.f2_arm_worker import FreezeVerificationError
+
+        self._env(tmp_path, monkeypatch)
+        junit = tmp_path / "j.xml"
+        passing = (b'<?xml version="1.0"?><testsuites>'
+                   b'<testcase classname="t" name="x"/></testsuites>')
+        failing = (b'<?xml version="1.0"?><testsuites>'
+                   b'<testcase classname="t" name="x"><failure message="m"/></testcase>'
+                   b'</testsuites>')
+        contract = tmp_path / "c.json"
+        contract.write_text(json.dumps({"fail_to_pass": ["t.py::x"]}), encoding="utf-8")
+
+        report = tmp_path / "r.json"
+        junit.write_bytes(passing)
+        produce_report(junit_path=junit, fail_to_pass=["t.py::x"], out_path=report,
+                       execution_state_identity="gold")
+
+        # The evidence now says the test FAILS. The report still claims a pass.
+        junit.write_bytes(failing)
+        monkeypatch.setenv("SWARM_F2_JUNIT_EVIDENCE", str(junit))
+        monkeypatch.setenv("SWARM_F2_TASK_CONTRACT", str(contract))
+
+        with pytest.raises(FreezeVerificationError) as ei:
+            self._load(monkeypatch, report)()
+        assert "not believed over the evidence" in str(ei.value)
+
+    def test_report_matching_the_evidence_is_accepted(self, tmp_path, monkeypatch):
+        from qwen_train.f2_evaluator import produce_report
+
+        self._env(tmp_path, monkeypatch)
+        junit = tmp_path / "j.xml"
+        junit.write_bytes(b'<?xml version="1.0"?><testsuites>'
+                          b'<testcase classname="t" name="x"/></testsuites>')
+        contract = tmp_path / "c.json"
+        contract.write_text(json.dumps({"fail_to_pass": ["t.py::x"]}), encoding="utf-8")
+        report = tmp_path / "r.json"
+        produce_report(junit_path=junit, fail_to_pass=["t.py::x"], out_path=report,
+                       execution_state_identity="gold")
+        monkeypatch.setenv("SWARM_F2_JUNIT_EVIDENCE", str(junit))
+        monkeypatch.setenv("SWARM_F2_TASK_CONTRACT", str(contract))
+        gov = self._load(monkeypatch, report)()
+        assert gov["task_outcome_report"]["declared_result"] == "pass"
+
+    def test_genuine_report_is_accepted(self, tmp_path, monkeypatch):
+        self._env(tmp_path, monkeypatch)
+        from qwen_train.f2_evaluator import produce_report
+
+        junit = tmp_path / "j.xml"
+        junit.write_bytes(
+            b'<?xml version="1.0"?><testsuites>'
+            b'<testcase classname="t" name="x"/></testsuites>'
+        )
+        good = tmp_path / "good.json"
+        produce_report(
+            junit_path=junit, fail_to_pass=["t.py::x"], out_path=good,
+            execution_state_identity="gold",
+        )
+        gov = self._load(monkeypatch, good)()
+        assert gov["task_outcome_report"]["declared_result"] == "pass"
