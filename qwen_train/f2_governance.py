@@ -78,6 +78,9 @@ __all__ = [
     "ROLE_EVALUATOR_IMPLEMENTATION",
     "verify_execution_bundle",
     "verify_governed_pair",
+    "SeparationOfDutiesError",
+    "SeparationOfDuties",
+    "verify_separation_of_duties",
     "GOVERNANCE_LIMITATIONS",
 ]
 
@@ -89,6 +92,97 @@ ROLE_EVALUATOR_IMPLEMENTATION = "evaluator_implementation"
 
 VALID_RESULTS = ("pass", "fail", "error")
 VALID_STATES = ("base", "gold")
+
+class SeparationOfDutiesError(RuntimeError):
+    """Raised when a governance record fails the separation requirement."""
+
+
+@dataclass(frozen=True)
+class SeparationOfDuties:
+    """Minimum auditable role separation for one run.
+
+    Required by ``EXPERIMENT_J_F2_OPERATOR_HANDOFF.md:655-656``: the operator may
+    hold exclusion adjudication only with an explicit, recorded separation. This
+    makes that record machine-checkable instead of prose, and fails closed when it
+    is absent or when one party would be the sole judge of its own exclusions.
+    """
+
+    run_authority: str
+    operator: str
+    exclusion_adjudicator: str
+    independent_regrade: str
+    q5_q6_adjudicator: str
+    mechanical_exclusion_rules: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_authority": self.run_authority,
+            "operator": self.operator,
+            "exclusion_adjudicator": self.exclusion_adjudicator,
+            "independent_regrade": self.independent_regrade,
+            "q5_q6_adjudicator": self.q5_q6_adjudicator,
+            "mechanical_exclusion_rules": self.mechanical_exclusion_rules,
+        }
+
+
+def verify_separation_of_duties(
+    rec: "SeparationOfDuties | Mapping[str, Any] | None",
+) -> tuple[bool, str]:
+    """Return ``(ok, detail)``. Fails closed: ``None`` is never acceptable.
+
+    The operator may also serve as exclusion adjudicator ONLY when exclusions are
+    decided by the pre-specified mechanical rule set (``F2-IMPL-AUTH-018`` Q5)
+    rather than by that person's judgement.
+    """
+    if rec is None:
+        return False, (
+            "separation of duties NOT ESTABLISHED -- no governance record supplied"
+        )
+    if isinstance(rec, Mapping):
+        fields = (
+            "run_authority",
+            "operator",
+            "exclusion_adjudicator",
+            "independent_regrade",
+            "q5_q6_adjudicator",
+        )
+        missing = [f for f in fields if not str(rec.get(f, "")).strip()]
+        if missing:
+            return False, f"separation of duties record incomplete: missing {missing}"
+        rec = SeparationOfDuties(
+            run_authority=str(rec["run_authority"]),
+            operator=str(rec["operator"]),
+            exclusion_adjudicator=str(rec["exclusion_adjudicator"]),
+            independent_regrade=str(rec["independent_regrade"]),
+            q5_q6_adjudicator=str(rec["q5_q6_adjudicator"]),
+            mechanical_exclusion_rules=bool(
+                rec.get("mechanical_exclusion_rules", False)
+            ),
+        )
+
+    if rec.operator == rec.exclusion_adjudicator and not rec.mechanical_exclusion_rules:
+        return False, (
+            "separation of duties VIOLATED -- the operator is also the sole exclusion "
+            "adjudicator and exclusions are not decided by the pre-specified mechanical "
+            "rule set (F2-IMPL-AUTH-018 Q5)"
+        )
+    if rec.operator == rec.independent_regrade:
+        return False, (
+            "separation of duties VIOLATED -- the operator also signs the independent "
+            "regrade, so no independent verification exists"
+        )
+    if rec.exclusion_adjudicator == rec.independent_regrade:
+        return False, (
+            "separation of duties VIOLATED -- one party both adjudicates exclusions and "
+            "signs the independent regrade"
+        )
+    return True, (
+        f"separation recorded: operator={rec.operator} "
+        f"adjudicator={rec.exclusion_adjudicator} "
+        f"regrade={rec.independent_regrade} "
+        f"mechanical_rules={rec.mechanical_exclusion_rules}"
+    )
+
 
 #: Honestly recorded limits of what this layer can establish.
 GOVERNANCE_LIMITATIONS = {

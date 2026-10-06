@@ -7,6 +7,14 @@
 **Describes repository state at:** `3218ffbc` plus this commit.
 **Machine-checked by:** `python -m qwen_train.f2_preflight` (`f2_preflight_v1`).
 
+> **UPDATE 2026-10-05 (F2-IMPL-AUTH-024).** The frozen confirmatory design
+> **cannot be validly powered**:
+equired_pairs rejects delta > discordance, and
+> neither delta nor pi_d is obtainable under existing authority (Q10 has no T arm).
+> A narrowly scoped **exploratory T/X pilot** is now authorized to estimate them:
+> docs/EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md. It is **NOT EXECUTED** and
+> authorizes no execution. Two code changes below now gate on identity.
+
 **The one sentence.** Every repository mechanism for F2 exists and is tested, and
 **not one prerequisite for actually running it has been satisfied** — the host has no
 egress enforcement, there is no S8 evidence, no ACTIVE lesson, no conversion record,
@@ -526,6 +534,64 @@ Qdrant's local port must keep working.
 **Not performed here:** the current session is not Administrator
 (`WindowsPrincipal.IsInRole(Administrator) = False`, token not elevated). No firewall,
 routing, or DNS change was attempted or simulated.
+
+### 4.3 ADMINISTRATOR HANDOFF - minimum privileged setup specification
+
+**Do not execute without an operator instruction.** This specifies what an
+Administrator must supply; it is a specification, not a script.
+
+**Why required.** Fresh research established two Microsoft platform facts that
+change the design:
+
+1. **Windows Firewall does not filter loopback.** A loopback address cannot even be
+   encoded in a rule's address field on current Windows (dedicated semantic-error
+   codes exist for exactly that). Therefore *loopback reachability is neither
+   evidence of egress enforcement nor a fault* - it must not be read as either.
+2. **A firewall `-Program` rule does NOT inherit to child processes.** The
+   condition matches one executable image by full path. The F2 arm spawns a child
+   backend, so every image must be scoped individually.
+
+**Prerequisite:** a default-deny outbound control for non-loopback traffic, scoped so
+the operator's own browsing and the local model/Qdrant services keep working.
+
+**Expected identity/scope.** Choose ONE and record which:
+
+| Scope model | Enforcement scope | Independent verification |
+|---|---|---|
+| windows_account | a dedicated Windows account running only the arm | rule's LocalUser / account SID |
+| irewall_program_path | per-image outbound block on each spawned executable | rule's resolved application path |
+| m / windows_sandbox | the whole execution environment | host cannot observe it |
+
+**Child-process inventory required.** A -Program rule does not cover children, so
+the administrator must be given the exact image list. The F2 attestation now carries
+spawn_image_inventory for precisely this.
+
+**Verification evidence required.** Re-run the probes **under enforcement** and
+supply the attestation, which must now bind:
+
+* --enforcement-scope (one of windows_account, irewall_program_path, m,
+  windows_sandbox)
+* --interpreter-path and --interpreter-sha256
+* --executing-user
+* --spawn-image for every image the arm will spawn
+
+ssess_enforcement_identity **fails closed**: an attestation whose probes pass but
+whose enforcement identity is unbound is **refused** by the readiness gate. A probe
+records *that* a connection failed, never *which control* failed it.
+
+**Rollback requirement.** The control must be removable by the Administrator without
+touching unrelated rules, and the removal must be verifiable independently of this
+repository.
+
+**How F2 consumes the evidence.** 2_readiness._check_no_egress re-derives the
+verdict with erify_isolation_attestation and then requires
+ssess_enforcement_identity to be bound. Neither the value of any secret nor the
+key itself is involved.
+
+**Not established by this repository:** which scope model the operator will choose,
+the concrete rule set, and whether the arm spawns any image beyond the interpreter.
+Those are operator/Administrator decisions and are recorded as **NOT ESTABLISHED**
+rather than guessed.
 
 ### 4.2 Post-change probe and the artifact that must be retained
 

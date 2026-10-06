@@ -487,10 +487,31 @@ def _check_no_egress(supplied: Mapping[str, Any]):
                 "Provide a well-formed f2_isolation attestation record"
             )
         if verdict.satisfied:
+            # A probe records THAT a connection failed, never WHICH control
+            # failed it. Without a bound enforcement identity the denial is
+            # unattributable, so it cannot satisfy the gate on its own.
+            try:
+                from qwen_train.f2_isolation import assess_enforcement_identity
+            except Exception as exc:  # noqa: BLE001 - fail closed
+                return False, f"enforcement identity cannot be assessed: {exc}", (
+                    "Restore qwen_train/f2_isolation.py"
+                )
+            ident = assess_enforcement_identity(att)
+            if not ident.bound:
+                return False, (
+                    "isolation probes satisfied but the ENFORCEMENT IDENTITY is not "
+                    f"bound: {', '.join(ident.missing)}"
+                ), (
+                    "Re-run f2_isolation with --enforcement-scope, --interpreter-path, "
+                    "--interpreter-sha256 (and --spawn-image per spawned image). Note a "
+                    "firewall -Program rule does NOT inherit to child processes, and "
+                    "Windows Firewall does not filter loopback."
+                )
             return True, (
                 "no-egress attestation verified: "
                 f"{len(verdict.satisfied_dimensions)} observed and satisfied, "
                 f"{len(verdict.policy_declared_dimensions)} policy-asserted, "
+                f"enforcement={ident.scope_model}, "
                 f"digest {verdict.attestation_digest[:12]}"
             ), ""
         return False, f"isolation attestation not established: {verdict.detail}", (

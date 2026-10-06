@@ -121,6 +121,11 @@ def _clean_attestation():
         arm_id="arm-T-001",
         rollout_id="rollout-77",
         workspace="C:/isolated/task-001",
+        executing_user="DOMAIN\\f2arm",
+        interpreter_path="C:/Python314/python.exe",
+        interpreter_sha256="cd" * 32,
+        spawn_image_inventory=("C:/Python314/python.exe",),
+        enforcement_scope="windows_account",
     ).to_dict()
 
 
@@ -475,6 +480,11 @@ class TestIsolationAttestationIntegration:
             arm_id="arm-T-001",
             rollout_id="rollout-77",
             workspace="C:/isolated/task-001",
+            executing_user="DOMAIN\\f2arm",
+            interpreter_path="C:/Python314/python.exe",
+            interpreter_sha256="cd" * 32,
+            spawn_image_inventory=("C:/Python314/python.exe",),
+            enforcement_scope="windows_account",
         )
         kwargs.update(over)
         return iso.run_egress_probes(**kwargs)

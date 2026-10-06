@@ -141,6 +141,17 @@ class IsolationAttestation:
     required_services: tuple[str, ...] = ()
     policy_assertions: tuple[tuple[str, str], ...] = ()
     notes: str = ""
+    # --- enforcement identity (added 2026-10-05) -------------------------
+    # An attestation previously bound only arm/rollout/workspace, so a denial
+    # was UNATTRIBUTABLE: nothing in the record said WHICH control produced it.
+    # These fields make the control a first-class, digest-bound part of the
+    # evidence. All default to empty, which ``assess_enforcement_identity``
+    # treats as NOT ESTABLISHED -- never as "enforced".
+    executing_user: str = ""
+    interpreter_path: str = ""
+    interpreter_sha256: str = ""
+    spawn_image_inventory: tuple[str, ...] = ()
+    enforcement_scope: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -155,6 +166,11 @@ class IsolationAttestation:
             "dns_behavior": self.dns_behavior,
             "negative_control": self.negative_control,
             "required_services": list(self.required_services),
+            "executing_user": self.executing_user,
+            "interpreter_path": self.interpreter_path,
+            "interpreter_sha256": self.interpreter_sha256,
+            "spawn_image_inventory": list(self.spawn_image_inventory),
+            "enforcement_scope": self.enforcement_scope,
             "policy_assertions": [
                 {"dimension": d, "assertion": a, "source": "enforced_policy"}
                 for d, a in self.policy_assertions
@@ -255,6 +271,11 @@ def run_egress_probes(
     arm_id: str = "",
     rollout_id: str = "",
     workspace: str = "",
+    executing_user: str = "",
+    interpreter_path: str = "",
+    interpreter_sha256: str = "",
+    spawn_image_inventory: Sequence[str] = (),
+    enforcement_scope: str = "",
 ) -> IsolationAttestation:
     """Observe every required dimension and build the attestation record.
 
@@ -369,6 +390,11 @@ def run_egress_probes(
         negative_control=neg_outcome,
         probes=tuple(probes),
         required_services=tuple(f"{n} {h}:{p}" for n, h, p in required_services),
+        executing_user=executing_user,
+        interpreter_path=interpreter_path,
+        interpreter_sha256=interpreter_sha256,
+        spawn_image_inventory=tuple(spawn_image_inventory),
+        enforcement_scope=enforcement_scope,
         policy_assertions=tuple(
             sorted((str(k), str(v)) for k, v in (policy_assertions or {}).items())
         ),
@@ -455,6 +481,101 @@ def _digest_of(att: IsolationAttestation) -> str:
 
 def attestation_digest(att: IsolationAttestation) -> str:
     return _digest_of(att)
+
+
+#: Enforcement scope models this repository recognises. Anything else is
+#: recorded verbatim but is NOT accepted as a recognised control.
+ENFORCEMENT_SCOPE_MODELS = (
+    "windows_account",
+    "firewall_program_path",
+    "vm",
+    "windows_sandbox",
+)
+
+#: Platform facts established from Microsoft documentation (2026-10-05) and
+#: therefore asserted here rather than re-derived at run time.
+PLATFORM_LIMITS = (
+    "windows_firewall_does_not_filter_loopback",
+    "firewall_program_rule_does_not_inherit_to_child_processes",
+)
+
+
+@dataclass(frozen=True)
+class EnforcementVerdict:
+    """Whether an attestation names a control that could have caused the denial."""
+
+    bound: bool
+    scope_model: str
+    recognised_scope: bool
+    executing_user: str
+    interpreter_path: str
+    interpreter_sha256: str
+    spawn_image_count: int
+    missing: tuple[str, ...]
+    detail: str
+
+
+def assess_enforcement_identity(
+    att: IsolationAttestation | Mapping[str, Any],
+) -> EnforcementVerdict:
+    """Decide whether the attestation binds an *enforcement* identity.
+
+    A probe result says only that a connection failed. It does not say which
+    control made it fail, so without this an attestation is satisfied by a
+    machine that happened to be offline. This fails closed: absence of any
+    binding is ``NOT ESTABLISHED``, never "enforced".
+
+    Two platform facts drive the required fields:
+
+    * Windows Firewall cannot filter loopback, so loopback reachability is NOT
+      evidence of egress enforcement -- an administrator must scope the control
+      to the non-loopback path and say so here.
+    * A ``-Program`` firewall rule matches one executable image and does NOT
+      inherit to child processes, so the images the arm will spawn must be
+      declared and matched individually by the control.
+    """
+    if isinstance(att, Mapping):
+        att = parse_attestation(att)
+
+    missing: list[str] = []
+    if not att.enforcement_scope.strip():
+        missing.append("enforcement_scope")
+    if not att.interpreter_path.strip():
+        missing.append("interpreter_path")
+    if not att.interpreter_sha256.strip():
+        missing.append("interpreter_sha256")
+
+    recognised = att.enforcement_scope.strip() in ENFORCEMENT_SCOPE_MODELS
+    if att.enforcement_scope.strip() and not recognised:
+        missing.append("enforcement_scope(recognised)")
+
+    if missing:
+        detail = (
+            "enforcement identity NOT ESTABLISHED -- missing "
+            f"{', '.join(missing)}. A probe result records that a connection "
+            "failed, not which control failed it."
+        )
+    else:
+        detail = (
+            f"enforcement identity bound via {att.enforcement_scope!r}: "
+            f"user={att.executing_user or 'undeclared'} "
+            f"interpreter={att.interpreter_path} "
+            f"({att.interpreter_sha256[:12]}...) "
+            f"spawn_images={len(att.spawn_image_inventory)}. "
+            f"Platform limits: {'; '.join(PLATFORM_LIMITS)}."
+        )
+
+    return EnforcementVerdict(
+        bound=not missing,
+        scope_model=att.enforcement_scope,
+        recognised_scope=recognised,
+        executing_user=att.executing_user,
+        interpreter_path=att.interpreter_path,
+        interpreter_sha256=att.interpreter_sha256,
+        spawn_image_count=len(att.spawn_image_inventory),
+        missing=tuple(missing),
+        detail=detail,
+    )
 
 
 def verify_isolation_attestation(
@@ -621,6 +742,11 @@ def parse_attestation(data: Mapping[str, Any] | bytes) -> IsolationAttestation:
         negative_control=str(data.get("negative_control", "unknown")),
         probes=probes,
         required_services=tuple(data.get("required_services", ())),
+        executing_user=str(data.get("executing_user", "")),
+        interpreter_path=str(data.get("interpreter_path", "")),
+        interpreter_sha256=str(data.get("interpreter_sha256", "")),
+        spawn_image_inventory=tuple(data.get("spawn_image_inventory", ())),
+        enforcement_scope=str(data.get("enforcement_scope", "")),
         policy_assertions=tuple(
             (str(a["dimension"]), str(a["assertion"]))
             for a in data.get("policy_assertions", ())
@@ -669,6 +795,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--arm-id", default="", help="arm identity to bind to")
     ap.add_argument("--rollout-id", default="", help="rollout identity to bind to")
     ap.add_argument("--workspace", default="", help="arm workspace path to bind to")
+    ap.add_argument("--enforcement-scope", default="",
+                    help="how the egress control is scoped: " + "|".join(ENFORCEMENT_SCOPE_MODELS))
+    ap.add_argument("--executing-user", default="",
+                    help="Windows account the arm runs under (no value is inferred)")
+    ap.add_argument("--interpreter-path", default="",
+                    help="full path of the executable image that runs the arm")
+    ap.add_argument("--interpreter-sha256", default="",
+                    help="SHA-256 of that executable image")
+    ap.add_argument("--spawn-image", action="append", default=[],
+                    help="an additional executable image the arm will spawn (repeatable); "
+                         "firewall -Program rules do NOT inherit to child processes")
     ap.add_argument("--policy-identity", default="",
                     help="identity of the ENFORCED policy (required for assertions)")
     ap.add_argument("--policy-sha256", default="",
@@ -740,6 +877,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             arm_id=args.arm_id,
             rollout_id=args.rollout_id,
             workspace=args.workspace,
+            executing_user=args.executing_user,
+            interpreter_path=args.interpreter_path,
+            interpreter_sha256=args.interpreter_sha256,
+            spawn_image_inventory=tuple(args.spawn_image),
+            enforcement_scope=args.enforcement_scope,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"f2_isolation: probe run failed: {type(exc).__name__}: {exc}")
