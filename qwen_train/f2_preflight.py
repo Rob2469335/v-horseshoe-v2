@@ -387,6 +387,58 @@ def render(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _load_operator_env(root: Path) -> None:
+    """Populate ``os.environ`` from the repository's ``.env`` for variables not set.
+
+    Why this exists
+    ---------------
+    The operator handoff states two facts that were mutually unsatisfiable:
+
+    * the receipt key's provision location is the operator's ``.env``
+      (``EXPERIMENT_J_F2_OPERATOR_HANDOFF.md`` section 1.2); and
+    * preflight is a standalone command, ``python -m qwen_train.f2_preflight``
+      (handoff step K).
+
+    ``f2_readiness`` reads ``os.environ`` only, so a key correctly placed in
+    ``.env`` was invisible to the very gate that is supposed to check it. That
+    is a mechanism defect, not an operator mistake: the documented check could
+    not observe the documented location.
+
+    This follows the repository's own convention -- ``swarm_os/config/settings.py``
+    self-loads ``.env`` for the same reason -- and resolves ``.env`` at the
+    REPOSITORY root rather than the current working directory, because the
+    handoff documents preflight as directly runnable.
+
+    Deliberate safety properties:
+
+    * **An explicit process environment always wins.** A variable already present
+      in ``os.environ`` is never overwritten, so an operator who exports a value
+      in their shell is never silently replaced by a stale file.
+    * **Values are never logged, printed, or returned.** Only presence is observed.
+    * **Nothing is written.** This reads ``.env``; it never modifies it.
+    * **Fail-closed behaviour is unchanged.** If ``.env`` is absent or unreadable,
+      nothing happens and every check proceeds exactly as before. No check is
+      weakened, skipped, or bypassed.
+    """
+    env_path = root / ".env"
+    try:
+        raw = env_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or key in os.environ:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ[key] = value
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m qwen_train.f2_preflight")
     ap.add_argument("--json", action="store_true", help="emit JSON only")
@@ -397,6 +449,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = ap.parse_args(list(argv) if argv is not None else None)
 
     root = Path(__file__).resolve().parents[1]
+    _load_operator_env(root)
     att = Path(args.attestation) if args.attestation else None
 
     if args.provenance:
