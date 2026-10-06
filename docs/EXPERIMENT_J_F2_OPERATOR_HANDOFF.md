@@ -63,19 +63,37 @@ Exit code is `0` **only** when the result is `READY`. Today it is `BLOCKED`.
 
 None of these is a secret. Set them in the process environment for the run only.
 
-| Variable | Meaning |
-|---|---|
-| `SWARM_DISTILLER_MODEL` | distiller model identity |
-| `SWARM_DISTILLER_WEIGHTS_DIGEST` | SHA-256 of the distiller weights |
-| `SWARM_F2_EVALUATOR_ID` | authorized evaluator id |
-| `SWARM_F2_EVALUATOR_VERSION` | authorized evaluator version |
-| `SWARM_F2_EVALUATOR_PROCEDURE` | authorized evaluator procedure id |
-| `SWARM_F2_EVALUATOR_IMPL` | path to the evaluator implementation artifact |
-| `SWARM_F2_ARTIFACT_ROOT` | **absolute** trusted artifact-store root |
-| `SWARM_F2_ARTIFACT_RETENTION_DAYS` | retention, whole days |
-| `SWARM_F2_EMIT_BUNDLE` | must be enabled or no evidence chain is emitted |
-| `SWARM_F2_TASK_OUTCOME_REPORT` | destination the evaluator writes its report to |
-| `SWARM_EVALUATOR_STORE` (trusted store) | the store the evidence chain verifies against |
+| Variable | Meaning | Owner | Secret? |
+|---|---|---|---|
+| `SWARM_DISTILLER_MODEL` | distiller model identity (**Q7 decision**) | operator | no |
+| `SWARM_DISTILLER_WEIGHTS_DIGEST` | SHA-256 of the distiller weights | operator | no |
+| `SWARM_F2_EVALUATOR_ID` | authorized evaluator id | operator (naming what is authorized) | no |
+| `SWARM_F2_EVALUATOR_VERSION` | authorized evaluator version | operator | no |
+| `SWARM_F2_EVALUATOR_PROCEDURE` | authorized evaluator procedure id | operator | no |
+| `SWARM_F2_EVALUATOR_IMPL` | path to the evaluator implementation artifact | operator | no |
+| `SWARM_F2_ARTIFACT_ROOT` | **absolute** trusted artifact-store root | operator | no |
+| `SWARM_F2_ARTIFACT_RETENTION_DAYS` | retention, whole days | operator | no |
+| `SWARM_F2_EMIT_BUNDLE` | must be enabled or no evidence chain is emitted | operator | no |
+| `SWARM_F2_TASK_OUTCOME_REPORT` | destination the evaluator writes its report to | operator | no |
+| `SWARM_RECEIPT_KEY` | receipt signing key (**Q11**) | operator | **YES — never print** |
+
+`protocol_version` is **not** operator-supplied: it is the repository constant
+`f2_protocol.F2_PROTOCOL_ID = "f2_experiment_j_v1"`. Do not set it.
+
+**None of these may be provisioned by the implementation agent.** The
+authorization ledger states this repeatedly — *"no provisioning of
+`SWARM_RECEIPT_KEY`, `SWARM_DISTILLER_MODEL`, `SWARM_DISTILLER_WEIGHTS_DIGEST`"* -
+and *"SECRETS (Q7, Q11). Owner: the operator. Location: the operator's `.env` only."*
+
+**Non-secret verification** (prints no secret values; safe to paste):
+
+```powershell
+python -m qwen_train.f2_preflight              # lists every absent variable by name
+python -m qwen_train.f2_preflight --json       # machine-readable, same guarantee
+```
+
+Preflight reports **presence and shape only**. `_check_weights_digest` validates the
+digest is a well-formed SHA-256 and explicitly does not print it.
 
 ### 1.2 The one secret, and how to handle it
 
@@ -83,9 +101,25 @@ None of these is a secret. Set them in the process environment for the run only.
 |---|---|
 | Variable | `SWARM_RECEIPT_KEY` |
 | Status | **NOT PROVISIONED** — absent from `.env` and from Process/User/Machine scopes |
-| Presence check | preflight tests **presence only** |
-| Provisioning | via the approved secret mechanism, for the run only |
+| Provision location | the operator's **`.env` only**, per the authorization ledger. Never the arm workspace, a task file, a log, the bundle payload, or a model prompt |
+| Presence check | preflight tests **presence only** and never prints the value |
+| Scope | **for the run only** - not persisted into tracked files |
 | **Must never** | appear in logs, reports, attestations, documentation, or source control |
+
+**Note on an existing file.** `data/prompt_repairer_receipt.key` exists on this host.
+Its presence is **not** provisioning: the readiness gate reads the
+`SWARM_RECEIPT_KEY` environment variable, not that file. Whether it is the correct
+key for this experiment is **UNVERIFIED**, and no agent has read it or may.
+
+**Non-secret presence verification** (never echoes the value):
+
+```powershell
+# True/False only - never prints the key
+[bool]$env:SWARM_RECEIPT_KEY
+```
+
+Prohibited: `echo $env:SWARM_RECEIPT_KEY`, `Get-ChildItem Env:SWARM_RECEIPT_KEY`,
+`Get-Content data/prompt_repairer_receipt.key`, or pasting the key anywhere.
 
 Until it is present, receipt authority **fails closed** and no promotion can occur.
 That is correct behaviour, not an error to work around. No agent may provision it.
@@ -384,6 +418,65 @@ converter run log naming the adapter; or (b) **re-performing the merge and conve
 from the known adapter under a recorded, witnessed operation** and keeping that
 record. Option (b) is legitimate; inventing a record for the historical run is not.
 
+### 3.5 Why a name-based guess would be unsafe — 47 adapters on this host
+
+A filesystem sweep of `Projects\` and `models\` finds **47 adapter directories** with
+at least **9 distinct `adapter_config.json` digests** and ranks from `r=8` to `r=64`.
+Critically, the candidates whose names look most likely are **not** distinguishable:
+
+| Adapter | r / alpha | config digest | declared base |
+|---|---|---|---|
+| `robs4b_final_adapter` | 16 / 32 | `294feecc…` | `/workspace/hf_cache/…/851bf6e8…` |
+| `robs4b_v2_adapter` | 16 / 32 | `a56217cc…` | `/workspace/hf_cache/…/851bf6e8…` |
+| `qwen3_5_4b_real68_v6_lora\adapter` | 16 / 32 | `0a12b240…` | `/workspace/hf_cache/…/851bf6e8…` |
+| `robs4b_r64_adapter\adapter` | 64 / 128 | `d6516749…` | `workspace/hf_cache/Qwen3.5-4B` |
+| most `qwen3_5_4b_*` adapters | 8 / 16 | 9 distinct | `C:\Users\rober\models\Qwen3.5-4B-Base-HF` |
+
+So "which adapter?" is **genuinely underdetermined**, and the served GGUF records
+only the merged model's name. Any answer inferred from a name or a timestamp is a
+guess between materially different candidates. This is the concrete reason the
+`INFERRED` label in `INFERENCE_TOPOLOGY.md` matters.
+
+Note also that the three plausible r=16/α=32 adapters declare a **container path**
+(`/workspace/hf_cache/…`) that does not exist on this host, while the base that *is*
+present locally is a different path. Whether the local base is the same immutable
+revision `851bf6e8…` is **UNVERIFIED**.
+
+### 3.6 Route 2 feasibility — determined, not executed
+
+Per instruction, re-conversion was **assessed but NOT performed**. Prerequisites:
+
+| Prerequisite | State | Note |
+|---|---|---|
+| Base weights readable | ✅ PRESENT | `models\Qwen3.5-4B-Base-HF` — config + 2 safetensors shards (5.33 GB + 3.99 GB) + index + tokenizer |
+| Base = revision `851bf6e8…` | ⚠️ **UNVERIFIED** | local path differs from the adapters' declared container path |
+| Adapter weights | ✅ PRESENT | `robs4b_final_adapter\adapter_model.safetensors` (84 968 408 B) — *if* that is the right adapter |
+| HF→GGUF converter | ✅ PRESENT | `llama.cpp\convert_hf_to_gguf.py`, checkout `c0bc859` |
+| **Merge script** | ❌ **ABSENT** | `merge_v6.py` / `merge_verify_pod.py` do not exist; a merge step must be authored and run |
+| **`llama-quantize` binary** | ❌ **NOT BUILT** | required for Q4_K_M; `llama.cpp` must be built |
+| Merged artifact | ❌ ABSENT | this is the artifact whose digest the record requires |
+| Operator + converter version | ❌ UNRECORDED | human attestations |
+
+**Assessment: route 2 is technically plausible but is NOT a single command.** It
+requires building llama.cpp, authoring a merge step, resolving which adapter is
+correct, and establishing the base revision — each of which is a decision or a
+prerequisite, not a step this repository may take. And even if performed, it
+documents a **new** artifact; it does not retroactively document the historical one.
+
+When it is performed, the record is assembled — not hand-typed — with:
+
+```python
+from qwen_train.f2_model_provenance import derive_conversion_record
+rec = derive_conversion_record(
+    source_adapter=..., merged_artifact=..., served_gguf=...,
+    conversion_tool=..., conversion_tool_version=...,   # attested
+    merge_operation=..., operator=..., conversion_inputs=...,  # attested
+)
+```
+
+It omits anything it cannot read, so an incomplete operation cannot produce a
+passing record.
+
 ---
 
 ## 4. Q9 — what an administrator must actually provide
@@ -415,6 +508,52 @@ drivers; require Administrator; or infer isolation from a failed probe.
 `loopback` and `required_service` all observed **REACHABLE**. That is the truthful
 reading of a host with no egress enforcement, and it must never be reclassified as
 denied to make readiness pass.
+
+### 4.1 Exact administrator action
+
+An administrator must apply a **default-deny outbound egress policy scoped to the F2
+arm's identity** — not to the whole machine, since the model backends, Qdrant and
+Qdrant's local port must keep working.
+
+| Requirement | Detail |
+|---|---|
+| Direction | **outbound** deny by default; loopback and the required local services explicitly allowed |
+| Scope | the arm's identity / the F2 execution context only |
+| Must actually deny | `http`, `https`, `udp` to any non-local destination |
+| Evidence that it is *enforced* | re-running the probes reports them **unreachable** — configuration alone is not enforcement |
+| Prohibited | claiming isolation because a firewall **profile** shows `Enabled`. A profile being enabled says nothing about egress deny rules. |
+
+**Not performed here:** the current session is not Administrator
+(`WindowsPrincipal.IsInRole(Administrator) = False`, token not elevated). No firewall,
+routing, or DNS change was attempted or simulated.
+
+### 4.2 Post-change probe and the artifact that must be retained
+
+```powershell
+python -m qwen_train.f2_isolation
+```
+
+The artifact to retain is the **attestation JSON** it writes — bound to
+arm / rollout / workspace, carrying a digest and a required negative control. Supply
+it to the readiness gate as `no_egress_attestation`.
+
+**Enforcement vs observation — the distinction that matters:**
+
+| | Enforcement | Observation |
+|---|---|---|
+| What it is | the host actually denies egress | unprivileged probes *see* what happened |
+| Who does it | privileged administrator | this repository |
+| Can the repo do it | **no** | yes |
+| Is it Q9 evidence | yes | **no, on its own** |
+
+An attestation without underlying enforcement is worthless, and the gate is built so
+it cannot be believed on its own: `_check_clean_room` re-derives the verdict via
+`verify_isolation_attestation` rather than reading the claim. A supplied attestation
+"can only ever be confirmed or refuted".
+
+There is deliberately **no flag that declares a dimension denied**.
+`--policy-assert` records `source=enforced_policy` and is rejected unless
+`--policy-identity` and `--policy-sha256` are supplied.
 
 ---
 
@@ -493,6 +632,33 @@ given classification.
 *"the gated side, whose adjudicating authority is undefined"*. That phrasing is flagged
 for cleanup but is not a claim that a curator exists.
 
+### 6.1 The minimum role needed to exercise Q5 / Q6 functions
+
+Q5 and Q6 are granted as *rules*. To run, they need someone (or some role) to
+adjudicate instances. That role needs **exactly four** responsibilities — no more:
+
+| # | Responsibility | Bound by |
+|---|---|---|
+| 1 | Adjudicate a proposed **block exclusion** against Q5's pre-specified, outcome-independent reasons, *before* the paired outcome is seen | Q5; `f2_admission.admit_f2_task` fails closed without both bundles |
+| 2 | Classify **infrastructure failure** vs genuine outcome, and rule on Q6's 30 % breach → STOP + investigate | Q6; `f2_analysis.evaluate_infrastructure_gate` |
+| 3 | Own **contamination classification** (CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN, with `UNKNOWN != CLEAN`) | AUTH-018 vocabulary |
+| 4 | Sign off the **independent regrade**'s provenance | step O |
+
+**Explicitly outside this role** — to keep it from becoming a licence to bend results:
+
+- it may **not** exclude a block because T won, X won, or a result is inconvenient;
+- it may **not** alter N, b, c, `π_d`, alpha, the confidence level, the McNemar
+  method, the Q6 ceiling, or T/X/C0 semantics;
+- it may **not** reset the Q6 denominator or discard infrastructure failures;
+- it may **not** convert MISSING into pass/fail or trigger an outcome-dependent
+  replacement;
+- it may **not** be the agent implementing the code, and **not** the operator who
+  owns the run, without an explicit, recorded separation of duties.
+
+The last point is the substance: the person authorizing the run must not also be the
+sole judge of that run's exclusions. Recording that separation is the whole of the
+missing governance decision.
+
 ---
 
 ## 7. What this document does not authorize
@@ -518,3 +684,55 @@ or the frozen statistical design; or place any secret in source control.
 
 **Re-verify, do not recall.** Preflight output is the machine-readable form of the
 state claims above; run it rather than trusting this document's date.
+
+---
+
+## 9. The execution order, as a dependency chain
+
+Steps B-P of §2 in strict order. **The order is dependency-driven and must not be
+rearranged to make the system appear READY.** Column "gate" names what the step
+UNLOCKS; a step whose gate is closed cannot be started, however ready its
+mechanism is.
+
+| # | Step | § | Owner | Gate that must be satisfied first | Unlocks |
+|---|---|---|---|---|---|
+| 1 | Population authorization | B | experiment authority | an explicit authorization exists (AUTH-013 does not grant it) | step 2 |
+| 2 | Curator-office decision | I | experiment authority | none - can run in parallel with 1 | steps 9, 15 |
+| 3 | Operator environment provisioning | D/A | operator | step 3 only needs step 1 for the artifact-store location | steps 4-8 |
+| 4 | Receipt-key provisioning | E | operator | step 3 | step 8, 13 |
+| 5 | Privileged Q9 enforcement | F | privileged administrator | none - can run in parallel | step 6 |
+| 6 | Q9 attestation | G | operator | **step 5** (probes must run under real enforcement) | steps 8, 9, 13 |
+| 7 | Conversion provenance | D | operator | base revision resolved + adapter chosen (see §3.6) | preflight |
+| 8 | Genuine ACTIVE lesson | H | operator | steps 1, 4, 6 | steps 9, 10 |
+| 9 | S8 base/gold evidence | J | external evidence source | steps 1, 3, 6 | step 10 |
+| 10 | **preflight** | K | repository | steps 3-9 all closed; expects **READY**, exit 0 | step 11 |
+| 11 | Q10 authorization | L | operator | step 10 == READY | step 12 |
+| 12 | Q10 calibration | L | operator | step 11 | step 13 |
+| 13 | Q12 genuine learning event | M | operator | step 12 | step 14 |
+| 14 | Q13 confirmatory F2 | N | operator | step 13 + step 2 (curator signs exclusions) | step 15 |
+| 15 | Frozen statistical analysis / regrade | O/P | repository + operator sign-off | step 14 | final package |
+
+**Three of these are hard external boundaries that no repository change can pass:**
+step 1 (experiment authority), step 5 (Administrator), and steps 7-9 (evidence that
+does not exist on this host).
+
+**Steps 5 and 2 are independent of everything else** and can be started
+immediately, in parallel, because nothing gates them. They are also the two that
+unblock the most downstream work.
+
+### The critical path
+
+`
+1 population authorization ──┬─> 2 curator office ──────────────┐
+                             ├─> 3 env ─> 4 receipt key ─┐      │
+                             │                          ├─> 8 ACTIVE lesson ─┐
+5 privileged Q9 ─> 6 attest ┴──────────────────────────┘                    ├─> 10 preflight
+                             └─> 7 conversion ──────────────────────────────┤      │
+                                                                             │      ↓
+                                                          9 S8 evidence ─────┘   11 Q10 auth
+                                                                                     ↓
+                                                                    12 Q10 ─> 13 Q12 ─> 14 Q13 ─> 15 regrade
+`
+
+**Shortest real distance to READY:** steps **1**, **5→6**, **3→4**, **7**, **8**,
+**9**. Step 10 then reports READY — and only then may step 11 be authorized.

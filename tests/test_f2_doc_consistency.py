@@ -197,6 +197,65 @@ class TestNoFalseCapabilityClaims:
         assert "not a statistical property" in low
 
 
+class TestOperatorPacketInvariants:
+    """The packet is what an operator executes from; these are its load-bearing claims."""
+
+    def test_packet_distinguishes_enforcement_from_observation(self):
+        text = read(HANDOFF)
+        assert "IsInRole(Administrator) = False" in text
+        assert "can only ever be confirmed or refuted" in text
+        assert "no flag that declares a dimension denied" in text
+
+    def test_packet_refuses_firewall_profile_enabled_as_enforcement(self):
+        """Rule 9: a profile being Enabled is not egress enforcement."""
+        low = read(HANDOFF).lower()
+        assert "profile** shows `enabled`" in low
+        assert "says nothing about egress deny rules" in low
+
+    def test_packet_names_the_probes_and_the_retained_artifact(self):
+        text = read(HANDOFF)
+        assert "python -m qwen_train.f2_isolation" in text
+        assert "no_egress_attestation" in text
+
+    def test_packet_documents_receipt_key_without_its_value(self):
+        text = read(HANDOFF)
+        assert "operator's **`.env` only**" in text
+        # Presence check only, and the safe way to check it is documented.
+        assert "[bool]$env:SWARM_RECEIPT_KEY" in text
+        # The unsafe alternatives are named so nobody runs them.
+        assert "Prohibited:" in text
+
+    def test_packet_records_the_adapter_ambiguity(self):
+        """47 adapters, 9+ digests: a name-based guess is unsafe."""
+        text = read(HANDOFF)
+        assert "47 adapter" in text
+        assert "851bf6e8" in text
+        assert "genuinely underdetermined" in text
+
+    def test_packet_forbids_transferring_provenance_across_artifacts(self):
+        text = read(HANDOFF)
+        assert "v4_lora_q4km.gguf" in text
+        assert "must **not** be\ntransferred" in text or "must **not** be transferred" in text
+
+    def test_packet_defines_the_minimum_curator_role_and_its_limits(self):
+        text = read(HANDOFF)
+        assert "minimum role needed" in text
+        assert "Explicitly outside this role" in text
+        assert "separation of duties" in text
+
+    def test_packet_dependency_order_covers_all_fifteen_steps(self):
+        text = read(HANDOFF)
+        section = text[text.index("## 9. The execution order"):]
+        rows = re.findall(r"^\| (\d+) \|", section, re.MULTILINE)
+        assert rows == [str(i) for i in range(1, 16)], rows
+
+    def test_packet_marks_the_hard_external_boundaries(self):
+        text = read(HANDOFF)
+        assert "no repository change can pass" in text
+        for owner in ("experiment authority", "Administrator"):
+            assert owner in text
+
+
 class TestConversionGapIsVisibleWhereItMatters:
     def test_topology_states_the_conversion_link_is_unrecorded(self):
         text = read(TOPOLOGY)
