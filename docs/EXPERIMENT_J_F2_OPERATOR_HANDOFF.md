@@ -204,13 +204,16 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 
 ---
 
-### I. Q5 / Q6 curator authority resolution — **AUTHORIZATION REQUIRED**
+### I. Curator office definition — **AUTHORIZATION REQUIRED**
+
+> Q5 and Q6 themselves are **GRANTED** (`F2-IMPL-AUTH-018`, operator, 2026-10-05) and
+> enforced by construction. Only the *office* below remains undefined.
 
 - **Owner:** experiment authority
 - **Inputs:** a decision on who holds curator and independent-verifier authority
-- **Output:** a recorded authority definition
-- **Fail-closed if:** undefined. The Q6 **statistical gate is implemented in code**, but a gate with no appointed curator has nobody to answer to it. **Do not let an agent or the operator appoint themselves by default.**
-- **Depends on:** Q6's verdict, and the independent regrade's provenance story
+- **Output:** a recorded authority definition naming that role and its powers
+- **Fail-closed if:** undefined. Q5's exclusion rule and Q6's 30 % ceiling are settled and enforced; what lacks an addressee is who adjudicates an individual classification and who signs the regrade. **Do not let an agent or the operator appoint themselves by default.**
+- **Depends on:** the independent regrade's provenance story (step O)
 - **Next:** J
 
 ---
@@ -344,6 +347,43 @@ A complete-looking record naming a **different** adapter than the chain proves i
 `MISMATCH` — not a pass. Machine-checkable via `validate_conversion_record` and
 `CONVERSION_FIELD_REMEDY`.
 
+### 3.4 Field-by-field availability — investigated 2026-10-05
+
+A genuine recovery attempt was made against the real artifacts on this host. **It
+did not succeed, and the record was therefore NOT created.** What follows is what is
+actually recoverable and what is genuinely lost.
+
+**Recoverable (real evidence):**
+
+| Field | Evidence | Source |
+|---|---|---|
+| `merged_artifact` (name only) | `Robs4B_Merged_Hf` | the served GGUF's **own** `general.name` KV — recorded by the converter in the artifact bytes |
+| `conversion_tool` (existence only) | `convert_hf_to_gguf.py` present at `Projects\llama.cpp`, checkout `c0bc859` (2026-07-23) | filesystem |
+
+**Not recoverable — the evidence does not exist on this host:**
+
+| Field | Why it cannot be supplied |
+|---|---|
+| `merged_artifact_sha256` | the merged HF artifact `Robs4B_Merged_Hf` is **not on disk anywhere**; its digest cannot be computed |
+| `source_adapter` / `source_adapter_sha256` | **the crux.** The GGUF records the merged model's *name* but **not which adapter was merged into it**. Nothing on disk states it |
+| `merge_operation` | `merge_v6.py` / `merge_verify_pod.py` **do not exist anywhere** on this host |
+| `conversion_inputs` | ordered converter inputs were never recorded |
+| `operator` | not recorded |
+| `conversion_tool_version` (binding) | a llama.cpp checkout exists, but **no record binds that checkout to this GGUF** |
+| `served_gguf_sha256` | ✅ recoverable — already PROVEN |
+
+**A trap worth naming.** `AGENTS_LEGACY.md` records a contemporaneous Merge→GGUF
+entry for **`v4_lora_q4km.gguf`** (llama.cpp `b10107`, `--no-mtp`, Q4_K_M). That is a
+genuine contemporaneous record — but it documents a **different artifact**, and
+`qwen_train/v4_lora_q4km.gguf` **no longer exists on disk**. It must **not** be
+transferred to `robs4b_q4km.gguf`. Its authority stops at the artifact it names.
+
+**What would actually close this.** Either (a) recovery of the merged
+`Robs4B_Merged_Hf` weights so its digest can be computed, plus any surviving
+converter run log naming the adapter; or (b) **re-performing the merge and conversion
+from the known adapter under a recorded, witnessed operation** and keeping that
+record. Option (b) is legitimate; inventing a record for the historical run is not.
+
 ---
 
 ## 4. Q9 — what an administrator must actually provide
@@ -405,27 +445,53 @@ not silently hold network or repository-mutating MCP.
 
 ---
 
-## 6. Q5 / Q6 curator authority — the governance blocker
+## 6. Q5 / Q6 — granted as rules; the curator *office* is still undefined
 
-**What is missing.** A definition of who holds *curator* authority and *independent
-verifier* authority. It is undefined. There is **no appointed curator**, and no
-mechanism that appoints one.
+> **Corrected 2026-10-05.** This section previously read "Q5 / Q6 curator authority —
+> the governance blocker" and described Q6 as a pending decision. Both were wrong.
+> `F2-IMPL-AUTH-018` (operator, 2026-10-05) **already granted Q5 and Q6**.
 
-**What has already been built.** The Q6 *statistical* gate is implemented in code: a
-threshold of **0.30**, and it is pinned by tests to **change no statistic and drop no
-pair**. That is machinery awaiting an authority, not an authority.
+**Q5 — GRANTED.** Block-level exclusion: a block may be excluded only for a
+pre-specified, **outcome-independent** reason established before the paired outcome is
+observed (missing provenance; failed base/gold verification; infrastructure
+invalidity; contamination classification; malformed task; reproducibility failure;
+missing required artifact). Excluding a block because T won, X won, or the result is
+inconvenient is **FORBIDDEN**. A single invalid arm invalidates the whole pair.
+Enforced by construction — `f2_admission.admit_f2_task` requires both T and X bundles
+and fails closed otherwise.
 
-**What decision must be made.** Who may (a) judge curator-side artifacts such as the
-frozen `relevant_file_set` and the gold artifact, and (b) sign off the independent
-regrade. It must be a role with defined powers, not a default that an agent or the
-operator silently inherits.
+**Q6 — GRANTED.** The infrastructure-failure budget ≤ 30 % is an **operational
+feasibility ceiling, NOT a statistical property**. On breach: STOP acquisition/execution
+and investigate the environment. The ceiling never justifies selectively discarding
+observations; all infrastructure failures remain in the ledger; the denominator is
+never reset. Implemented at threshold **0.30** and pinned by tests to **change no
+statistic and drop no pair** — consistent with it not being a statistical property.
 
-**Which later gates depend on it.** I (Q5/Q6 resolution), and the provenance story of
-O. Q6's verdict has no addressee until this is settled.
+**The missingness rule and the contamination vocabulary** were granted in the same
+entry: MISSING is MISSING (never a success, a failure, a silent exclusion, or an
+outcome-dependent replacement); CLEAN / POTENTIALLY CONTAMINATED / UNKNOWN with
+`UNKNOWN != CLEAN`.
+
+### What is still genuinely missing
+
+A definition of **who holds curator authority and independent-verifier authority**.
+That office is **undefined**, there is **no appointed curator**, and no mechanism
+appoints one. This is narrower than "Q5/Q6 undefined": the *rules* are authorized and
+enforced; what is missing is the *role* that adjudicates individual instances and
+signs off the independent regrade.
+
+**What decision remains.** Who may (a) judge curator-side artifacts such as the frozen
+`relevant_file_set` and the gold artifact, and (b) sign off the independent regrade.
+It must be a role with defined powers, not a default an agent or the operator silently
+inherits.
+
+**Which later gates depend on it.** I (Q5/Q6 resolution) and the provenance story of
+O. Q6's *rule* is settled and enforced; what lacks an addressee is who adjudicates a
+given classification.
 
 **Interim convention in the docs.** Where existing text says "curator-side", read it as
-*"the gated side, whose authority is undefined"*. That phrasing is flagged for cleanup
-but is not a claim that a curator exists.
+*"the gated side, whose adjudicating authority is undefined"*. That phrasing is flagged
+for cleanup but is not a claim that a curator exists.
 
 ---
 

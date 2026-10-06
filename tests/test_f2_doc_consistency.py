@@ -164,10 +164,37 @@ class TestNoFalseCapabilityClaims:
         assert "does not authorize" in text.lower() or "explicitly does not" in text.lower()
 
     def test_curator_is_never_named_as_if_appointed(self):
-        """Authority is undefined; no document may imply an office exists."""
+        """Authority is undefined; no document may imply an office exists.
+
+        Q5/Q6 themselves ARE granted (F2-IMPL-AUTH-018), so this must not overstate
+        the gap either -- the invariant is specifically about the curator office.
+        """
         text = read(HANDOFF)
-        assert "no appointed curator" in text.lower()
-        assert "not an authority" in text.lower()
+        low = text.lower()
+        assert "no appointed curator" in low
+        assert "do not let an agent or the operator appoint themselves" in low
+        # And it must not overstate the gap either.
+        assert "granted" in low
+
+
+    def test_q5_and_q6_are_not_relisted_as_pending(self):
+        """AUTH-018 (operator, 2026-10-05) GRANTED both.
+
+        The readiness checklist previously still read "Ratify"/"Authorize", which
+        made a settled decision look outstanding. Only the curator *office* is open.
+        """
+        text = read(READINESS)
+        q5 = next(l for l in text.splitlines() if l.startswith("| **Q5**"))
+        q6 = next(l for l in text.splitlines() if l.startswith("| **Q6**"))
+        assert "RATIFIED" in q5 and "AUTH-018" in q5, q5
+        assert "AUTHORIZED" in q6 and "AUTH-018" in q6, q6
+        assert "not a statistical property" in q6.lower(), q6
+
+    def test_handoff_does_not_call_q6_a_statistical_property(self):
+        """AUTH-018: Q6 is an operational feasibility ceiling."""
+        low = read(HANDOFF).lower()
+        assert "q6 *statistical* gate" not in low
+        assert "not a statistical property" in low
 
 
 class TestConversionGapIsVisibleWhereItMatters:

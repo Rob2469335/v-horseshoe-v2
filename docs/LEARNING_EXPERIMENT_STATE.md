@@ -1478,11 +1478,15 @@ and 16 `IMPLEMENTED`. **PROVEN IN CURRENT REVISION.**
 
 ### D-18. Governance conclusions this pass established
 
-1. **Curator authority is undefined, and Q6 therefore has no addressee.** The Q6
-   *statistical* gate is implemented at threshold 0.30 and pinned by tests to change
-   no statistic and drop no pair — that is machinery awaiting an authority, not an
-   authority. No curator has been appointed, and an agent or the operator must not
-   silently become one by default. Depends on: Q6's verdict and the regrade's
+1. **Q5 and Q6 are GRANTED as rules; the curator *office* is undefined.** Corrected
+   2026-10-05: this entry previously said Q5/Q6 authority was undefined. `F2-IMPL-AUTH-018`
+   (operator, 2026-10-05) ratified Q5's block-level exclusion rule and Q6's ≤ 30 %
+   infrastructure-failure ceiling, plus the missingness rule and the contamination
+   vocabulary — all enforced by construction. Q6 is an **operational feasibility
+   ceiling, not a statistical property**. What genuinely remains undefined is **who
+   holds curator and independent-verifier authority**: no curator is appointed and no
+   mechanism appoints one. **An agent or the operator must not silently inherit that
+   office.** Depends on: adjudication of individual classifications, and the regrade's
    provenance story.
 2. **Population admission remains unauthorized.** `F2-IMPL-AUTH-013` explicitly does
    not authorize acquiring the population. Admitted population is **0**.
