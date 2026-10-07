@@ -24,6 +24,7 @@ Scope: F2 engineering isolation only. No F0 science is touched.
 from __future__ import annotations
 
 import os
+from email.utils import formatdate
 from typing import Mapping, Sequence
 
 import httpx
@@ -52,6 +53,25 @@ DEFAULT_TIMEOUT_S = 960.0
 _UNSAFE_BIND_HOSTS = frozenset({"0.0.0.0", "::", "", "*"})
 
 
+def http_date(now: "float | None" = None) -> str:
+    """RFC 7231 IMF-fixdate (UTC) for the HTTP ``Date`` header.
+
+    Explicit gateway behavior (not a framework side effect): the guest uses this
+    as a FRESH host-UTC reference for its clock check, reusing the already
+    authorized 8099 path. UTC; whole-second precision.
+    """
+    return formatdate(timeval=now, localtime=False, usegmt=True)
+
+
+def _dated(response):
+    response.headers["Date"] = http_date()
+    return response
+
+
+def _json(status_code: int, detail: str):
+    return _dated(JSONResponse(status_code=status_code, content={"detail": detail}))
+
+
 def create_app(
     *,
     upstream_base_url: str = DEFAULT_UPSTREAM,
@@ -78,24 +98,15 @@ def create_app(
     async def _forward(full_path: str, request: Request):
         client_host = request.client.host if request.client else None
         if client_host not in allowed:
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "F2 gateway: client source not allowed"},
-            )
+            return _json(403, "F2 gateway: client source not allowed")
 
         path = "/" + full_path
         if (request.method, path) not in ALLOWED_ROUTES:
-            return JSONResponse(
-                status_code=404,
-                content={"detail": "F2 gateway: path or method not allowed"},
-            )
+            return _json(404, "F2 gateway: path or method not allowed")
 
         body = await request.body()
         if len(body) > max_body_bytes:
-            return JSONResponse(
-                status_code=413,
-                content={"detail": "F2 gateway: request body too large"},
-            )
+            return _json(413, "F2 gateway: request body too large")
 
         url = f"{upstream_base_url.rstrip('/')}{path}"
         headers = {
@@ -114,20 +125,14 @@ def create_app(
             upstream = await client.send(upstream_request, stream=True)
         except httpx.HTTPError as exc:
             await client.aclose()
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "detail": f"F2 gateway: upstream model unavailable ({type(exc).__name__})"
-                },
+            return _json(
+                503, f"F2 gateway: upstream model unavailable ({type(exc).__name__})"
             )
 
         if upstream.status_code in (301, 302, 303, 307, 308):
             await upstream.aclose()
             await client.aclose()
-            return JSONResponse(
-                status_code=502,
-                content={"detail": "F2 gateway: upstream redirect refused"},
-            )
+            return _json(502, "F2 gateway: upstream redirect refused")
 
         media_type = upstream.headers.get("content-type", "application/json")
 
@@ -140,7 +145,10 @@ def create_app(
                 await client.aclose()
 
         return StreamingResponse(
-            _stream(), status_code=upstream.status_code, media_type=media_type
+            _stream(),
+            status_code=upstream.status_code,
+            media_type=media_type,
+            headers={"Date": http_date()},
         )
 
     return app

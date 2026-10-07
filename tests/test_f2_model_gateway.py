@@ -182,3 +182,29 @@ async def test_streaming_response_content_type_preserved():
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/event-stream")
     assert b"delta" in r.content
+
+
+async def test_date_header_on_success_is_utc_imf_fixdate():
+    from email.utils import parsedate_to_datetime
+
+    app = _make()
+    async with _client(app) as c:
+        r = await c.get("/v1/models")
+    assert "date" in {k.lower() for k in r.headers}
+    dt = parsedate_to_datetime(r.headers["date"])
+    assert dt.tzinfo is not None
+    assert dt.utcoffset().total_seconds() == 0
+
+
+async def test_date_header_on_error_response():
+    app = _make()
+    async with _client(app, ip=OTHER) as c:
+        r = await c.post("/v1/chat/completions", json={})
+    assert r.status_code == 403
+    assert "date" in {k.lower() for k in r.headers}
+
+
+def test_http_date_helper_is_gmt():
+    from qwen_train.f2_model_gateway import http_date
+
+    assert http_date(0.0) == "Thu, 01 Jan 1970 00:00:00 GMT"

@@ -54,3 +54,22 @@ def test_refuses_missing_inputs():
 
 def test_expected_membership_enforced():
     assert "ExpectedArtifacts" in _text()
+
+
+def test_full_vhdx_lifecycle_present():
+    text = _text()
+    for marker in (
+        "New-VHD",
+        "Initialize-Disk",
+        "New-Partition",
+        "Format-Volume",
+        "Mount-VHD",
+        "Dismount-VHD",
+    ):
+        assert marker in text, f"builder missing lifecycle step: {marker}"
+
+
+def test_cleanup_is_try_finally_and_verifies_detach():
+    text = _text()
+    assert "try {" in text and "finally {" in text
+    assert "Attached" in text  # post-dismount attach check

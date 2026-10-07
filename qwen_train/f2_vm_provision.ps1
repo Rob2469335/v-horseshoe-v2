@@ -198,7 +198,7 @@ if ((Get-VM -Name $VmName).State -ne "Off") {
     # -Stateful $true is passed; -IdleSessionTimeout is an Int32 number of
     # SECONDS (not a TimeSpan). Explicit IPv4+IPv6 catch-all coverage uses the
     # documented wildcard ANY (== 0.0.0.0/0 plus ::/0).
-    Write-Step "ACL: ALLOW outbound guest->gateway TCP $GatewayPort, STATEFUL (weight 100, idle 300s)"
+    Write-Step "ACL: ALLOW outbound guest->gateway TCP $GatewayPort, STATEFUL (weight 100, idle $IdleSessionTimeoutSeconds s)"
     Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Outbound -Action Allow `
         -LocalIPAddress $GuestIp -RemoteIPAddress $HostGatewayIp -RemotePort $GatewayPort `
         -Protocol TCP -Weight 100 -Stateful $true -IdleSessionTimeout $IdleSessionTimeoutSeconds | Out-Null

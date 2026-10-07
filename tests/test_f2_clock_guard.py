@@ -53,6 +53,22 @@ def test_malformed_reference_fails():
 def test_missing_reference_fails():
     r = cg.evaluate_clock(guest_utc=_guest(0), host_reference_utc=None, tolerance_seconds=TOL)
     assert r["clock_status"] == cg.STATUS_FAIL
+    assert r["reason"] == cg.REASON_MISSING_REFERENCE
+
+
+def test_http_date_reference_accepted():
+    # "Wed, 07 Oct 2026 00:00:00 GMT" == REF
+    r = cg.evaluate_clock_http_date(
+        guest_utc=_guest(5), http_date="Wed, 07 Oct 2026 00:00:00 GMT", tolerance_seconds=TOL
+    )
+    assert r["clock_status"] == cg.STATUS_OK
+
+
+def test_malformed_http_date_reference_fails():
+    r = cg.evaluate_clock_http_date(
+        guest_utc=_guest(5), http_date="not a date", tolerance_seconds=TOL
+    )
+    assert r["clock_status"] == cg.STATUS_FAIL
     assert r["reason"] == cg.REASON_MALFORMED_REFERENCE
 
 

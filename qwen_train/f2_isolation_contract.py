@@ -29,8 +29,28 @@ MODEL_CLIENT_STREAM_TIMEOUT_S = 900
 #: F2 model gateway upstream request timeout (qwen_train/f2_model_gateway.py).
 GATEWAY_REQUEST_TIMEOUT_S = 960
 
+#: model_router proxy -> llama total request timeout. Source:
+#: model_router.py:104 (``httpx.AsyncClient(timeout=300.0)``). This is the BINDING
+#: ceiling in the real chain (guest -> gateway -> model_router -> llama), because
+#: min(router, gateway, client) = 300 s.
+MODEL_ROUTER_PROXY_TIMEOUT_S = 300
+
 #: Hyper-V extended-ACL idle session timeout for the single stateful allow.
+#:
+#: Semantics: this is a SILENT-GAP bound, NOT a total-request timeout. The maximum
+#: silent interval between packets is bounded by the upstream compute time, whose
+#: effective ceiling is min(router 300, gateway 960, client 900) = 300 s. 1800 s
+#: is ~6x that ceiling, so the NIC never drops a live session mid-generation.
 HYPERV_IDLE_SESSION_TIMEOUT_S = 1800
+
+
+def effective_total_ceiling_s() -> int:
+    """min(router, gateway, client): the real end-to-end request ceiling."""
+    return min(
+        MODEL_ROUTER_PROXY_TIMEOUT_S,
+        GATEWAY_REQUEST_TIMEOUT_S,
+        MODEL_CLIENT_STREAM_TIMEOUT_S,
+    )
 
 
 class F2TimeoutContractError(RuntimeError):

@@ -780,4 +780,46 @@ scripts parse. No VM/switch/adapter/firewall/Avast/ACL/account/.env/secret was
 touched. Boundary remains `BLOCKED — EXTERNAL PREREQUISITE` (no official guest
 install media).
 
+## 2026-10-07 (preflight 2) - VHDX lifecycle, HTTP-Date clock, timeout chain
+
+**Input-bundle builder defect fixed + scratch-proven.** `f2_input_bundle.ps1`
+previously created a blank VHDX and then searched for a formatted volume (which
+cannot exist on a fresh RAW disk). It now performs the full Windows-native
+lifecycle: `New-VHD` → `Mount-VHD` → `Initialize-Disk` (GPT) → `New-Partition
+-AssignDriveLetter` → `Format-Volume` (NTFS) → copy + per-file SHA-256 verify →
+`Dismount-VHD`, inside `try/finally`, with a post-dismount `Attached` check. One
+authorized scratch execution under `$env:TEMP` succeeded end-to-end; `Get-VHD`
+showed `Attached=False`, no `F2INPUT` volume remained, and the scratch dir was
+removed. `tests/test_f2_input_bundle.py` now asserts the lifecycle and cleanup.
+
+**VHDX read-only truth corrected.** A VHDX is not inherently read-only;
+`Mount-VHD -ReadOnly` proves only the host-side mount. Guest-side read-only attach
+is `NOT ESTABLISHED` from Microsoft docs; the guest probe now performs a write
+attempt (`-InputDisk`, expected failure).
+
+**Fresh HTTP-Date clock reference.** The gateway now emits an explicit RFC 7231
+UTC `Date` header on every response (success and error), not a framework side
+effect; `f2_guest_probe.ps1` reads it from the authorized `GET /v1/models` call as
+the runtime clock reference (manifest timestamp = provenance only). Clock error
+classes split into MISSING/MALFORMED/OUTSIDE; `qwen_train/f2_clock_guard.py` is the
+single algorithm and `qwen_train/f2_clock_vectors.json` is the shared
+cross-language vector contract (`tests/test_f2_clock_vectors.py`).
+
+**Timeout chain traced.** Real chain: guest → gateway(8099) → `model_router`(8080)
+→ llama(8079). Binding ceiling is `model_router.py:104` `httpx.AsyncClient(timeout=300.0)`;
+effective ceiling = min(router 300, gateway 960, client 900) = **300 s**. The
+Hyper-V `-IdleSessionTimeout` (1800 s) is a **silent-gap** bound (~6× the 300 s
+max gap), not a total. Fixed a stale "idle 300s" `Write-Step`; added a regression
+that the stale value cannot return. `f2_isolation_contract.py` records the router
+timeout and `effective_total_ceiling_s()`.
+
+**Windows offline-install uncertainty documented.** Offline OOBE for the current
+Enterprise 25H2 evaluation build is `INFERRED — MUST BE VERIFIED DURING INSTALL`;
+a golden-VHDX staging fallback is recorded as a PROPOSAL only.
+
+100 focused tests pass; all three PowerShell scripts parse; ruff E9,F clean on
+changed files. No VM/switch/adapter/firewall/Avast/ACL/account/`.env`/secret was
+touched. Boundary remains `BLOCKED — EXTERNAL PREREQUISITE` (no official guest
+install media).
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

@@ -1,0 +1,18 @@
+{
+  "description": "Deterministic F2 clock-guard test vectors. Single source of truth: the Python authority is qwen_train/f2_clock_guard.py; the guest probe (qwen_train/f2_guest_probe.ps1) must agree with these vectors.",
+  "tolerance_seconds": 120.0,
+  "default_reference_utc": "2026-10-07T00:00:00+00:00",
+  "cases": [
+    {"name": "equal", "guest": "2026-10-07T00:00:00+00:00", "expect_status": "OK", "expect_reason": ""},
+    {"name": "small_positive", "guest": "2026-10-07T00:00:30+00:00", "expect_status": "OK", "expect_reason": ""},
+    {"name": "small_negative", "guest": "2026-10-06T23:59:30+00:00", "expect_status": "OK", "expect_reason": ""},
+    {"name": "exact_boundary", "guest": "2026-10-07T00:02:00+00:00", "expect_status": "OK", "expect_reason": ""},
+    {"name": "just_outside", "guest": "2026-10-07T00:02:01+00:00", "expect_status": "FAIL", "expect_reason": "GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW"},
+    {"name": "too_old", "guest": "2024-12-31T23:59:59+00:00", "expect_status": "FAIL", "expect_reason": "GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW"},
+    {"name": "offset_handling", "guest": "2026-10-06T20:00:00-04:00", "expect_status": "OK", "expect_reason": ""},
+    {"name": "http_date_reference", "reference": "Wed, 07 Oct 2026 00:00:00 GMT", "guest": "2026-10-07T00:00:10+00:00", "expect_status": "OK", "expect_reason": ""},
+    {"name": "malformed_reference", "reference": "not-a-date", "guest": "2026-10-07T00:00:00+00:00", "expect_status": "FAIL", "expect_reason": "HOST_REFERENCE_MALFORMED"},
+    {"name": "missing_reference", "reference": null, "guest": "2026-10-07T00:00:00+00:00", "expect_status": "FAIL", "expect_reason": "HOST_REFERENCE_MISSING"},
+    {"name": "malformed_guest", "guest": "", "expect_status": "FAIL", "expect_reason": "GUEST_TIMESTAMP_MALFORMED"}
+  ]
+}

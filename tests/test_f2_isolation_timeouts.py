@@ -41,6 +41,29 @@ def test_hyperv_idle_exceeds_upstream_app_timeouts():
     assert c.HYPERV_IDLE_SESSION_TIMEOUT_S > c.MODEL_CLIENT_STREAM_TIMEOUT_S
 
 
+def test_effective_ceiling_is_the_router():
+    # The real chain is guest -> gateway -> model_router -> llama; the router's
+    # 300 s client timeout is the binding ceiling.
+    assert c.effective_total_ceiling_s() == c.MODEL_ROUTER_PROXY_TIMEOUT_S
+
+
+def test_hyperv_idle_is_a_silent_gap_bound_not_a_total():
+    # The Hyper-V idle timeout must exceed the maximum silent gap, which is
+    # bounded by the effective total ceiling.
+    assert c.HYPERV_IDLE_SESSION_TIMEOUT_S > c.effective_total_ceiling_s()
+    assert c.HYPERV_IDLE_SESSION_TIMEOUT_S >= 4 * c.MODEL_ROUTER_PROXY_TIMEOUT_S
+
+
+def test_no_stale_300_hyperv_text():
+    prov = SRC.read_text(encoding="utf-8")
+    # Plan line must interpolate the parameter (never a hardcoded stale value).
+    assert "idle $IdleSessionTimeoutSeconds s" in prov
+    assert "idle 300" not in prov, "stale Hyper-V idle value 300 must not return"
+    doc = (SRC.parents[1] / "docs" / "EXPERIMENT_J_F2_VM_ISOLATION.md").read_text(encoding="utf-8")
+    assert "IdleSessionTimeout=300" not in doc
+    assert "IdleSessionTimeout=1800" in doc
+
+
 def test_provisioner_uses_contract_value():
     text = SRC.read_text(encoding="utf-8")
     m = re.search(r"\[int\]\$IdleSessionTimeoutSeconds\s*=\s*(\d+)", text)

@@ -82,14 +82,19 @@ F2 VM 10.72.0.2                  (exactly ONE NIC)
   (10.72.0.1), RemotePort=$GatewayPort (8099), Protocol=TCP, Weight=100,
   Stateful=$true, IdleSessionTimeout=1800`.
 
-**Timeout contract** (`qwen_train/f2_isolation_contract.py`): the Hyper-V idle
-session timeout must exceed the longest upstream application timeout. Traced:
-model client streaming ceiling **900 s** (`runtime_v2/services/_llm_client.py:617,633`;
-other paths 120/300/600 s), F2 model gateway upstream timeout **960 s**
-(`qwen_train/f2_model_gateway.py` `DEFAULT_TIMEOUT_S`), Hyper-V idle **1800 s**.
-Strict ordering 900 < 960 < 1800 (~2× margin); `tests/test_f2_isolation_timeouts.py`
-proves it. The guest NIC boundary is never the first timeout to kill a valid
-stream.
+**Timeout contract** (`qwen_train/f2_isolation_contract.py`). The real chain is
+guest → gateway (8099) → `model_router` (8080) → llama (8079). The **binding
+ceiling** is the `model_router` proxy's `httpx.AsyncClient(timeout=300.0)`
+(`model_router.py:104`), so the effective end-to-end request ceiling is
+`min(router 300, gateway 960, client 900) = 300 s`. The Hyper-V
+`-IdleSessionTimeout` is a **silent-gap bound, not a total-request timeout**: the
+maximum silent interval between packets is bounded by the upstream compute time
+(≤ 300 s), and **1800 s ≈ 6×** that ceiling. `tests/test_f2_isolation_timeouts.py`
+proves the ordering, the router ceiling, and the silent-gap derivation, and guards
+against a stale `300` returning. **Answer:** *can the model server/router kill an
+F2 request before the gateway/client timeout?* **Yes — the router's 300 s total is
+the effective cap** (changing it is a model-infra change, `REQUIRES
+AUTHORIZATION`).
 - Allow weight (`100`) **outranks** the catch-all deny weight (`1`).
 - Catch-all deny uses the Microsoft-documented wildcard `-LocalIPAddress ANY
   -RemoteIPAddress ANY` — **`ANY` = all IPv4 AND IPv6 addresses** — for
@@ -169,9 +174,14 @@ The guest must not reach the host filesystem. Candidate mechanisms:
 **Chosen direction (evidence-based).** **Read-only VHDX** for input and a
 separate output VHDX for egress, with a SHA-256 manifest on every artifact and an
 `UNTRUSTED OUTPUT` classification on egress. Input uses VHDX rather than an ISO
-because it needs no Microsoft ADK / `oscdimg` install and no download, has
-inherent read-only attach semantics (the guest cannot write back), and carries an
-easily verified SHA-256 manifest. Builder: `qwen_train/f2_input_bundle.ps1`
+because it needs no Microsoft ADK / `oscdimg` install and no download, and carries
+an easily verified SHA-256 manifest. **Correction:** a VHDX is **not** inherently
+read-only, and `Mount-VHD -ReadOnly` proves only that the **host-side mount** is
+read-only — it does **not** prove the guest sees the disk read-only. A documented
+Hyper-V mechanism to attach a VHDX to a **guest** read-only is `NOT ESTABLISHED`
+from Microsoft documentation at this revision, so the guest is given the disk and
+a **write probe** (`f2_guest_probe.ps1 -InputDisk`) is required, expected to fail.
+Guest-side read-only enforcement is `REQUIRES AUTHORIZATION`/design work. Builder: `qwen_train/f2_input_bundle.ps1`
 (plan-only by default; `-Execute` creates the VHDX) with
 `tests/test_f2_input_bundle.py`. The input VHDX carries the manifest, whose
 `host_reference_utc` seeds the guest clock startup check (§11a).
@@ -256,9 +266,15 @@ freeze/delivery/service timestamps are recorded provenance. Ordering is
 and it is validity-only.
 
 **Guest clock startup check (added).** `qwen_train/f2_clock_guard.py`
-(`evaluate_clock`) compares the guest UTC clock against `host_reference_utc`
-carried in the input-bundle manifest (the guest never contacts the host for the
-time). `|skew| > tolerance` ⇒ `FAIL` with `GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`,
+(`evaluate_clock`) compares the guest UTC clock against a host UTC reference.
+**Preferred reference: the gateway's FRESH HTTP `Date` header** on the authorized
+`GET /v1/models` call (`qwen_train/f2_guest_probe.ps1` reads `$resp.Headers["Date"]`;
+`evaluate_clock_http_date`). This reuses the already-authorized 8099 path — no
+KVP, no PowerShell Direct, no extra channel, fresh at probe time. The
+input-bundle manifest `host_reference_utc` is retained as **provenance only**
+(never used as a runtime reference when hours old). Distinct error classes:
+`HOST_REFERENCE_MISSING` / `HOST_REFERENCE_MALFORMED` /
+`GUEST_TIMESTAMP_MALFORMED` / `GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`. `|skew| > tolerance` ⇒ `FAIL` with `GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`,
 and the probe does not continue to network validation. Default tolerance
 **120 s** (`DEFAULT_CLOCK_TOLERANCE_S`): the guest boot clock is seeded from the
 host RTC and free-run drift over one arm is far under this, while day/year-scale
@@ -293,6 +309,10 @@ No cross-clock ordering gate = `PROVEN` (source). Drift impact on correctness =
 | Timeout ordering 900 < 960 < 1800 (client < gateway < Hyper-V idle) | `CODE PROOF` (`tests/test_f2_isolation_timeouts.py`) |
 | Guest clock startup check + tolerance | `CODE PROOF` (`tests/test_f2_clock_guard.py`) |
 | Input-bundle builder is plan-only by default; no VHDX/manifest on plan run | `PROVEN IN CURRENT REVISION` |
+| Input-bundle builder full VHDX lifecycle (create/init/partition/format/populate/hash/dismount) | `SCRATCH-RUN PROOF` (2026-10-07 `$env:TEMP`) |
+| Gateway HTTP `Date` header (fresh UTC clock reference) | `CODE PROOF` |
+| Guest-side VHDX read-only (vs host `Mount-VHD -ReadOnly`) | `NOT ESTABLISHED` (needs guest write probe) |
+| Effective request ceiling = model_router 300 s | `CODE PROOF` |
 | Probe schema + probe script declared, no F2 execution invocation | `CODE PROOF` (`tests/test_f2_probe_schema.py`) |
 | VM/ACL/IPv6/ICMP/guest-egress live enforcement | `NOT ESTABLISHED` (no guest) |
 | Guest `delivery_timestamp` origin (2-clock domains) | `PROVEN` (source) |
@@ -338,6 +358,20 @@ No cross-clock ordering gate = `PROVEN` (source). Drift impact on correctness =
 The evaluation OS has a **finite evaluation period**; the guest is intentionally
 offline after installation. Items 5–6 are `REQUIRES AUTHORIZATION` before
 implementation.
+
+**Offline OOBE is not promised.** Current Microsoft Evaluation Center information
+indicates the evaluation workflow can require a Microsoft-account sign-in;
+therefore offline completion of the current Enterprise 25H2 evaluation build is
+`INFERRED — MUST BE VERIFIED DURING INSTALL`. If offline setup fails, STOP; never
+add a temporary adapter/switch/NAT or weaken the ACL to finish OOBE.
+
+**PROPOSAL ONLY (not implemented, not authorized): golden-VHDX staging.** A
+separate throwaway staging VM (NOT the F2 VM) could install Windows and complete
+OOBE, apply updates only if separately authorized, remove all test data, verify
+the resulting disk hash, verify no F2 data/secrets exist, shut down cleanly, and
+transfer the resulting VHDX into the isolated F2 environment. It requires Rob to
+authorize: the staging VM/switch, any install-time networking, the media, and the
+transfer — then re-verify the one-NIC/ACL contract on the F2 VM.
 
 ## 14. Final verdict
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 #: Default tolerated absolute skew between the guest clock and the host reference.
 #: Rationale: the guest boot clock is seeded from the host RTC at VM start; over the
@@ -31,14 +32,19 @@ STATUS_OK = "OK"
 STATUS_FAIL = "FAIL"
 
 REASON_OUTSIDE = "GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW"
+REASON_MISSING_REFERENCE = "HOST_REFERENCE_MISSING"
 REASON_MALFORMED_REFERENCE = "HOST_REFERENCE_MALFORMED"
 REASON_MALFORMED_GUEST = "GUEST_TIMESTAMP_MALFORMED"
 
 
-def _parse_utc(value: object) -> datetime | None:
-    """Parse an epoch-seconds number or an ISO-8601 UTC string to aware UTC.
+def _is_missing(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
-    Returns None on any malformed input (fail closed; never substitutes now()).
+
+def _parse_utc(value: object) -> datetime | None:
+    """Parse epoch seconds, ISO-8601 UTC, or an HTTP-date to aware UTC.
+
+    Returns None on malformed input (fail closed; never substitutes now()).
     """
     if isinstance(value, bool) or value is None:
         return None
@@ -54,8 +60,12 @@ def _parse_utc(value: object) -> datetime | None:
         try:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except ValueError:
-            return None
-        if dt.tzinfo is None:
+            # HTTP-date (RFC 7231 IMF-fixdate), e.g. the gateway's Date header.
+            try:
+                dt = parsedate_to_datetime(text)
+            except (TypeError, ValueError):
+                return None
+        if dt is None or dt.tzinfo is None:
             return None
         return dt.astimezone(timezone.utc)
     return None
@@ -83,6 +93,10 @@ def evaluate_clock(
         "clock_status": STATUS_OK,
         "reason": "",
     }
+    if _is_missing(host_reference_utc):
+        result["clock_status"] = STATUS_FAIL
+        result["reason"] = REASON_MISSING_REFERENCE
+        return result
     if reference is None:
         result["clock_status"] = STATUS_FAIL
         result["reason"] = REASON_MALFORMED_REFERENCE
@@ -98,6 +112,25 @@ def evaluate_clock(
         result["clock_status"] = STATUS_FAIL
         result["reason"] = REASON_OUTSIDE
     return result
+
+
+def evaluate_clock_http_date(
+    *,
+    guest_utc: object,
+    http_date: object,
+    tolerance_seconds: float = DEFAULT_CLOCK_TOLERANCE_S,
+) -> dict:
+    """Clock check against the gateway's fresh HTTP ``Date`` header (UTC).
+
+    Preferred runtime reference: fresh at probe time, on the already-authorized
+    8099 path, no KVP / PowerShell Direct / extra channel. Delegates to
+    :func:`evaluate_clock` (single algorithm).
+    """
+    return evaluate_clock(
+        guest_utc=guest_utc,
+        host_reference_utc=http_date,
+        tolerance_seconds=tolerance_seconds,
+    )
 
 
 def dumps(result: dict) -> str:

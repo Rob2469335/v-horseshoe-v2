@@ -83,20 +83,55 @@ if (-not $Execute) {
     exit 0
 }
 
-# --- -Execute (NOT run during preflight): create + populate the input VHDX ----
+# --- -Execute: full Windows-native VHDX lifecycle (create, init, partition,
+# format, mount, populate, verify, dismount). A freshly created VHDX is RAW and
+# has no volume; it MUST be initialized/partitioned/formatted before use. Cleanup
+# is in try/finally so a failure never leaves the VHD mounted.
 Write-Step "Creating input VHDX $OutputVhdx"
 New-VHD -Path $OutputVhdx -SizeBytes $SizeBytes -Dynamic | Out-Null
-$disk = Mount-VHD -Path $OutputVhdx -Passthru
-$part = $disk | Get-Disk | Get-Partition | Where-Object { $_.DriveLetter } | Select-Object -First 1
-if (-not $part) {
-    throw "F2 input bundle: VHDX has no formatted volume; partition/format it first (operator step)."
+$mounted = $false
+try {
+    $disk = Mount-VHD -Path $OutputVhdx -Passthru
+    $mounted = $true
+    Start-Sleep -Seconds 2
+
+    $d = Get-Disk -Number $disk.Number
+    if ($d.PartitionStyle -eq 'RAW' -or $d.PartitionStyle -eq 'MBR') {
+        Write-Step "Initializing disk $($d.Number) as GPT"
+        Initialize-Disk -Number $d.Number -PartitionStyle GPT -Confirm:$false | Out-Null
+        $d = Get-Disk -Number $d.Number
+    }
+    $part = Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue |
+        Where-Object { $_.Size -gt 0 -and $_.DriveLetter } | Select-Object -First 1
+    if (-not $part) {
+        Write-Step "Creating maximum-size partition with drive letter"
+        $part = New-Partition -DiskNumber $d.Number -UseMaximumSize -AssignDriveLetter
+    }
+    $vol = Get-Volume -Partition $part
+    if ($vol.FileSystem -ne 'NTFS') {
+        Write-Step "Formatting volume as NTFS"
+        Format-Volume -Partition $part -FileSystem NTFS -NewFileSystemLabel 'F2INPUT' -Confirm:$false | Out-Null
+    }
+    Start-Sleep -Seconds 1
+    $part = Get-Partition -DiskNumber $d.Number | Where-Object { $_.DriveLetter } | Select-Object -First 1
+    if (-not $part) { throw "F2 input bundle: VHDX has no drive-lettered volume after format." }
+    $volRoot = "$($part.DriveLetter):\"
+
+    Write-Step "Writing manifest + $($manifest.artifact_count) artifacts to $volRoot"
+    Set-Content -LiteralPath (Join-Path $volRoot "f2_bundle_manifest.json") -Value $manifestJson -Encoding utf8
+    foreach ($a in $artifacts) {
+        $dst = Join-Path $volRoot $a.filename
+        New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $root $a.filename) -Destination $dst
+        $got = (Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash.ToLower()
+        if ($got -ne $a.sha256) { throw "F2 input bundle: hash mismatch copying $($a.filename)" }
+    }
+} finally {
+    if ($mounted) {
+        Write-Step "Dismounting $OutputVhdx"
+        Dismount-VHD -Path $OutputVhdx -ErrorAction SilentlyContinue
+    }
 }
-$vol = "$($part.DriveLetter):\"
-Set-Content -LiteralPath (Join-Path $vol "f2_bundle_manifest.json") -Value $manifestJson -Encoding utf8
-foreach ($a in $artifacts) {
-    $dst = Join-Path $vol $a.filename
-    New-Item -ItemType Directory -Force -Path (Split-Path $dst) | Out-Null
-    Copy-Item -LiteralPath (Join-Path $root $a.filename) -Destination $dst
-}
-Dismount-VHD -Path $OutputVhdx
-Write-Step "Input bundle VHDX created: $OutputVhdx (attach READ-ONLY in the guest)"
+$state = Get-VHD -Path $OutputVhdx
+if ($state.Attached) { throw "F2 input bundle: VHD still attached after dismount." }
+Write-Step "Input bundle VHDX created + verified: $OutputVhdx (attach READ-ONLY in the guest; guest sees write semantics are NOT ESTABLISHED without a guest write probe)"
