@@ -111,6 +111,19 @@ def test_switch_selected_via_connect_not_set(text):
     )
 
 
+def test_secure_boot_readback_uses_correct_property(text):
+    # The read-back property is 'SecureBoot' (On/Off); 'EnableSecureBoot' is the
+    # Set-VMFirmware PARAMETER and is NOT a Get-VMFirmware property.
+    assert "-EnableSecureBoot On" in text
+    assert ").SecureBoot)" in text
+    assert ".EnableSecureBoot)" not in text
+
+
+def test_keyprotector_vtpm_reapply_is_idempotent(text):
+    assert "Get-VMKeyProtector" in text
+    assert "TpmEnabled" in text
+
+
 def test_readback_asserts_stateful_and_ordering(text):
     assert "F2 ACL verification FAILED" in text
     assert "$allow[0].Stateful" in text

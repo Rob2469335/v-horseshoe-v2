@@ -900,4 +900,48 @@ media; no isolation is claimed. Rerunning the corrected provisioner (idempotent)
 is `REQUIRES AUTHORIZATION`. The rollback script `qwen_train/f2_vm_rollback.ps1`
 was written and **not run**. No Firewall/Avast/account/`.env`/secret was touched.
 
+## 2026-10-07 (VM-shell rerun) - host-side shell PROVEN
+
+**Corrected provisioner re-run over the preserved half-state succeeded.**
+`qwen_train/f2_vm_provision.ps1 -Execute -ShellOnly` completed against the
+preserved objects without recreating anything. Hardened first for idempotent
+re-apply: the key protector is created only if absent and vTPM is enabled only if
+not already on (both already existed from the first run; a naive re-apply would
+have failed). Added fail-closed read-back of Secure Boot and vTPM to the final
+verification. Regression tests added.
+
+**Secure Boot property name (host-verified).** `Get-VMFirmware` exposes
+**`SecureBoot` = On**; `EnableSecureBoot` is the `Set-VMFirmware` *parameter* and
+is NOT a read-back property. Read-back corrected to use `SecureBoot`.
+
+**Proven host-side (live read-back, two independent queries):**
+- `F2-Internal-Switch` = Internal, no physical adapter binding.
+- `vEthernet (F2-Internal-Switch)` = `10.72.0.1/24`, no IPv4 default gateway,
+  implicit IPv4 DNS empty, forwarding Disabled (v4+v6); IPv6 link-local present.
+- No NAT (`Get-NetNat` = 0); F2 adapter ICS `SharingEnabled=False`.
+- `F2-Isolation-VM` = Generation 2, **State Off**, exactly **1 NIC** on the F2
+  switch, `AutomaticCheckpointsEnabled=False`, 2 vCPU, DynamicMemory=False,
+  0 disks, 0 DVDs, 0 GPU-partition adapters; COM1/COM2 are the Gen2 default with
+  no host path.
+- **Secure Boot = On; vTPM `TpmEnabled=True`; key protector present (5151 bytes).**
+- Extended ACL (attached to the single F2 NIC): Outbound Allow
+  `10.72.0.2 -> 10.72.0.1:8099/TCP` **Stateful=True IdleSessionTimeout=1800
+  Weight=100**; Outbound Deny `ANY/ANY/ANY/ANY/ANY` weight 1; Inbound Deny
+  `ANY/ANY` weight 1 (explicit IPv4+IPv6 catch-all).
+- Integration services: KVP/Data Exchange **False**, VSS **False**,
+  Time Synchronization **False**, Guest Service Interface **False**; Heartbeat
+  and Shutdown **True**.
+- Avast: no security prompt observed during the run.
+
+**NOT ESTABLISHED / residual:** PowerShell Direct (no such entry in
+`Get-VMIntegrationService`; guest-side `vmicvmsession` proof deferred to the
+Windows-install mission). IPv6 DNS shows the OS-default site-local entries
+`fec0:0:0:ffff::1..3` (Windows default for an unconfigured IPv6 stack, non-routable
+here; no IPv6 default route; IPv6 ACL-denied) — IPv4 DNS is empty.
+
+**Verdict: VM SHELL PROVEN (host-side).** All guest-side properties (routing,
+DNS, IPv4/IPv6/ICMP/TCP-8099, Internet isolation, read-only input, clock) remain
+NOT ESTABLISHED until Windows is installed. VM left **Off**. No Windows, no ISO,
+no firewall/Avast/account/`.env`/secret change; rollback script not run.
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

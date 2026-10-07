@@ -144,10 +144,24 @@ if (-not $vm) {
 Set-VMProcessor -VMName $VmName -Count $ProcessorCount
 Set-VMMemory -VMName $VmName -DynamicMemoryEnabled $false
 
-# Secure Boot ON; vTPM enabled with a local key protector.
+# Secure Boot ON.
 Set-VMFirmware -VMName $VmName -EnableSecureBoot On
-Set-VMKeyProtector -VMName $VmName -NewLocalKeyProtector
-Enable-VMTPM -VMName $VmName
+# vTPM with a local key protector — IDEMPOTENT re-apply: a second run over an
+# existing shell must not fail because a protector/vTPM already exists.
+$kp = Get-VMKeyProtector -VMName $VmName -ErrorAction SilentlyContinue
+$kpLen = 0; if ($kp) { $kpLen = @($kp).Count }
+if ($kpLen -eq 0) {
+    Write-Step "Creating local key protector"
+    Set-VMKeyProtector -VMName $VmName -NewLocalKeyProtector
+} else {
+    Write-Step "Local key protector already present ($kpLen bytes; contents never printed)"
+}
+if (-not (Get-VMSecurity -VMName $VmName).TpmEnabled) {
+    Write-Step "Enabling vTPM"
+    Enable-VMTPM -VMName $VmName
+} else {
+    Write-Step "vTPM already enabled"
+}
 
 # --- EXACTLY ONE NIC (fail closed) -----------------------------------------
 # New-VM -SwitchName already created exactly one adapter. Do NOT add another.
@@ -285,11 +299,19 @@ foreach ($req in @("vmickvpexchange", "vmicguestinterface", "vmicvss", "vmictime
 Write-Host "Integration services AFTER (Heartbeat + Guest Shutdown intentionally left ENABLED):"
 $after | Select-Object Name, DisplayName, Enabled | Format-Table -AutoSize
 
-# --- Final single-NIC verification (fail closed) ----------------------------
+# --- Final verification (fail closed) ---------------------------------------
 $final = @(Get-VMNetworkAdapter -VMName $VmName)
 if ($final.Count -ne 1) {
     throw "F2 provisioning FAILED verification: $($final.Count) NICs present; expected exactly 1."
 }
+# Secure Boot: the read-back property is 'SecureBoot' (On/Off); 'EnableSecureBoot'
+# is the Set-VMFirmware parameter, NOT a Get-VMFirmware property.
+$sb = "$((Get-VMFirmware -VMName $VmName).SecureBoot)"
+if ($sb -ne "On") { throw "F2 provisioning FAILED verification: Secure Boot is '$sb', expected On." }
+if (-not (Get-VMSecurity -VMName $VmName).TpmEnabled) {
+    throw "F2 provisioning FAILED verification: vTPM is not enabled."
+}
+Write-Step "Final verification passed: 1 NIC, Secure Boot On, vTPM enabled"
 
 Write-Host ""
 Write-Host "F2 isolation boundary provisioned. Guest-side steps (NOT automated):"
