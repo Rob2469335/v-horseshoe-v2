@@ -660,4 +660,38 @@ admission, curator authority and the conversion record all remain outstanding, a
 document or code path pretends otherwise.
 
 Not executed: S8, Q10, Q12, Q13.
+## 2026-10-07 - F2 VM isolation boundary hardening (F2-IMPL-AUTH-027)
+
+**Repository-side F2 isolation implemented and tested.** A governed F2 P2
+(`SWARM_F2_ISOLATION=1`) now actually **stops** the background subsystems rather
+than relying on environment flags: MemoryBridge daemons, the codebase-index
+self-heal daemon, external MCP init, the task scheduler, reflection, genetic
+mutation, evolution, the autonomy watch-loop, intel, eval-tick, Telegram, chess
+resume and the system-probe warmup are not started
+(`swarm_os/app/main.py`). `f2_p2_environment()` marks the production P2 and sets
+`SWARM_CODEBASE_INDEX=0`. A startup assertion fails closed unless Qdrant
+(`127.0.0.1:6333`) and embedding (`127.0.0.1:8081`) are unreachable
+(`runtime_v2/services/f2_runtime_guard.py`); Qdrant-backed tools are removed from
+the arm surface. A narrow, non-proxy model gateway
+(`qwen_train/f2_model_gateway.py`) exposes only
+`POST /v1/chat/completions`, `POST /v1/completions`, `GET /v1/models` to the fixed
+local upstream. 27 focused tests pass; the full F2 suite + agents smoke
+(1438 passed / 5 skipped) is clean (recorded in F2-IMPL-AUTH-027).
+
+**Provisioner hardened.** `qwen_train/f2_vm_provision.ps1` was audited and fixed:
+it previously created **two** NICs (`New-VM -SwitchName` already adds one, then
+`Add-VMNetworkAdapter` added a second). It now attaches **exactly one** NIC
+(fail-closed if not), uses a **stateful** allow via `-IdleSessionTimeout`, adds a
+catch-all deny in both directions, configures Secure Boot + vTPM, sets the
+integration-service final state, and supports official install ISO or golden
+VHDX. It remains non-executing by default and never downloads media. The script
+is syntax-validated; the switch/VM were **not** created.
+
+**Stopped at the correct boundary.** `Get-VM` returns no VMs, only the OS
+`Default Switch` (Internal) exists, and **no official Windows install ISO is
+present**. No VM/ACL/guest-egress property can be proven without the guest, so
+the boundary is `BLOCKED - EXTERNAL PREREQUISITE`. Design and human prerequisites
+are recorded in `docs/EXPERIMENT_J_F2_VM_ISOLATION.md`. No experiment was run; no
+secret, `.env`, Windows Firewall, Avast, ACL, account, or host policy was touched.
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*
