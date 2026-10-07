@@ -37,6 +37,10 @@
 [CmdletBinding()]
 param(
     [switch]$Execute,
+    # Create the media-less isolation SHELL only (switch + host IP + Gen-2 VM +
+    # one NIC + ACL + firmware/vTPM + integration services + hygiene). No OS disk,
+    # no DVD, no media. Mutually exclusive with -IsoPath/-GoldenVhdx.
+    [switch]$ShellOnly,
     [string]$IsoPath = "",
     [string]$GoldenVhdx = "",
 
@@ -85,8 +89,12 @@ if (-not $Execute) {
 }
 
 # --- Guards (fail closed) ---------------------------------------------------
-if ([string]::IsNullOrWhiteSpace($IsoPath) -eq [string]::IsNullOrWhiteSpace($GoldenVhdx)) {
-    throw "F2 provisioning refused: supply EXACTLY ONE of -IsoPath or -GoldenVhdx."
+if ($ShellOnly) {
+    if ($IsoPath -or $GoldenVhdx) {
+        throw "F2 provisioning refused: -ShellOnly must not be combined with media (-IsoPath/-GoldenVhdx)."
+    }
+} elseif ([string]::IsNullOrWhiteSpace($IsoPath) -eq [string]::IsNullOrWhiteSpace($GoldenVhdx)) {
+    throw "F2 provisioning refused: supply EXACTLY ONE of -IsoPath or -GoldenVhdx (or -ShellOnly)."
 }
 if ($IsoPath -and -not (Test-Path -LiteralPath $IsoPath)) {
     throw "F2 provisioning refused: ISO not found: $IsoPath"
@@ -148,12 +156,21 @@ if ($adapters.Count -ne 1) {
     throw "F2 provisioning refused: VM '$VmName' has $($adapters.Count) NICs; exactly 1 is required."
 }
 $nic = $adapters[0]
-Set-VMNetworkAdapter -VMName $VmName -Name $nic.Name -SwitchName $SwitchName -DeviceNaming On
+# Connect the single NIC to the F2 Internal switch. NOTE (first live run, 2026-10-07):
+# the set-adapter cmdlet does not accept a switch parameter on this host; the switch
+# is selected via Connect-VMNetworkAdapter. Using the wrong cmdlet aborted the run here.
+Connect-VMNetworkAdapter -VMName $VmName -Name $nic.Name -SwitchName $SwitchName
 Set-VMNetworkAdapter -VMName $VmName -DhcpGuard On -RouterGuard On -MacAddressSpoofing Off
 Write-Step "NIC '$($nic.Name)' on switch '$SwitchName' (single adapter verified)"
 
-# --- Media ------------------------------------------------------------------
-if ($GoldenVhdx) {
+# --- Automatic checkpoints (THIS VM ONLY; never global) ---------------------
+Set-VM -Name $VmName -AutomaticCheckpointsEnabled $false
+Write-Step "Automatic checkpoints disabled for $VmName"
+
+# --- Media (skipped entirely for the media-less shell) ----------------------
+if ($ShellOnly) {
+    Write-Step "ShellOnly: no OS disk, no DVD, no media attached"
+} elseif ($GoldenVhdx) {
     $targetVhdx = Join-Path $VmFolder "$VmName-os.vhdx"
     if (-not (Test-Path -LiteralPath $targetVhdx)) {
         Write-Step "Copying golden VHDX to $targetVhdx (source left untouched)"
@@ -238,13 +255,35 @@ if ((Get-VM -Name $VmName).State -ne "Off") {
 }
 
 # --- Integration services (final side-channel state) ------------------------
+# Match by Name OR DisplayName (hosts differ), then fail closed on the required
+# side channels. KVP/Data Exchange, Guest Service Interface, VSS and Time
+# Synchronization MUST read back Enabled=$false.
 Write-Host "Integration services BEFORE:"
-Get-VMIntegrationService -VMName $VmName | Select-Object Name, Enabled | Format-Table -AutoSize
-foreach ($svc in @("Guest Service Interface", "Hyper-V PowerShell Direct", "Data Exchange", "VSS", "Time Synchronization")) {
-    Disable-VMIntegrationService -VMName $VmName -Name $svc -ErrorAction SilentlyContinue
+Get-VMIntegrationService -VMName $VmName | Select-Object Name, DisplayName, Enabled | Format-Table -AutoSize
+$svcTargets = @(
+    @{ label = "Guest Service Interface"; ids = @("Guest Service Interface", "vmicguestinterface") },
+    @{ label = "PowerShell Direct";      ids = @("Hyper-V PowerShell Direct", "vmicvmsession") },
+    @{ label = "Data Exchange/KVP";      ids = @("Data Exchange", "Key-Value Pair Exchange", "vmickvpexchange") },
+    @{ label = "VSS";                    ids = @("VSS", "vmicvss") },
+    @{ label = "Time Synchronization";   ids = @("Time Synchronization", "vmictimesync") }
+)
+$allSvc = @(Get-VMIntegrationService -VMName $VmName)
+foreach ($t in $svcTargets) {
+    $match = $allSvc | Where-Object { ($t.ids -contains $_.Name) -or ($t.ids -contains $_.DisplayName) } | Select-Object -First 1
+    if ($null -eq $match) {
+        Write-Warning "Integration service '$($t.label)' not present on this host (recorded; not assumed disabled)."
+    } else {
+        Disable-VMIntegrationService -VMName $VmName -Name $match.Name -ErrorAction Stop
+    }
+}
+# Fail closed on the required side channels.
+$after = @(Get-VMIntegrationService -VMName $VmName)
+foreach ($req in @("vmickvpexchange", "vmicguestinterface", "vmicvss", "vmictimesync")) {
+    $s = $after | Where-Object { $_.Name -eq $req } | Select-Object -First 1
+    if ($s -and $s.Enabled) { throw "F2 integration verification FAILED: $req is still Enabled." }
 }
 Write-Host "Integration services AFTER (Heartbeat + Guest Shutdown intentionally left ENABLED):"
-Get-VMIntegrationService -VMName $VmName | Select-Object Name, Enabled | Format-Table -AutoSize
+$after | Select-Object Name, DisplayName, Enabled | Format-Table -AutoSize
 
 # --- Final single-NIC verification (fail closed) ----------------------------
 $final = @(Get-VMNetworkAdapter -VMName $VmName)

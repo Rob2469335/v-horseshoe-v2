@@ -866,4 +866,38 @@ clean. No VM/switch/adapter/firewall/Avast/account/`.env`/secret was touched; no
 builder re-run (executable logic unchanged). Boundary remains `BLOCKED — EXTERNAL
 PREREQUISITE` (no official guest install media).
 
+## 2026-10-07 (VM-shell, first live host run) - defect found, stopped, fixed in repo
+
+**First live execution of `qwen_train/f2_vm_provision.ps1 -Execute -ShellOnly`.**
+Per the mission's fail rule the run was STOPPED at the first error, not cleaned
+up, and not rerun. A media-less shell mode (`-ShellOnly`) was added first.
+
+**Defect (in-scope, now fixed).** The provisioner called
+`Set-VMNetworkAdapter ... -SwitchName`, but on this host `Set-VMNetworkAdapter`
+has **no `-SwitchName`** parameter (confirmed `False`); the switch is selected via
+`Connect-VMNetworkAdapter -SwitchName` (confirmed `True`). The script aborted at
+that line. Fixed to `Connect-VMNetworkAdapter`; regression test added
+(`test_switch_selected_via_connect_not_set`). PS7 + PS5.1 parse clean.
+
+**Half-built state preserved (not cleaned up, not rerun).** Read-only capture
+(evidence at `C:\Users\rober\F2_EVIDENCE\vm_shell\`, outside Git):
+- `F2-Internal-Switch` = **Internal**, `NetAdapterInterfaceDescription` empty (no
+  physical binding).
+- host `10.72.0.1/24` on `vEthernet (F2-Internal-Switch)`.
+- `F2-Isolation-VM` = Generation 2, **State Off**, exactly **1 NIC** on the F2 switch.
+- **ACL = 0 rules** (not applied).
+- Integration services: **Key-Value Pair Exchange = Enabled (True)**,
+  Time Synchronization = True, VSS = True, Guest Service Interface = False,
+  Heartbeat/Shutdown = True → side-channel suppression NOT applied.
+- Automatic checkpoints = True (not disabled).
+- Secure Boot: `Get-VMFirmware` returned `EnableSecureBoot` blank (indeterminate
+  on this host) → **NOT ESTABLISHED**; template `MicrosoftWindows`.
+
+**Verdict: BLOCKED - ISOLATION VERIFICATION FAILURE** (required host-side
+isolation properties — ACL, KVP disabled, Secure Boot, vTPM, auto-checkpoints —
+cannot be proven; the abort left the shell incomplete). The VM is Off with no
+media; no isolation is claimed. Rerunning the corrected provisioner (idempotent)
+is `REQUIRES AUTHORIZATION`. The rollback script `qwen_train/f2_vm_rollback.ps1`
+was written and **not run**. No Firewall/Avast/account/`.env`/secret was touched.
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

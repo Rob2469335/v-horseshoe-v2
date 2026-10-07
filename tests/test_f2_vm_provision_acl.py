@@ -100,6 +100,17 @@ def test_no_blind_second_nic(text):
     assert "Count -ne 1" in text, "provisioner must fail closed on NIC count != 1"
 
 
+def test_switch_selected_via_connect_not_set(text):
+    # Regression (first live run, 2026-10-07): Set-VMNetworkAdapter has NO
+    # -SwitchName on this host; the switch must be set with Connect-VMNetworkAdapter.
+    assert not re.search(r"Set-VMNetworkAdapter[^\n]*-SwitchName", text), (
+        "Set-VMNetworkAdapter has no -SwitchName; use Connect-VMNetworkAdapter"
+    )
+    assert re.search(r"Connect-VMNetworkAdapter[^\n]*-SwitchName", text), (
+        "provisioner must connect the NIC to the switch via Connect-VMNetworkAdapter"
+    )
+
+
 def test_readback_asserts_stateful_and_ordering(text):
     assert "F2 ACL verification FAILED" in text
     assert "$allow[0].Stateful" in text
