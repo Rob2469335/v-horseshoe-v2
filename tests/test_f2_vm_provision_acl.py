@@ -124,6 +124,17 @@ def test_keyprotector_vtpm_reapply_is_idempotent(text):
     assert "TpmEnabled" in text
 
 
+def test_acl_removal_uses_supported_params(text):
+    # Remove-VMNetworkAdapterExtendedAcl accepts only -Direction + -Weight (or the
+    # -InputObject pipeline). A first live re-apply passed address/port params and
+    # collided on re-add (0x800700B7). Assert the pipeline form is present and that
+    # no Remove call passes address/port/protocol parameters.
+    assert "Remove-VMNetworkAdapterExtendedAcl -ErrorAction SilentlyContinue" in text
+    for m in re.finditer(r"Remove-VMNetworkAdapterExtendedAcl([^\n]*)", text):
+        seg = m.group(1)
+        assert "-RemotePort" not in seg and "-LocalPort" not in seg and "-Protocol" not in seg
+
+
 def test_readback_asserts_stateful_and_ordering(text):
     assert "F2 ACL verification FAILED" in text
     assert "$allow[0].Stateful" in text

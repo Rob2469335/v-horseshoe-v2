@@ -216,15 +216,13 @@ if ($ShellOnly) {
 if ((Get-VM -Name $VmName).State -ne "Off") {
     Write-Plan "VM is $((Get-VM -Name $VmName).State); stop it to apply ACLs, then re-run."
 } else {
-    # Remove any prior rules (idempotent re-run).
-    foreach ($acl in @(Get-VMNetworkAdapterExtendedAcl -VMName $VmName -ErrorAction SilentlyContinue)) {
-        try {
-            Remove-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction $acl.Direction -Action $acl.Action `
-                -LocalIPAddress $acl.LocalIPAddress -RemoteIPAddress $acl.RemoteIPAddress `
-                -LocalPort $acl.LocalPort -RemotePort $acl.RemotePort -Protocol $acl.Protocol `
-                -Weight $acl.Weight -ErrorAction SilentlyContinue
-        } catch { }
-    }
+    # Remove any prior rules (idempotent re-run). NOTE: Remove-VMNetworkAdapterExtendedAcl
+    # has NO address/port/protocol parameters -- only -Direction + -Weight, or the
+    # -InputObject pipeline. The first live re-apply passed the full tuple, so the
+    # removals silently did nothing and re-adding the allow collided (0x800700B7).
+    # Remove via the stored objects.
+    @(Get-VMNetworkAdapterExtendedAcl -VMName $VmName -ErrorAction SilentlyContinue) |
+        Remove-VMNetworkAdapterExtendedAcl -ErrorAction SilentlyContinue
     # Microsoft semantics (verified): extended ACLs are STATELESS unless
     # -Stateful $true is passed; -IdleSessionTimeout is an Int32 number of
     # SECONDS (not a TimeSpan). Explicit IPv4+IPv6 catch-all coverage uses the

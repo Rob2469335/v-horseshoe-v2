@@ -944,4 +944,45 @@ DNS, IPv4/IPv6/ICMP/TCP-8099, Internet isolation, read-only input, clock) remain
 NOT ESTABLISHED until Windows is installed. VM left **Off**. No Windows, no ISO,
 no firewall/Avast/account/`.env`/secret change; rollback script not run.
 
+## 2026-10-07 (VM shell — install media + live boot) - ACL re-apply defect
+
+**ISO discovered and verified.** `C:\Users\rober\Downloads\26300.9457.260913-1737.26h2_ge_release_svc_refresh_CLIENTENTERPRISEEVAL_OEMRET_x64FRE_en-us.iso`
+(7.66 GB); SHA-256 `BC3F24086EBADC94489066B5AD78089E2CF5C3491E90E790BB81A2B199C10E38`
+**matches** the published Windows 11 Enterprise Evaluation 26H2 x64 EN-US hash.
+
+**Protector-disclosure audit.** Repository/working-tree occurrences of the
+protector byte-pattern (UTF-8 BOM + `<Wrappings>`): **0**. The prior accidental
+print exists only in the earlier agent transcript, not in any tracked or
+working-tree file, evidence dir, or commit. Length-only handling retained.
+
+**Live defect found and fixed (in-scope).** With the OS disk + ISO attached, the
+provisioner aborted re-applying the ACL:
+`Add-VMNetworkAdapterExtendedAcl ... Cannot create a file when that file already
+exists. (0x800700B7)`. Root cause: `Remove-VMNetworkAdapterExtendedAcl` accepts
+**only `-Direction` + `-Weight`** (or the `-InputObject` pipeline) — it has **no**
+address/port/protocol parameters. The removal loop passed the full tuple, so the
+removals silently no-op'd and re-adding the allow collided. Fixed to remove via
+the stored objects (`Get-VMNetworkAdapterExtendedAcl | Remove-...`); regression
+test added. Re-run then completed cleanly.
+
+**Host-side shell re-proven (fresh, post-run):** `F2-Internal-Switch` Internal/no
+physical binding; host `10.72.0.1/24`, no gateway, IPv4 DNS empty, forwarding
+disabled; no NAT; F2 ICS SharingEnabled=False; `F2-Isolation-VM` Gen2 **Off**,
+**1 NIC** on the F2 switch, auto-checkpoints False, Secure Boot On, vTPM True,
+key protector present; OS disk `C:\Users\rober\F2_VM\F2-Isolation-VM-os.vhdx`
+(64 GB dynamic) + the ISO as DVD; integration services KVP/VSS/TimeSync/GSI off,
+Heartbeat/Shutdown on; ACL = stateful allow `10.72.0.2->10.72.0.1:8099 TCP`
+(w=100, Stateful, 1800) + `ANY` catch-all deny outbound/inbound (w=1).
+**Pre-boot ACL double-read identical: PROVEN.**
+
+**First boot:** `Start-VM` with the ACL installed, one NIC on the Internal switch,
+no gateway/DNS/NAT/ICS, no second adapter. Post-start guard passed
+(`Running`, 1 NIC on `F2-Internal-Switch`). The VM is now booting **Windows
+Setup**; the interactive OOBE (language, disk, account/credentials) is Rob's to
+complete in VMConnect — the guest boundary is not weakened and no credentials
+were handled. Guest-side evidence (`C:\f2_evidence\*`) and the gateway HTTP-Date
+clock/negative-probe checks remain **PENDING** until Windows is installed.
+
+Verdict: **VM SHELL PROVEN — GUEST EVIDENCE PENDING**.
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*
