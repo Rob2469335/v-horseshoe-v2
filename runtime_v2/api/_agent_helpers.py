@@ -89,6 +89,28 @@ def _strip_web_tools_for_local_analysis(
     return allowed
 
 
+def _strip_f2_qdrant_tools(agent_id: str, allowed: list) -> list:
+    """Governed F2 isolation: remove Qdrant-backed capabilities from the arm's
+    tool surface before tool-schema delivery. No-op outside a governed F2 process
+    (SWARM_F2_ISOLATION=1), so normal Swarm OS agent behavior is unchanged.
+
+    Rationale: a governed F2 arm must not be able to reach Qdrant. `semantic_search`
+    (codebase_index), `remember` and `deprecate_memory` all require Qdrant; the
+    remaining Qdrant path (`mcp` -> `qdrant_recall`) is already inert because F2
+    suppresses external MCP startup. See runtime_v2/services/f2_runtime_guard.py.
+    """
+    if not allowed:
+        return allowed
+    from runtime_v2.services.f2_runtime_guard import (
+        governed_f2,
+        F2_FORBIDDEN_AGENT_TOOLS,
+    )
+
+    if not governed_f2():
+        return allowed
+    return [t for t in allowed if t not in F2_FORBIDDEN_AGENT_TOOLS]
+
+
 def _is_fix_intent(text: str) -> bool:
     """True when the goal directs the agent to EDIT code (not just research a
     'how to fix' question)."""

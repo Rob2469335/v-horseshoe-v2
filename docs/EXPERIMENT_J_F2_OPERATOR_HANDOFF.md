@@ -497,8 +497,9 @@ passing record.
 > does not change the fact that **egress enforcement is still the missing
 > privileged layer**. See
 > `docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md`
-> (F2-IMPL-AUTH-025). **No F2 execution may use a revised topology until it is
-> formally authorized.**
+> (F2-IMPL-AUTH-025; runtime suppression, fail-closed Qdrant/embedding check,
+> capability strip and model gateway implemented per **F2-IMPL-AUTH-027**).
+> **No F2 execution may use a revised topology until it is formally authorized.**
 
 The architecture is deliberately layered, and each layer does exactly one job:
 

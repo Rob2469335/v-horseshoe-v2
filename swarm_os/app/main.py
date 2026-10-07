@@ -103,6 +103,38 @@ async def lifespan(app: FastAPI):
         log.warning(f"Settings unavailable: {exc}")
         settings = None
 
+    # Governed F2 isolation: ONE explicit marker (set by the F2 P2 launcher)
+    # suppresses every background subsystem that could touch Qdrant, the
+    # embedding service, learning state, host data, an external network, or the
+    # shared local model. Normal Swarm OS startup is unchanged when the marker is
+    # unset. See runtime_v2/services/f2_runtime_guard.py.
+    try:
+        from runtime_v2.services.f2_runtime_guard import (
+            governed_f2,
+            assert_forbidden_services_unreachable,
+            F2IsolationViolation,
+        )
+
+        _f2 = governed_f2()
+    except Exception as exc:  # noqa: BLE001 - never block normal startup
+        log.warning(f"F2 runtime guard unavailable: {exc}")
+        _f2 = False
+        assert_forbidden_services_unreachable = None  # type: ignore[assignment]
+        F2IsolationViolation = RuntimeError  # type: ignore[misc,assignment]
+
+    app.state.f2_background_suppressed = bool(_f2)
+    if _f2:
+        # A governed boot must not inherit any background handle from a prior
+        # lifespan on the same app object (relevant to tests; in production each
+        # P2 is a fresh process).
+        for _stale in ("scheduler", "watch_loop", "telegram_center", "eval_tick_task"):
+            if hasattr(app.state, _stale):
+                delattr(app.state, _stale)
+        log.info(
+            "Governed F2 isolation mode: background subsystems suppressed "
+            "(codebase index, MemoryBridge, MCP, scheduler, autonomous work)"
+        )
+
     try:
         from swarm_os.services.orchestrator import Orchestrator
 
@@ -211,6 +243,8 @@ async def lifespan(app: FastAPI):
         from runtime_v2.services.tool_executor import get_mcp_manager
 
         async def _mcp_init():
+            if _f2:
+                return
             try:
                 await get_mcp_manager()
                 log.info("External MCP Tools loaded and initialized")
@@ -226,7 +260,7 @@ async def lifespan(app: FastAPI):
         log.warning(f"MCP init task failed to start: {exc}")
 
     # BUG FIX: Start MemoryBridge background daemons so events are processed into Qdrant memories
-    if orchestrator and hasattr(orchestrator, "bridge"):
+    if not _f2 and orchestrator and hasattr(orchestrator, "bridge"):
         t1 = asyncio.create_task(orchestrator.bridge.watch_loop(interval_seconds=5.0))
         t2 = asyncio.create_task(
             orchestrator.bridge.start_manager_daemon(interval_seconds=300.0)
@@ -249,7 +283,7 @@ async def lifespan(app: FastAPI):
         # start it. Scientific semantics are unchanged: these events are untagged
         # and PromptRepairer rejects them as "ignored: untagged_event", so they
         # never became learning evidence either way.
-        if _os_reflect.environ.get("SWARM_AUTONOMY", "1").strip() == "1":
+        if not _f2 and _os_reflect.environ.get("SWARM_AUTONOMY", "1").strip() == "1":
             from swarm_os.services.reflection_loop import run_reflection
 
             async def _reflection_daemon(
@@ -284,9 +318,10 @@ async def lifespan(app: FastAPI):
     try:
         from swarm_os.services.telegram_center import get_center
 
-        center = get_center()
-        center.start()
-        app.state.telegram_center = center
+        if not _f2:
+            center = get_center()
+            center.start()
+            app.state.telegram_center = center
     except Exception as exc:
         log.warning(f"Telegram command center unavailable: {exc}")
 
@@ -295,7 +330,8 @@ async def lifespan(app: FastAPI):
     try:
         from swarm_os.services.chess_analysis_job import resume_incomplete
 
-        await resume_incomplete()
+        if not _f2:
+            await resume_incomplete()
     except Exception as exc:
         log.warning(f"Chess analysis job resume unavailable: {exc}")
 
@@ -306,7 +342,7 @@ async def lifespan(app: FastAPI):
     try:
         import os as _os
 
-        if _os.environ.get("SWARM_GENETIC_MUTATION", "").strip() == "1":
+        if not _f2 and _os.environ.get("SWARM_GENETIC_MUTATION", "").strip() == "1":
             from swarm_os.services.genetic_mutation_loop import run_genetic_mutation
 
             async def _mutation_daemon(
@@ -342,7 +378,7 @@ async def lifespan(app: FastAPI):
     try:
         import os as _os2
 
-        if _os2.environ.get("SWARM_CODEBASE_INDEX", "1").strip() == "1":
+        if not _f2 and _os2.environ.get("SWARM_CODEBASE_INDEX", "1").strip() == "1":
             from runtime_v2.services.indexer import (
                 index_codebase,
                 collection_exists,
@@ -386,7 +422,7 @@ async def lifespan(app: FastAPI):
     try:
         import os as _os
 
-        if _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
+        if not _f2 and _os.environ.get("SWARM_EVOLUTION", "").strip() == "1":
             from swarm_os.services.evolution_daemon import evolution_daemon
 
             t6 = asyncio.create_task(evolution_daemon(first_delay=60.0))
@@ -404,7 +440,7 @@ async def lifespan(app: FastAPI):
     try:
         import os as _os_autonomy
 
-        if _os_autonomy.environ.get("SWARM_AUTONOMY", "1").strip() == "1":
+        if not _f2 and _os_autonomy.environ.get("SWARM_AUTONOMY", "1").strip() == "1":
             from swarm_os.services.watch_loop import WatchLoop
             from organism_console.core.self_repair_engine import SelfRepairEngine
 
@@ -437,9 +473,10 @@ async def lifespan(app: FastAPI):
     try:
         from swarm_os.services.task_scheduler import TaskSchedulerDaemon
 
-        _sched = TaskSchedulerDaemon(interval_seconds=60.0)
-        _sched.start()
-        app.state.scheduler = _sched
+        if not _f2:
+            _sched = TaskSchedulerDaemon(interval_seconds=60.0)
+            _sched.start()
+            app.state.scheduler = _sched
         log.info("Recurring task scheduler daemon started")
     except Exception as exc:
         log.warning(f"Task scheduler unavailable: {exc}")
@@ -447,7 +484,7 @@ async def lifespan(app: FastAPI):
     # Competitive Intelligence monitor — OPT-IN via SWARM_INTEL=1. Runs a weekly
     # full monitor (scan -> digest -> deliver) on a background cadence, exactly
     # once per window (duplicate-run protected), history preserved in data/intel.
-    if os.environ.get("SWARM_INTEL", "0").strip() == "1":
+    if not _f2 and os.environ.get("SWARM_INTEL", "0").strip() == "1":
         try:
             from swarm_os.services.competitive_intel import intel_daemon
 
@@ -464,7 +501,7 @@ async def lifespan(app: FastAPI):
     try:
         import os as _os_eval
 
-        if _os_eval.environ.get("SWARM_EVAL_TICK", "0").strip() == "1":
+        if not _f2 and _os_eval.environ.get("SWARM_EVAL_TICK", "0").strip() == "1":
             from swarm_os.services.prompt_repairer import get_prompt_repairer
 
             _interval = float(_os_eval.environ.get("EVAL_TICK_INTERVAL_S", "3600"))
@@ -523,6 +560,8 @@ async def lifespan(app: FastAPI):
         from swarm_os.healing.system_probes import run_system_probes
 
         async def _probe_warmup():
+            if _f2:
+                return
             try:
                 await asyncio.to_thread(run_system_probes)
                 log.info("Command-center probe cache warmed")
@@ -558,6 +597,20 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.error("F2 replay initialization failed: %s", exc)
         raise  # Fail closed
+
+    if _f2:
+        # Fail closed before P2 is eligible to execute: a governed arm must not be
+        # able to reach Qdrant or the embedding service. Refused/unreachable is
+        # success; reachable or uncheckable aborts startup.
+        try:
+            _iso = assert_forbidden_services_unreachable()
+            log.info(
+                "F2 isolation verified: forbidden services unreachable: %s",
+                ", ".join(f"{r.name}={r.status}" for r in _iso),
+            )
+        except F2IsolationViolation as exc:
+            log.error("F2 isolation FAIL-CLOSED: %s", exc)
+            raise
 
     log.info("RuntimeGraph mounted on app.state — all routes live")
     yield

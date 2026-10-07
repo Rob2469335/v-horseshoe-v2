@@ -79,6 +79,7 @@ from runtime_v2.api._agent_helpers import (  # noqa: F401
     _FIX_INTENT_RE as _FIX_INTENT_RE,
     _append_diary_line as _append_diary_line,
     _strip_web_tools_for_local_analysis as _strip_web_tools_for_local_analysis,
+    _strip_f2_qdrant_tools as _strip_f2_qdrant_tools,
     _is_fix_intent as _is_fix_intent,
     needs_edit as needs_edit,
     READ_OPS as READ_OPS,
@@ -1087,6 +1088,7 @@ class AgentServiceV2:
         allowed_tools = _strip_web_tools_for_local_analysis(
             agent_id, allowed_tools, prompt
         )
+        allowed_tools = _strip_f2_qdrant_tools(agent_id, allowed_tools)
         if agent_id == "coordinator" and turn == 0:
             fast = fast_route_coordinator(prompt)
             if fast is not None:

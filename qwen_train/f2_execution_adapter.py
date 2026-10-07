@@ -54,7 +54,7 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from runtime_v2.services.f2_freeze import (
     FreezeVerificationError,
@@ -67,6 +67,7 @@ from runtime_v2.services.f2_replay import (
     MANIFEST_PATH_ENV,
     REPLAY_REQUESTED_ENV,
 )
+from runtime_v2.services.f2_runtime_guard import F2_ISOLATION_ENV
 
 # F2 environment variables the adapter must propagate into P2.
 F2_ENV_VARS = (
@@ -85,6 +86,49 @@ FAKE_MODEL_EVIDENCE_FILE = "f2_fake_model_evidence.json"
 
 # F2-OP-INFRA-004 §1 (D2).
 F2_TRAJ_DIR_ENV = "SWARM_F2_TRAJ_DIR"
+
+
+def f2_p2_environment(
+    *,
+    workspace_root: str | Path,
+    manifest_path: str | Path,
+    repo_root: str | Path,
+    rollout_id: str,
+    trajectory_run_id: str,
+    traj_dir: str | Path,
+    isolation: bool,
+    base: "Mapping[str, str] | None" = None,
+) -> dict[str, str]:
+    """Build the fresh-P2 environment for one F2 arm.
+
+    ``isolation=True`` marks a GOVERNED F2 P2 (``SWARM_F2_ISOLATION=1``), which
+    turns on the runtime suppression of every Qdrant/embedding/host/model-touching
+    background subsystem and the Qdrant/embedding fail-closed startup check in
+    ``swarm_os/app/main.py``. The fake-model infrastructure proof
+    (``start_real_p2_with_fake_model``) leaves it off so that infra test is
+    unaffected. ``SWARM_CODEBASE_INDEX=0`` is set for EVERY F2 P2 (governed or
+    infra): a fresh F2 backend never rebuilds the codebase index.
+
+    This function is pure (no process spawn) so it can be asserted directly.
+    """
+    env = dict(os.environ if base is None else base)
+    env["SWARM_WORKSPACE_ROOT"] = str(workspace_root)
+    env["SWARM_MEMORY_INJECT"] = "0"
+    env["SWARM_AUTONOMY"] = "0"
+    env["SWARM_NO_TOASTS"] = "1"
+    env["SWARM_SEMANTIC_CACHE"] = "0"
+    env["SWARM_GENETIC_MUTATION"] = "0"
+    env["SWARM_EVOLUTION"] = "0"
+    env["SWARM_CODEBASE_INDEX"] = "0"
+    env["SWARM_F1_NO_WEB_TOOLS"] = "1"
+    env[F2_ISOLATION_ENV] = "1" if isolation else "0"
+    env[REPLAY_REQUESTED_ENV] = "1"
+    env[MANIFEST_PATH_ENV] = str(manifest_path)
+    env["SWARM_F2_REPO_ROOT"] = str(repo_root)
+    env["SWARM_F2_ROLLOUT_ID"] = rollout_id
+    env["SWARM_F2_TRAJECTORY_RUN_ID"] = trajectory_run_id
+    env[F2_TRAJ_DIR_ENV] = str(traj_dir)
+    return env
 
 
 def read_evidence_write_outcomes(stdout_path: str | Path | None) -> list[dict[str, Any]]:
@@ -427,6 +471,7 @@ def start_real_p2_production_model(
         trajectory_run_id=trajectory_run_id,
         startup_timeout=startup_timeout,
         fake_model=False,
+        isolation=True,
     )
 
 
@@ -483,25 +528,26 @@ def _start_real_p2(
     trajectory_run_id: str,
     startup_timeout: int = 60,
     fake_model: bool = True,
+    isolation: bool = False,
 ) -> dict[str, Any]:
-    """Shared P2 launcher. ``fake_model`` selects the model boundary only."""
-    env = os.environ.copy()
-    env["SWARM_WORKSPACE_ROOT"] = str(workspace_root)
-    env["SWARM_MEMORY_INJECT"] = "0"
-    env["SWARM_AUTONOMY"] = "0"
-    env["SWARM_NO_TOASTS"] = "1"
-    env["SWARM_SEMANTIC_CACHE"] = "0"
-    env["SWARM_GENETIC_MUTATION"] = "0"
-    env["SWARM_EVOLUTION"] = "0"
-    env["SWARM_F1_NO_WEB_TOOLS"] = "1"
-    env[REPLAY_REQUESTED_ENV] = "1"
-    env[MANIFEST_PATH_ENV] = str(manifest_path)
-    env["SWARM_F2_REPO_ROOT"] = str(repo_root)
-    env["SWARM_F2_ROLLOUT_ID"] = rollout_id
-    env["SWARM_F2_TRAJECTORY_RUN_ID"] = trajectory_run_id
+    """Shared P2 launcher.
+
+    ``fake_model`` selects the model boundary only. ``isolation`` marks a GOVERNED
+    F2 P2 (SWARM_F2_ISOLATION=1) which enables runtime suppression + the
+    Qdrant/embedding fail-closed check; the fake-model infra proof leaves it off.
+    """
     # F2-OP-INFRA-004 §1 (D2): publish the explicit absolute evidence directory so
     # the P2 writer and the F2 worker reader resolve to the SAME directory.
-    env[F2_TRAJ_DIR_ENV] = str(resolve_f2_traj_dir(workspace_root))
+    env = f2_p2_environment(
+        workspace_root=workspace_root,
+        manifest_path=manifest_path,
+        repo_root=repo_root,
+        rollout_id=rollout_id,
+        trajectory_run_id=trajectory_run_id,
+        traj_dir=resolve_f2_traj_dir(workspace_root),
+        isolation=isolation,
+        base=os.environ.copy(),
+    )
 
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)

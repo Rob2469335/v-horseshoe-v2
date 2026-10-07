@@ -1485,6 +1485,93 @@ suppression.
 
 ---
 
+### F2-IMPL-AUTH-027 - F2 isolation boundary: implementation record
+
+**Author:** Rob (human operator), implemented by the release agent on the
+operator's explicit instruction of 2026-10-07.
+
+**Status:** REPOSITORY-SIDE IMPLEMENTATION COMPLETE AND TESTED. The host/guest VM
+boundary is **BLOCKED - EXTERNAL PREREQUISITE** (no bootable guest image exists on
+this host). Not authorization to execute the experiment.
+
+**Baseline:** `master` @ `cdd47f6362a5ab067e481583a513b99365c4d3e7` (HEAD == origin,
+divergence 0 0). Implementation commit: `INFRA: implement governed F2 isolation
+boundary` (this entry's commit).
+
+#### Implemented (PROVEN in current revision)
+
+| Component | File | Behavior |
+|---|---|---|
+| F2 runtime guard (predicate + fail-closed probe + capability set) | `runtime_v2/services/f2_runtime_guard.py` (new) | `governed_f2()` keyed on `SWARM_F2_ISOLATION=1`; `assert_forbidden_services_unreachable()` classifies each endpoint `EXPECTED_UNREACHABLE` / `REACHABLE_VIOLATION` / `CHECK_ERROR` and raises `F2IsolationViolation` unless every probe is `EXPECTED_UNREACHABLE`; `strip_forbidden_f2_tools()`; `F2_FORBIDDEN_AGENT_TOOLS`. |
+| P2 background suppression | `swarm_os/app/main.py` | When `governed_f2()`: the MemoryBridge daemons, codebase-index self-heal daemon, external MCP init, task scheduler, reflection, atomic/genetic/evolution, autonomy watch-loop, intel, eval-tick, telegram, chess resume and system-probe warmup are NOT started. Sets `app.state.f2_background_suppressed`. Unset marker => normal Swarm OS startup unchanged. |
+| Fail-closed isolation assertion | `swarm_os/app/main.py` (lifespan, after replay install) | Governed boot calls the guard; if Qdrant `127.0.0.1:6333` or embedding `127.0.0.1:8081` is reachable (or uncheckable) it raises and P2 aborts before it is eligible to execute. |
+| Qdrant-backed capability suppression | `runtime_v2/api/_agent_helpers.py`, `runtime_v2/api/agent_service_v2.py` | Governed F2 removes `semantic_search`, `remember`, `deprecate_memory` from the arm tool surface before tool-schema delivery (inert `mcp`->`qdrant_recall` is additionally covered by MCP suppression). No-op outside governed F2. |
+| F2 P2 environment | `qwen_train/f2_execution_adapter.py` | `f2_p2_environment()` (pure, testable). Sets `SWARM_F2_ISOLATION=1` for the PRODUCTION model path (`start_real_p2_production_model`/`execute_arm_real`) and `SWARM_CODEBASE_INDEX=0` for every F2 P2. The fake-model infra proof passes `isolation=False` so it is unaffected. |
+| Model gateway | `qwen_train/f2_model_gateway.py` (new) | Forwards ONLY `POST /v1/chat/completions`, `POST /v1/completions`, `GET /v1/models` to the FIXED upstream (default `http://127.0.0.1:8080`). Enforces allow-listed client source; no arbitrary host/port/scheme/URL; no CONNECT/proxy; refuses redirects; bounded body (8 MiB); fail-closed 503 when upstream is unavailable; preserves streaming/SSE. `main()` refuses to bind `0.0.0.0`/`::`/empty or without an allowed client. |
+| VM provisioning | `qwen_train/f2_vm_provision.ps1` (new) | Dedicated INTERNAL switch + Generation-2 VM + static private subnet + default-deny extended ACLs with a single allow flow (guest -> host gateway TCP). Non-executing by default; refuses without a legitimate `-ImagePath`. |
+
+#### Suppression matrix (governed F2 P2)
+
+| Subsystem | Non-F2 | Governed F2 |
+|---|---|---|
+| MemoryBridge `watch_loop` / `start_manager_daemon` | starts | **suppressed** |
+| Codebase-index self-heal daemon | starts (`SWARM_CODEBASE_INDEX=1`) | **suppressed** (+ env `=0`) |
+| External MCP init (npx servers) | starts | **suppressed** |
+| Task scheduler daemon | starts | **suppressed** |
+| Reflection / genetic / evolution / autonomy / intel / eval-tick | env-gated | **suppressed** |
+| Telegram / chess resume / system-probe warmup | starts | **suppressed** |
+| `semantic_search` / `remember` / `deprecate_memory` tools | offered | **removed** |
+| Model API | local | local (through the gateway in the VM topology) |
+
+#### Tests (PROVEN in current revision)
+
+- `tests/test_f2_runtime_guard.py` - predicate; real-socket probe classification
+  (listening socket => `REACHABLE_VIOLATION`, closed port => `EXPECTED_UNREACHABLE`);
+  `assert_*` raises on reachable and on `CHECK_ERROR`; capability strip.
+- `tests/test_f2_isolation_suppression.py` - governed env marks isolation +
+  `SWARM_CODEBASE_INDEX=0`; capability strip governed-only; governed lifespan
+  suppresses background (`f2_background_suppressed` True, no scheduler/watch-loop);
+  normal lifespan unchanged.
+- `tests/test_f2_model_gateway.py` - allow-listed routes forward; disallowed
+  source (403), arbitrary path (404), Qdrant-style path (404), disallowed method
+  (404), oversized body (413), upstream unavailable (503), redirect refused (502),
+  destination fixed (client `Host` cannot change it), streaming content-type
+  preserved.
+- Results: `pytest tests/test_f2_runtime_guard.py tests/test_f2_isolation_suppression.py tests/test_f2_model_gateway.py` => 27 passed. Full `tests/test_f2_*.py` + `tests/test_agents_smoke.py` => 1438 passed, 5 skipped, 0 failed. `ruff check <changed> --select E9,F` clean.
+
+#### Host / Hyper-V result
+
+`Get-VM` returned ZERO VMs. No bootable Windows guest VHDX and no ISO exists
+locally (only WSL/Claude/container helper VHDs). The Hyper-V feature is Enabled;
+the only switch is the Internal `Default Switch`. Therefore the dedicated
+Internal-switch F2 VM could **NOT** be instantiated without a legitimate guest OS
+image, and none was downloaded. This is `BLOCKED - EXTERNAL PREREQUISITE`; the
+provisioning script above is delivered and unexecuted.
+
+#### Scientific invariants (unchanged)
+
+T/X assignment, C0, pairing, randomization, task population, primary endpoint,
+first relevant edit, stopping rules, rediscovery, provenance, receipt semantics,
+clean-room requirements, and the statistical method are untouched. Qdrant/embedding
+availability is an ENVIRONMENT decision applied identically to both arms.
+
+#### NOT ESTABLISHED
+
+- Sandbox/VM-to-host reachability and default-deny ACL behavior on THIS host (no
+  VM launched).
+- Intel iGPU Vulkan passthrough into a guest (not attempted; model stays host-side).
+- P2 boot inside the guest and end-to-end gateway traversal.
+- `tests/test_f2_isolation_suppression.py` lifespan assertions are in-process
+  (`app.state`), not a real second OS.
+
+#### REQUIRES AUTHORIZATION
+
+Running `qwen_train/f2_vm_provision.ps1`; creating the Internal switch / VM;
+starting the model gateway and binding the Internal interface; any firewall /
+account change; the P2 host/guest execution split; and any F2 experiment run.
+
+---
+
 *Authorized: 2026-09-29*
 *Operator: Rob (human operator)*
 *Scope: F2 orchestrator implementation — bounded file set (§10), scientific design unchanged (§3-§9)*
