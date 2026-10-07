@@ -651,6 +651,17 @@ NETWORK (Q9). Windows-native, because the host is Windows 11. Preferred: run the
 
 SANDBOX. Windows Sandbox (hypervisor-backed) with `<ProtectedClient>Enable</ProtectedClient>`. ACCEPTANCE: fresh instance per arm; no persistence between arms; only the task workspace is mapped; the evaluator, the reference truth and other arms are NOT mapped and are unreachable; `.git` future history is absent. NOTE: a mapped folder with write permission PERSISTS after disposal, so the host-side result must be re-verified after the sandbox closes.
 
+> **RECONCILIATION NOTE (2026-10-07, F2-IMPL-AUTH-025).** The NETWORK/SANDBOX Q9
+> contract immediately above assumes the model runs INSIDE Windows Sandbox and is
+> reached over loopback from the arm. A completed isolation-boundary investigation
+> and authoritative platform research found that assumption in tension with this
+> host's real architecture (local Intel iGPU/Vulkan model; Windows Sandbox vGPU is
+> graphics-oriented, not a supported generic Vulkan compute passthrough). This
+> contract is therefore **PROVISIONAL / UNDER RECONSIDERATION**; its original text
+> is preserved verbatim above as history. See the `F2-IMPL-AUTH-025` entry at the
+> end of this document. **No F2 execution may use a revised topology until that
+> topology is formally authorized.**
+
 POPULATION (Q1). Source MUST be contamination-resistant: SWE-rebench or SWE-bench-Live, NOT vanilla SWE-bench (measured 32.67 percent direct solution leakage, 31.08 percent inadequate tests). ACCEPTANCE: frozen digest; every instance created after the model training cutoff; held-out provenance recorded; contamination screen passed; endpoint derived by `reference_modified_file_set_v1`; reference fix unique (the current fail-closed refusal of ambiguous references is preserved); relevant_file_set frozen; minimum N 19, target 85.
 
 SECRETS (Q7, Q11). Owner: the operator. Location: the operator's `.env` only. Scope: never in the arm workspace, never in task files, never in logs, never in the bundle payload, never in a model prompt. `SWARM_DISTILLER_MODEL` and `SWARM_DISTILLER_WEIGHTS_DIGEST` are read by `lesson_distiller.default_local_identity` (fail-closed, already verified). `SWARM_RECEIPT_KEY` is read by `prompt_repairer._receipt_key` (env-only, fail-closed, already verified). ACCEPTANCE: missing key fails closed; wrong key fails; tampered receipt fails; a valid trusted receipt succeeds.
@@ -1134,6 +1145,255 @@ New tests exist to fail loudly if a later change drifts the design: alpha = .05,
 | **REMAINING PROVENANCE GAP** | the adapter-to-GGUF conversion record. No conversion script exists in the repository and none is invented. |
 
 **Green software gates are NOT experimental readiness.** The repository can verify isolation but not impose it, and can validate evidence but not produce it.
+
+---
+
+### F2-IMPL-AUTH-025 - F2 Isolation Boundary: Research Reconciliation and Topology Decision Gate
+
+**Author:** Rob (human operator), recorded by the release agent on the operator's
+explicit instruction of 2026-10-07.
+
+**Authority.** Recorded under 13(4) and 13(7) on the operator's explicit
+instruction of 2026-10-07. This is a **documentation/governance entry only**. It
+reconciles the historical Q9/Sandbox contract (F2-IMPL-AUTH-009 section 3) with a
+completed isolation-boundary investigation and authoritative platform research. It
+authorizes **no** infrastructure, **no** code change, and **no** execution. The
+recommended topology is a **proposal**.
+
+**Status:** RECOMMENDED / PROPOSED - **NOT IMPLEMENTATION AUTHORIZATION.**
+
+**Baseline of this record:** `master` @ `683c3e82ef6a3def9ebb68ecdfffaa476e8efe63`
+(HEAD == `origin/master`; divergence `0 0` at recording). The working tree carried
+unrelated pre-existing changes (`tests/conftest.py` modified; untracked
+investigation artifacts) that this entry does not touch, adopt, or represent as
+repository membership.
+
+#### A. Current-state verified architecture
+
+| Fact | Evidence | Classification |
+|---|---|---|
+| Local model endpoint is loopback-bound | `runtime_v2/services/_llm_client.py` `_endpoint_for` returns `http://127.0.0.1:8080/v1` (local generation) and `http://127.0.0.1:8083/v1` (vision); `runtime_v2/services/model_router.py:454` `uvicorn.run(app, host="127.0.0.1", port=8080)` | PROVEN |
+| Qdrant endpoint is loopback-bound | `swarm_os/core/settings.py:25` `qdrant_url = "http://127.0.0.1:6333"`; `swarm_os/lib/vector/qdrant_store.py:27` `QDRANT_URL` default same; a LISTEN socket on `127.0.0.1:6333/6334` was observed on 2026-10-07 | PROVEN |
+| Untrusted task/tool execution runs in the P2/backend process | `qwen_train/cli_baseline_swe.py:105` ("The agent's TOOLS execute in the BACKEND process"); `qwen_train/f2_execution_adapter.py` starts P2 as a fresh `uvicorn` of `swarm_os.app.main:app` bound `127.0.0.1` | PROVEN |
+| Current containment is path/in-process, not an OS/hypervisor boundary | `runtime_v2/services/tool_executor.py` (`WORKSPACE_ROOT_CTX`, `_contained()`, module-level `_ROOT`); no kernel/VM boundary | PROVEN |
+| The main repository must never be the mutable task workspace | `qwen_train/f2_execution_adapter.py` `bind_task_environment` (fail-closed); `qwen_train/arm_workspace.py` `resolve_required_workspace_root` | PROVEN |
+| Evaluator/reference truth must remain outside the mutable workspace and unavailable during agent execution | `docs/EXPERIMENT_J_F2_OP_INFRA_004_AUTHORIZATION.md` section 4; F2-IMPL-AUTH-009 section 3 (REFERENCE TRUTH) | PROVEN (authority) |
+| `f2_isolation` recognises enforcement scopes `windows_account`, `firewall_program_path`, `vm`, `windows_sandbox`, and records two Windows firewall platform limits | `qwen_train/f2_isolation.py` `ENFORCEMENT_SCOPE_MODELS`, `PLATFORM_LIMITS` | PROVEN |
+| Host has Hyper-V and Windows Sandbox features enabled; only an **Internal** `Default Switch` exists; no NAT is configured | `dism` / `Get-VMSwitch` / `Get-NetNat` (re-probed 2026-10-07) | PROVEN |
+| Host has no discrete GPU; the local model runs on the integrated Intel iGPU via the Vulkan path | `AGENTS.md` section 4 (hardware trap); `start-dev.ps1` (llama.cpp `-ngl 99`) | SUPPORTED |
+
+#### B. Why the historical model-inside-Sandbox design conflicts with the current host architecture
+
+F2-IMPL-AUTH-009 section 3 (NETWORK/SANDBOX) assumes Windows Sandbox is the
+execution boundary and the model is reached over **loopback from inside the
+sandbox** - i.e. the model would run **inside** the sandbox. That assumption is in
+tension with this host: the served model depends on the integrated Intel iGPU
+(Vulkan), and Microsoft's GPU-paravirtualization documentation describes WDDM/D3D
+graphics paravirtualization, not a supported generic Vulkan compute passthrough.
+There is therefore **no established basis** that the model can run inside a guest
+here with equivalent acceleration. As written, the historical contract is not
+satisfiable on the current host without either (a) moving the model off its
+accelerator or (b) exposing host-side services beyond loopback. This is a
+**governance conflict**, not merely an engineering inconvenience, so
+F2-IMPL-AUTH-009 section 3 NETWORK/SANDBOX is marked **PROVISIONAL / UNDER
+RECONSIDERATION** (its text is preserved above, unaltered).
+
+#### C. Windows Sandbox limitations relevant to F2 (platform facts)
+
+Per Microsoft primary documentation (see section K):
+
+- Networking is **enabled by default** and uses the **Hyper-V Default Switch**;
+  Microsoft warns this "can expose untrusted applications to the internal network."
+- A sandbox's `localhost`/`127.0.0.1` is the **guest's own loopback**, so a host
+  service bound to `127.0.0.1` is **not automatically reachable** from the sandbox.
+- **Mapped folders cross the host/guest boundary**; a writable mapped-folder change
+  **persists after disposal**, and even a read-only mapping exposes host files to
+  guest code.
+- **Protected Client** adds AppContainer isolation (credential/device/file/network/
+  process/window), at the cost of restricting copy/paste.
+- The sandbox is **disposable** and is tied to the **host OS build**; only one
+  instance runs at a time; there is no persistence between sessions.
+
+Operational consequence for F2: a non-persistent sandbox cannot carry F2's declared
+execution toolchain (`py -3.10`, git, node/npm, pytest) reproducibly across the
+paired F2 task population without re-provisioning per arm.
+
+#### D. Hyper-V Internal-switch semantics (platform facts)
+
+Per Microsoft primary documentation:
+
+- **External** switch binds a physical NIC (external connectivity).
+- **Internal** switch connects the host to the VMs (and VMs to each other) -
+  host-to-guest - **without** external-network connectivity.
+- **Private** switch connects VMs to each other with **no** host connectivity.
+- **NAT** (internal switch + NAPT) provides external access.
+
+Therefore the F2 untrusted guest must use a **dedicated Internal switch** and must
+**not** use an External switch or NAT/uplink.
+
+#### E. Recommended topology (PROPOSED - not authorized)
+
+```
+HOST
+ |-- local model / iGPU (llama.cpp, Vulkan)            [host-side]
+ |-- narrow host-side model gateway    (future; REQUIRES AUTHORIZATION)
+ |-- Qdrant / control / evidence services (as required; NOT auto-exposed)
+ |-- evaluator / reference truth (outside guest; unavailable during execution)
+ |
+ +-- Hyper-V INTERNAL switch (no External, no NAT/uplink)
+        |
+        +-- dedicated F2 VM
+              |-- P2 / backend
+              |-- model-generated untrusted tools / code
+              |-- only the required task workspace
+              |-- no host credentials; no general host filesystem
+              |-- controlled evidence transfer
+              |-- clean per-arm reset/revert
+```
+
+The host-side model remains **outside** the untrusted execution boundary unless a
+separately authorized investigation establishes safe accelerator passthrough. The
+guest reaches the model only through a **narrowly scoped host-side gateway**.
+
+#### F. Proposed security invariants (PROPOSED ARCHITECTURE REQUIREMENTS - NOT YET IMPLEMENTATION AUTHORIZATION)
+
+1. No External Hyper-V switch for F2 execution.
+2. No NAT/uplink for the untrusted guest.
+3. Default-deny guest egress.
+4. No unrestricted host-service exposure.
+5. No Qdrant `0.0.0.0` rebinding shortcut.
+6. No general host filesystem mounts.
+7. No host credential inheritance; no host credential directories mounted.
+8. Workspace-only mutable task state.
+9. Controlled evidence transfer/export.
+10. Clean per-arm reset/revert (or equivalent clean-room mechanism).
+11. Host-side model remains outside the untrusted boundary unless safe accelerator
+    passthrough is separately established.
+12. Model access is narrowly scoped.
+13. The host-side model gateway fails closed.
+14. Evaluator/reference truth remains unavailable to the untrusted guest.
+15. The topology must not weaken F2 provenance semantics.
+16. The topology must not weaken receipt controls.
+17. The topology must not alter the scientific design (see section G).
+
+**Model gateway requirements (future authorization; not implemented here).** Expose
+only the minimum required model API; no generic TCP forwarding; no arbitrary
+host-interface access; bind only to the intended Internal-switch interface; reject
+unintended source identities/interfaces; fail closed; no route to
+Qdrant/control/evidence unless separately authorized; preserve model-call
+provenance; never expose the Wi-Fi/LAN interface.
+
+**Qdrant decision gate.** Qdrant reachability from the isolated P2 environment is
+**NOT ESTABLISHED** as a required architectural dependency. A future implementation
+investigation must determine whether (A) F2 replay works with Qdrant unavailable;
+(B) only a narrow Qdrant-derived capability is needed; (C) a controlled host-side
+gateway is needed; or (D) another explicitly authorized mechanism is required.
+Qdrant is an **unauthenticated stateful service**; **raw guest-to-Qdrant exposure is
+prohibited pending explicit authorization and a security design.** Qdrant must not
+be rebound to `0.0.0.0`, and must not be exposed on the Wi-Fi/LAN interface, to make
+current code work.
+
+**Alternative - Windows account / firewall / ACL boundary.** Prior investigation
+proposed a dedicated non-admin `F2Arm` account with identity-scoped outbound
+firewall controls and least-privilege ACLs (repo/model/data/evidence), with loopback
+access kept open. It is recorded as **ALTERNATIVE - WINDOWS ACCOUNT / FIREWALL /
+ACL BOUNDARY** and must be treated as **LOWER ASSURANCE THAN A HYPERVISOR VM
+BOUNDARY**. It is **NOT AUTHORIZED** and **NOT PROVEN AS EFFECTIVE**; it must not be
+represented as equivalent to a hypervisor boundary and must not be implemented
+during this documentation task.
+
+**Enforcement history (preserved, not promoted).** Prior host investigation observed
+that tested Windows Firewall Q9 rules appeared inert and that Avast was registered
+as an active security/network-filtering component; the exact policy causation was
+**NOT ESTABLISHED**. This is retained as `HISTORICALLY OBSERVED`. It must not be
+stated that Avast definitively enforces the final F2 policy, nor that Windows
+Firewall is incapable of enforcing the final boundary, unless current authoritative
+evidence proves it. Privileged host provisioning (accounts, firewall, ACLs) requires
+explicit operator action and is outside autonomous repository implementation; no
+credential values belong in the repository. An observed ACL/process walk during
+prior provisioning attempts is recorded as `HISTORICALLY OBSERVED - NOT VALIDATION
+OF FINAL ISOLATION`.
+
+#### G. Scientific invariants (unchanged by this entry)
+
+This reconciliation is infrastructure-only. It does **not** alter, and must not be
+used to alter: treatment/control (T/X/C0) assignment; task population; pairing;
+randomization; primary endpoint; stopping rules; statistical analysis (exact
+two-sided McNemar, alpha, power, delta, CI); provenance semantics; receipt
+semantics; task identity; or clean-room requirements. Any infrastructure change
+that would force a scientific-contract change requires **separate authorization**.
+
+#### H. Evidence classification
+
+| Finding | Evidence | Classification | Status |
+|---|---|---|---|
+| Model is loopback-bound | current source (`_llm_client.py`, `model_router.py`) | PROVEN | current |
+| Qdrant is loopback-bound | current source (`settings.py`, `qdrant_store.py`); observed LISTEN | PROVEN | current |
+| Tools execute in the backend process | current source (`cli_baseline_swe.py:105`) | PROVEN | current |
+| Current containment is path/in-process only | current source (`tool_executor.py`) | PROVEN | current |
+| Sandbox networking default / Default Switch | Microsoft Learn | SUPPORTED platform fact | current platform |
+| Sandbox mapped-folder host-exposure / persistence | Microsoft Learn | SUPPORTED platform fact | current platform |
+| Hyper-V Internal-switch semantics | Microsoft Learn | SUPPORTED platform fact | current platform |
+| VM-class boundary recommendation | research synthesis | SUPPORTED / INFERRED | recommendation |
+| Host-side model required (no proven guest passthrough) | architecture synthesis | INFERRED | recommendation |
+| Qdrant required by F2 replay | insufficient evidence | NOT ESTABLISHED | open |
+| Intel iGPU Vulkan passthrough into a guest | insufficient evidence | NOT ESTABLISHED | open |
+| Exact firewall enforcement cause | prior host investigation | NOT ESTABLISHED (`HISTORICALLY OBSERVED` rules appeared inert) | open |
+| Windows-account boundary | prior proposal (`f2_q9_proposed/`, untracked) | PROPOSED / NOT PROVEN | alternative |
+| Hyper-V VM / Internal-switch implementation | governance | REQUIRES AUTHORIZATION | blocked |
+| Model gateway implementation | governance | REQUIRES AUTHORIZATION | blocked |
+
+#### I. Governance status
+
+- **Historical authorization** (F2-IMPL-AUTH-009 section 3 NETWORK/SANDBOX) -
+  preserved, marked **PROVISIONAL / UNDER RECONSIDERATION**.
+- **Investigation result** - actual host/model architecture conflicts with the
+  historical topology.
+- **Deep research** - Microsoft primary documentation and current security research
+  strengthen the concerns.
+- **Recommendation** - Hyper-V VM + Internal switch + host-side model gateway.
+- **Current status** - **RECOMMENDED / PROPOSED. NOT AUTHORIZED FOR IMPLEMENTATION.**
+
+Research wording is deliberately conservative: *"Current security research and
+production agent-sandbox designs increasingly favor VM/microVM-class isolation for
+high-risk LLM-generated execution."* This is not a claim of formal consensus.
+
+#### J. Explicit implementation gate
+
+**NO F2 EXECUTION MAY USE THE REVISED TOPOLOGY UNTIL THE TOPOLOGY ITSELF IS
+FORMALLY AUTHORIZED.**
+
+Before any implementation, a new or amended F2-IMPL-AUTH decision must explicitly
+authorize: Hyper-V VM creation; Internal-switch creation; guest networking; the
+default-deny egress mechanism; the model gateway; host-side model access; the Qdrant
+reachability decision; firewall/ACL/account changes; the evidence-transfer
+mechanism; the P2 host/guest execution split; and any required F2 implementation
+changes. Until then, all of the above are `REQUIRES AUTHORIZATION`.
+
+#### K. Authoritative external references
+
+Microsoft primary documentation:
+
+- Use and configure Windows Sandbox - https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file
+- Windows Sandbox sample configuration - https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-sample-configuration
+- Windows Sandbox FAQ - https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-faq
+- Plan Hyper-V networking (switch types) - https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/plan/plan-hyper-v-networking-in-windows-server
+- Set up a NAT network - https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/setup-nat-network
+- GPU paravirtualization (WDDM) - https://learn.microsoft.com/en-us/windows-hardware/drivers/display/gpu-paravirtualization
+
+Security research (arXiv; research, not platform fact):
+
+- DeepSeek Elastic Compute (DSec): a sandbox infrastructure for effective agentic
+  training at scale - arXiv:2609.22978
+- Quantifying frontier LLM capabilities for container sandbox escape -
+  arXiv:2603.02277
+- Sandlock: confining AI agent code with unprivileged primitives - arXiv:2605.26298
+- Isolation as a first-class principle for LLM-agent system safety - arXiv:2607.12406
+- SandboxEval: securing the test environment for untrusted code - arXiv:2504.00018
+
+Vendor/community guidance (lower authority; context only): agent-sandboxing
+guidance from Safeguard, Zylos and PandaStack; `kubernetes-sigs/agent-sandbox`;
+`huggingface/smolagents` secure-code-execution documentation.
 
 ---
 

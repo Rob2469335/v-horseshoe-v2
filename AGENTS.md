@@ -18,6 +18,7 @@ and historical record. Those have owners — see *Authority Map* below.
 | What is the current Experiment J state / next step? | `docs/LEARNING_EXPERIMENT_STATE.md` | live experiment state |
 | What is authorized for F2 execution? | `docs/EXPERIMENT_J_F2_EXECUTION_CONTRACT_AUTHORIZATION.md` and the other `docs/EXPERIMENT_J_F2_*_AUTHORIZATION.md` files | F2 execution |
 | May F2 be run yet, and in what order? | `docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` + `python -m qwen_train.f2_preflight` | execution readiness (**fail-closed**) |
+| What is the F2 isolation boundary / topology? | `docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md` (F2-IMPL-AUTH-025) | F2 isolation architecture — **RECOMMENDED, not yet authorized** |
 | What happened in the past? | `WORK_LOG.md` | historical memory (**editable**) |
 | What is actually committed? | Git / GitHub `master` | implementation + provenance |
 | Is the test suite safe to run broadly? | `docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md` + `docs/PROMPTREPAIRER_LIFESPAN_ISOLATION_REMEDIATION.md` | test/store isolation |

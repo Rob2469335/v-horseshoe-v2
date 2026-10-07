@@ -489,6 +489,17 @@ passing record.
 
 ## 4. Q9 — what an administrator must actually provide
 
+> **Isolation-boundary reconciliation (2026-10-07, F2-IMPL-AUTH-025).** The
+> enforcement scope below is framed around a host identity / Windows Sandbox. A
+> completed investigation recommends a Hyper-V VM on an Internal switch with a
+> narrowly scoped host-side model gateway, and marks the older
+> model-inside-Sandbox contract (F2-IMPL-AUTH-009 section 3) **PROVISIONAL**. This
+> does not change the fact that **egress enforcement is still the missing
+> privileged layer**. See
+> `docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md`
+> (F2-IMPL-AUTH-025). **No F2 execution may use a revised topology until it is
+> formally authorized.**
+
 The architecture is deliberately layered, and each layer does exactly one job:
 
 ```
