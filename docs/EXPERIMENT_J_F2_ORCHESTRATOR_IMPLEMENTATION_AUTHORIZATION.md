@@ -1397,6 +1397,94 @@ guidance from Safeguard, Zylos and PandaStack; `kubernetes-sigs/agent-sandbox`;
 
 ---
 
+### F2-IMPL-AUTH-026 - F2 Qdrant/embedding dependency resolution and fail-closed suppression requirement
+
+**Author:** Rob (human operator), recorded by the research agent on the operator's
+explicit instruction of 2026-10-07.
+
+**Status:** FINDING / RECOMMENDED - **NOT IMPLEMENTATION AUTHORIZATION.** This entry
+resolves the Qdrant decision gate left open by F2-IMPL-AUTH-025. It authorizes no
+code change, no infrastructure, and no execution.
+
+**Baseline:** `master` @ `e2f98aae31cbd01b88194190e062bb99f79f9ba6`.
+
+**Question resolved (F2-IMPL-AUTH-025 Qdrant decision gate).** Can a governed F2 P2
+arm operate without Qdrant, the embedding service (`:8081`), and the background
+codebase-index/memory infrastructure, while preserving the F2 scientific / replay /
+provenance contract?
+
+**Verdict:** **QDRANT NOT REQUIRED FOR THE F2 TRAJECTORY** - but the current P2
+launch does **NOT** fail closed without it. This is a `GOVERNANCE GAP`, not a
+causal dependency.
+
+**Authority (F0, frozen).** `docs/EXPERIMENT_J.md` section 15: *"Qdrant
+snapshot/restore is NOT a primary T/X causal requirement because T/X replay frozen
+treatment artifacts rather than invoking live retrieval. Qdrant is relevant only
+for producing/persisting the genuine lesson L at F2 (via `LessonManager.store()`)
+and recording the provenance state hash for audit. Qdrant state control is an
+operational requirement for C0/learning-event isolation, not a T/X causal-control
+requirement."*
+
+**Code evidence (current, `e2f98aae`).**
+
+- Model path is local and Qdrant-free: `runtime_v2/services/_llm_client.py`
+  `_endpoint_for` -> `http://127.0.0.1:8080/v1`; `runtime_v2/services/model_router.py:454`
+  binds `127.0.0.1:8080`. No vector call on the model path.
+- Replay delivery uses the frozen artifact; `install_verified_replay_from_env()`
+  fails closed (`swarm_os/app/main.py` lifespan, replay block ~lines 541-560).
+- Memory augmentation disabled: `runtime_v2/services/stream_runner.py:688-691`
+  ("`SWARM_MEMORY_INJECT=0` disables ALL memory augmentation"); the F2 P2 env sets it.
+- F2 P2 env (`qwen_train/f2_execution_adapter.py` `_start_real_p2`, lines ~488-504):
+  `SWARM_MEMORY_INJECT=0`, `SWARM_AUTONOMY=0`, `SWARM_EVOLUTION=0`,
+  `SWARM_GENETIC_MUTATION=0`, `SWARM_SEMANTIC_CACHE=0`, `SWARM_F1_NO_WEB_TOOLS=1`.
+
+**Dependency table (governed F2 arm).**
+
+| Capability | Exact code path | Required for F2? | Evidence | Classification |
+|---|---|---|---|---|
+| Model API (`:8080`) | `_llm_client._endpoint_for` -> `model_router` | YES | F2 production model seam | PROVEN |
+| Tool execution (filesystem/git/sandbox_repl) | `runtime_v2/services/tool_executor.py` | YES | coder `_AGENT_TOOLS` | PROVEN |
+| Qdrant (causal / T-X treatment) | F0 section 15 | NO | T/X replay frozen artifacts | PROVEN (authority) |
+| Qdrant startup dependency | `main.py` lifespan (try/except, lazy clients) | NO | boot does not block on Qdrant | SUPPORTED |
+| Qdrant read (memory injection) | `stream_runner.py:691` | NO | `SWARM_MEMORY_INJECT=0` | PROVEN |
+| Codebase-index daemon | `swarm_os/app/main.py:342-377` | NO (background) | gated `SWARM_CODEBASE_INDEX` default `"1"`; **not** set by F2 env | PROVEN |
+| MemoryBridge daemons | `main.py:228-236`; `swarm_os/core/orchestrator.py:137` | NO (background) | no env gate; runs because `orchestrator.bridge` always exists | PROVEN |
+| External MCP init | `main.py:210-226` | NO (background) | npx servers (sqlite/memory/context7); try/except | PROVEN |
+| Task scheduler / reflection / evolution | `main.py:437-445, 252+, 389+` | NO | scheduler always on; reflection/evolution gated off by F2 env | PROVEN |
+| Qdrant-backed agent tools | `_AGENT_TOOLS["coder"]` (`semantic_search`, `remember`, `deprecate_memory`, `mcp`->`qdrant_recall`) | NO (optional) | degrade gracefully | SUPPORTED |
+| Evaluator / reference truth | OP-INFRA-004 section 4; -009 (REFERENCE TRUTH) | MUST NOT reach P2 | sequestered | PROVEN (authority) |
+
+**Fail-closed suppression mechanism required (PROPOSED; REQUIRES AUTHORIZATION).**
+Before the isolation boundary is real, a governed F2 P2 MUST declare and enforce,
+identically for T and X: (1) Qdrant `:6333` and embedding `:8081` unreachable;
+(2) codebase-index daemon off (`SWARM_CODEBASE_INDEX=0`); (3) MemoryBridge daemons
+off; (4) background learning/reflection/evolution off; (5) Qdrant-backed agent tools
+suppressed or explicitly declared unavailable. Smallest proposed change set (not
+authorized here): set `SWARM_CODEBASE_INDEX=0` in
+`qwen_train/f2_execution_adapter.py` `_start_real_p2` (and keep `qwen_train/f1_infra.py`
+`start_backend_fresh` parity if F1 is in scope); add a P2-startup declaration/assertion
+that Qdrant `:6333` and embedding `:8081` are unreachable before P3; gate the
+MemoryBridge daemons on a no-memory mode (change to `swarm_os/app/main.py` or
+`swarm_os/core/orchestrator.py`); optionally extend the existing
+`SWARM_F1_NO_WEB_TOOLS`-style strip to the Qdrant-backed tools.
+
+**Scientific invariants (unchanged).** T/X assignment; pairing; randomization; task
+population; primary endpoint; first relevant edit; stopping rules; exact McNemar;
+mixed-effects sensitivity; provenance semantics; receipt semantics; clean-room
+requirements. Making Qdrant unavailable is an ENVIRONMENT decision applied
+identically to both arms; it does not alter the treatment artifact or the causal
+contrast. Any mechanism that would change the above requires separate scientific
+authorization.
+
+**Authorization gate.** The suppression above requires code changes outside the
+current F2-OP-INFRA-004 file scope (`swarm_os/app/main.py`,
+`swarm_os/core/orchestrator.py`) plus a contract amendment, and is therefore
+`REQUIRES AUTHORIZATION`. Until authorized, no F2 execution may assume Qdrant-free
+operation, and Qdrant must not be exposed to any guest as a substitute for the
+suppression.
+
+---
+
 *Authorized: 2026-09-29*
 *Operator: Rob (human operator)*
 *Scope: F2 orchestrator implementation — bounded file set (§10), scientific design unchanged (§3-§9)*
