@@ -731,4 +731,53 @@ No VM, switch, adapter, firewall, Avast, ACL, account, `.env`, or secret was
 touched. Boundary remains `BLOCKED — EXTERNAL PREREQUISITE` (no official guest
 install media).
 
+## 2026-10-07 (preflight) - F2 isolation: timeout, clock, input and probe contracts
+
+**Timeout contract defined and corrected.** Traced the model path: the model
+client's streaming ceiling is **900 s** (`runtime_v2/services/_llm_client.py:617,633`);
+the F2 model gateway's upstream timeout was only 300 s (would cut a long stream)
+and is now **960 s**; the Hyper-V stateful ACL idle session timeout is now
+**1800 s** (was 300), so the ordering is 900 < 960 < 1800. `qwen_train/f2_isolation_contract.py`
+declares the contract and `tests/test_f2_isolation_timeouts.py` proves it; the
+provisioner has an `IdleSessionTimeoutSeconds = 1800` parameter and the static
+ACL test cross-checks it.
+
+**Clock analysis corrected + guest clock guard added.** `delivery_timestamp`
+(`runtime_v2/services/f2_replay.py:342`) is generated in P2 and, once P2 runs in
+the guest, is **guest-clock-originated**, distinct from the host
+`freeze_timestamp` (`runtime_v2/services/f2_freeze.py:111`). The 2025-01-01
+delivery floor (`qwen_train/f2_protocol.py:175`, `_DELIVERY_EPOCH_FLOOR`,
+enforced at `:236`/`:262`) is a **validity** check with no upper bound, not an
+ordering check. New `qwen_train/f2_clock_guard.py` compares the guest UTC clock to
+`host_reference_utc` from the input manifest (no host contact) with a 120 s
+tolerance and fails closed as `GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`;
+`tests/test_f2_clock_guard.py` covers the boundary cases. Final F2 keeps Hyper-V
+Time Synchronization disabled; a one-time install-time clock set is a separate
+bootstrap phase, not final synchronization.
+
+**Zero-network install invariant.** Removed the "temporary install-time network"
+language: the VM has exactly one NIC attached only to the isolated F2 Internal
+switch at all times; Windows install must complete offline or STOP.
+
+**Host exposure inventoried (read-only).** Qdrant (6333/6334) and Avast bind
+`127.0.0.1` only and are not guest-reachable. `0.0.0.0` listeners (135, 2179,
+11435, 16992/16993, …) would be reachable at 10.72.0.1 only if the ACL fails —
+that is what the guest probe tests. Recorded in
+`docs/EXPERIMENT_J_F2_VM_ISOLATION.md` §10.
+
+**Offline input mechanism chosen: read-only VHDX** (not ISO): no ADK/`oscdimg`
+install, no download, inherent read-only attach, easy SHA-256 manifest. Builder
+`qwen_train/f2_input_bundle.ps1` is plan-only by default (proven: no VHDX/manifest
+created on a plan run; `tests/test_f2_input_bundle.py`).
+
+**Guest probe bundle added.** `qwen_train/f2_guest_probe.ps1` (emits JSON;
+clock, adapter/route/DNS inventory, authorized 8099 + `/v1/models`, denied ports,
+IPv6/ICMP/Internet) with schema `qwen_train/f2_probe_schema.py` and
+`tests/test_f2_probe_schema.py`. The probe does not invoke any F2 execution path.
+
+88 focused tests pass; ruff E9,F clean on changed files; all three PowerShell
+scripts parse. No VM/switch/adapter/firewall/Avast/ACL/account/.env/secret was
+touched. Boundary remains `BLOCKED — EXTERNAL PREREQUISITE` (no official guest
+install media).
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

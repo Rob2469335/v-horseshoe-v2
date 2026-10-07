@@ -55,7 +55,12 @@ param(
 
     [int]$ProcessorCount = 2,
     [int64]$MemoryStartupBytes = 4GB,
-    [int64]$OsDiskSizeBytes = 64GB
+    [int64]$OsDiskSizeBytes = 64GB,
+
+    # Hyper-V stateful ACL idle session timeout, in SECONDS. Must exceed the
+    # longest upstream application timeout (qwen_train/f2_isolation_contract.py):
+    # 1800 s > 960 s gateway > 900 s model streaming client ceiling.
+    [int]$IdleSessionTimeoutSeconds = 1800
 )
 
 $ErrorActionPreference = "Stop"
@@ -67,7 +72,7 @@ Write-Host "== F2 Hyper-V isolation provisioning =="
 Write-Host "Switch      : $SwitchName (Internal ONLY; no External, no NAT, no uplink)"
 Write-Host "VM          : $VmName (Generation 2; EXACTLY ONE NIC)"
 Write-Host "Subnet      : $HostGatewayIp/$PrefixLength (host) <-> $GuestIp/$PrefixLength (guest)"
-Write-Host "Allowed     : guest $GuestIp -> host gateway $HostGatewayIp`:$GatewayPort TCP (stateless-off / stateful session)"
+Write-Host "Allowed     : guest $GuestIp -> host gateway $HostGatewayIp`:$GatewayPort TCP (stateful, idle $IdleSessionTimeoutSeconds s)"
 Write-Host "Denied      : everything else, BOTH directions, IPv4+IPv6 (Qdrant :6333, embedding :8081, LAN, internet, ICMP)"
 Write-Host "Gateway     : F2_GATEWAY_BIND_HOST=$HostGatewayIp F2_GATEWAY_BIND_PORT=$GatewayPort F2_GATEWAY_ALLOWED_CLIENT=$GuestIp F2_MODEL_UPSTREAM=$UpstreamBaseUrl"
 Write-Host "Media       : IsoPath='$IsoPath' GoldenVhdx='$GoldenVhdx'"
@@ -196,7 +201,7 @@ if ((Get-VM -Name $VmName).State -ne "Off") {
     Write-Step "ACL: ALLOW outbound guest->gateway TCP $GatewayPort, STATEFUL (weight 100, idle 300s)"
     Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Outbound -Action Allow `
         -LocalIPAddress $GuestIp -RemoteIPAddress $HostGatewayIp -RemotePort $GatewayPort `
-        -Protocol TCP -Weight 100 -Stateful $true -IdleSessionTimeout 300 | Out-Null
+        -Protocol TCP -Weight 100 -Stateful $true -IdleSessionTimeout $IdleSessionTimeoutSeconds | Out-Null
     Write-Step "ACL: DENY outbound catch-all ANY (IPv4+IPv6), all protocols (weight 1)"
     Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Outbound -Action Deny `
         -LocalIPAddress ANY -RemoteIPAddress ANY -Weight 1 | Out-Null

@@ -44,7 +44,9 @@ _CONSIDERED_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD
 
 DEFAULT_UPSTREAM = "http://127.0.0.1:8080"
 DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024  # 8 MiB
-DEFAULT_TIMEOUT_S = 300.0
+# Must exceed the model client streaming ceiling (900 s) so a long stream is not
+# cut off by the gateway; see qwen_train/f2_isolation_contract.py.
+DEFAULT_TIMEOUT_S = 960.0
 
 #: Bind hosts the gateway must REFUSE (would expose it beyond the F2 boundary).
 _UNSAFE_BIND_HOSTS = frozenset({"0.0.0.0", "::", "", "*"})

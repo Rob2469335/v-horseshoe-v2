@@ -61,7 +61,10 @@ def test_allow_is_explicitly_stateful(text):
 
 def test_allow_timeout_is_int_seconds_not_timespan(text):
     allow = _allow(text)[0]
-    assert "-IdleSessionTimeout 300" in allow, "timeout must be Int32 seconds (=300)"
+    assert "-IdleSessionTimeout $IdleSessionTimeoutSeconds" in allow, (
+        "timeout must be a named Int32-seconds parameter"
+    )
+    assert "[int]$IdleSessionTimeoutSeconds = 1800" in text, "default must be 1800 s"
     assert "New-TimeSpan" not in _normalized(text), "TimeSpan is not a valid timeout type"
     assert "IdleSessionTimeout (" not in _normalized(text)
 
