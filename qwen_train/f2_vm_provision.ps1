@@ -189,20 +189,47 @@ if ((Get-VM -Name $VmName).State -ne "Off") {
                 -Weight $acl.Weight -ErrorAction SilentlyContinue
         } catch { }
     }
-    Write-Step "ACL: ALLOW outbound guest->gateway TCP $GatewayPort, stateful (weight 100)"
+    # Microsoft semantics (verified): extended ACLs are STATELESS unless
+    # -Stateful $true is passed; -IdleSessionTimeout is an Int32 number of
+    # SECONDS (not a TimeSpan). Explicit IPv4+IPv6 catch-all coverage uses the
+    # documented wildcard ANY (== 0.0.0.0/0 plus ::/0).
+    Write-Step "ACL: ALLOW outbound guest->gateway TCP $GatewayPort, STATEFUL (weight 100, idle 300s)"
     Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Outbound -Action Allow `
         -LocalIPAddress $GuestIp -RemoteIPAddress $HostGatewayIp -RemotePort $GatewayPort `
-        -Protocol TCP -Weight 100 -IdleSessionTimeout (New-TimeSpan -Minutes 5) | Out-Null
-    Write-Step "ACL: DENY outbound catch-all IPv4+IPv6, all protocols (weight 1)"
-    Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Outbound -Action Deny -Weight 1 | Out-Null
-    Write-Step "ACL: DENY inbound catch-all IPv4+IPv6, all protocols (weight 1)"
-    Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Inbound -Action Deny -Weight 1 | Out-Null
+        -Protocol TCP -Weight 100 -Stateful $true -IdleSessionTimeout 300 | Out-Null
+    Write-Step "ACL: DENY outbound catch-all ANY (IPv4+IPv6), all protocols (weight 1)"
+    Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Outbound -Action Deny `
+        -LocalIPAddress ANY -RemoteIPAddress ANY -Weight 1 | Out-Null
+    Write-Step "ACL: DENY inbound catch-all ANY (IPv4+IPv6), all protocols (weight 1)"
+    Add-VMNetworkAdapterExtendedAcl -VMName $VmName -Direction Inbound -Action Deny `
+        -LocalIPAddress ANY -RemoteIPAddress ANY -Weight 1 | Out-Null
 
+    # --- Read-back + fail-closed verification --------------------------------
     Write-Host ""
     Write-Host "Stored extended ACLs (proof table):"
-    Get-VMNetworkAdapterExtendedAcl -VMName $VmName |
-        Select-Object Direction, Action, LocalIPAddress, RemoteIPAddress, LocalPort, RemotePort, Protocol, Weight, IdleSessionTimeout |
+    $storedAcls = @(Get-VMNetworkAdapterExtendedAcl -VMName $VmName)
+    $storedAcls | Select-Object Direction, Action, LocalIPAddress, RemoteIPAddress, `
+        LocalPort, RemotePort, Protocol, Weight, Stateful, IdleSessionTimeout |
         Format-Table -AutoSize
+
+    $allow = @($storedAcls | Where-Object { $_.Direction -eq "Outbound" -and $_.Action -eq "Allow" })
+    if ($allow.Count -ne 1) {
+        throw "F2 ACL verification FAILED: expected exactly 1 outbound Allow rule, found $($allow.Count)."
+    }
+    if (-not ($allow[0].Stateful -eq $true)) {
+        throw "F2 ACL verification FAILED: outbound Allow rule is not Stateful."
+    }
+    if ([int]$allow[0].IdleSessionTimeout -le 0) {
+        throw "F2 ACL verification FAILED: outbound Allow rule has no idle session timeout."
+    }
+    $denyOut = @($storedAcls | Where-Object { $_.Action -eq "Deny" -and $_.Direction -eq "Outbound" })
+    $denyIn = @($storedAcls | Where-Object { $_.Action -eq "Deny" -and $_.Direction -eq "Inbound" })
+    if ($denyOut.Count -lt 1) { throw "F2 ACL verification FAILED: no outbound catch-all deny." }
+    if ($denyIn.Count -lt 1) { throw "F2 ACL verification FAILED: no inbound catch-all deny." }
+    if ([int]$allow[0].Weight -le [int]$denyOut[0].Weight) {
+        throw "F2 ACL verification FAILED: allow weight ($($allow[0].Weight)) does not outrank deny weight ($($denyOut[0].Weight))."
+    }
+    Write-Step "ACL verification passed: stateful allow (w=$($allow[0].Weight)) > catch-all deny (w=$($denyOut[0].Weight)); inbound+outbound deny present"
 }
 
 # --- Integration services (final side-channel state) ------------------------

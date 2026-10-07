@@ -694,4 +694,41 @@ the boundary is `BLOCKED - EXTERNAL PREREQUISITE`. Design and human prerequisite
 are recorded in `docs/EXPERIMENT_J_F2_VM_ISOLATION.md`. No experiment was run; no
 secret, `.env`, Windows Firewall, Avast, ACL, account, or host policy was touched.
 
+## 2026-10-07 (follow-up) - F2 VM ACL verification gaps closed
+
+**ACL construction corrected against Microsoft primary documentation.** The
+provisioner's allow rule previously carried a stateful *intent* via
+`-IdleSessionTimeout (New-TimeSpan -Minutes 5)` **without** `-Stateful $true` and
+with the wrong parameter type. Microsoft Learn
+(`Add-VMNetworkAdapterExtendedAcl`) confirms: `-Stateful <Boolean>` exists,
+`-IdleSessionTimeout` is an **Int32 number of seconds** (not a TimeSpan), and
+extended ACLs are stateless unless `-Stateful $true` is passed. The allow rule is
+now `-Stateful $true -IdleSessionTimeout 300`; the catch-all deny in both
+directions now uses the documented wildcard `-LocalIPAddress ANY
+-RemoteIPAddress ANY` (`ANY` = all IPv4 **and** IPv6) instead of relying on
+omitted address parameters. The provisioner now prints every stored ACL field
+and **fails closed** unless exactly one outbound Allow exists, it is
+`Stateful=$true`, it has a positive idle timeout, inbound+outbound catch-all
+denies exist, and the allow weight outranks the deny weight.
+
+**Static regression test added.** `tests/test_f2_vm_provision_acl.py` (8 cases,
+`CODE PROOF` — no VM) detects each of the defects above plus the double-NIC
+defect (`New-VM -SwitchName` already attaches one adapter). 35 focused tests
+pass; ruff E9,F clean.
+
+**Dry-run proven non-mutating.** `qwen_train/f2_vm_provision.ps1` invoked without
+`-Execute` printed the plan and exited 0; `Get-VM` was 0/0 and `Get-VMSwitch` was
+1/1 (only the OS `Default Switch`) before and after; no F2 adapter or NIC.
+
+**Timestamp/clock analysis recorded** in
+`docs/EXPERIMENT_J_F2_VM_ISOLATION.md` §11a: F2 timestamps are host wall-clock
+(epoch/UTC) via `time.time()`/`time.gmtime()`; no strict cross-clock pass/fail
+gate was found in the F2 path (`PROVEN`, source); guest clock-drift impact is
+`NOT ESTABLISHED`; keeping Hyper-V Time Synchronization disabled is recorded as
+a PROPOSAL to revisit only if strict cross-clock ordering is ever required.
+
+No VM, switch, adapter, firewall, Avast, ACL, account, `.env`, or secret was
+touched. Boundary remains `BLOCKED — EXTERNAL PREREQUISITE` (no official guest
+install media).
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*
