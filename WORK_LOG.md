@@ -985,4 +985,46 @@ clock/negative-probe checks remain **PENDING** until Windows is installed.
 
 Verdict: **VM SHELL PROVEN — GUEST EVIDENCE PENDING**.
 
+## 2026-10-07 (later) — F2 VM isolation: guest retest failed; state reconciled
+
+**What happened.** The F2 guest was installed and OOBE completed; a live
+guest→host gateway test was attempted against `10.72.0.1:8099`. The guest
+**could not** reach the gateway (TCP timeout). Read-only diagnosis found the
+host isolation boundary intact, Windows Defender Firewall non-governing (Avast
+is the registered firewall product), no matching WFP net-event, and no
+statically-matching Avast rule. The **only** enforcement evidence naming a
+component was the Hyper-V vSwitch per-adapter `FailedSecurityPolicy` drop
+counters (Outgoing 47 / Incoming 14 observed), which implicate the **Hyper-V
+extended ACL**, not WFP/Avast.
+
+**What was NOT proven.** A candidate ACL change was applied, but the post-fix
+guest retest was **never obtained**; therefore it is `NOT ESTABLISHED` that the
+candidate fix restores L2/TCP reachability, that the guest reaches `/v1/models`,
+or that the negative probes stay blocked. **F2 isolation is NOT proven**, no Q9
+attestation exists, and the VM topology is **RECOMMENDED, not authorized for F2
+execution** (F2-IMPL-AUTH-025).
+
+**Host cleanup (verified).** Pktmon stopped (no filter); WFP capture stopped; no
+F2 diagnostic pollers; no F2 gateway process; `10.72.0.1:8099` free; the
+temporary Defender rule `F2-TEMP-Allow-Guest-10.72.0.2-To-Gateway-8099` removed;
+the authorized **three-rule** Hyper-V ACL baseline restored (Outbound Allow
+`10.72.0.2->10.72.0.1:8099 TCP` w=100 Stateful; Outbound/Inbound `ANY`
+catch-all Deny w=1); firewall baseline restored (all profiles ON,
+BlockInbound,AllowOutbound). F2 network safety boundary intact (VM `Off`, 1 NIC
+on the Internal switch, no NAT/ICS/bridge/external, forwarding disabled).
+
+**Readiness.** `python -m qwen_train.f2_preflight` => **BLOCKED** (17 findings:
+11 OPERATOR ACTION, 1 PRIVILEGED HOST ACTION, 4 EXTERNAL EVIDENCE, 1
+AUTHORIZATION, 2 NOT EXECUTED). Repository machinery is IMPLEMENTED. **F2 may
+not be run.**
+
+**Documentation reconciliation (this entry).**
+`docs/EXPERIMENT_J_F2_VM_ISOLATION.md` was stale ("no VM exists / `BLOCKED -
+EXTERNAL PREREQUISITE`"); it now reflects the current state (VM exists, guest
+installed, isolation unproven, topology unauthorized, gate BLOCKED) while
+preserving its network-policy meaning and its authorization boundary. The
+F2-IMPL-AUTH-027 ledger entry in
+`docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md` gained a
+dated point-in-time / superseding note only; its historical text is unchanged.
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

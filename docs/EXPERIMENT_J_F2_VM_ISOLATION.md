@@ -5,14 +5,24 @@ source of truth for the F2 VM topology, network policy, and isolation
 validation. It does **not** define any F0 science and does **not** authorize
 running the experiment.
 
-**Status:** repository-side isolation is implemented and tested
-(F2-IMPL-AUTH-027); the host/guest VM boundary is
-`BLOCKED - EXTERNAL PREREQUISITE` (no official guest install media exists on
-this host). See `docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md`
+**Status (reconciled 2026-10-07):** repository-side isolation is implemented and
+tested (F2-IMPL-AUTH-027). The host/guest **VM shell now exists** on this host —
+`F2-Isolation-VM` (Generation 2; exactly one NIC on the Internal
+`F2-Internal-Switch`; the authorized three-rule extended-ACL baseline; Windows
+guest installed and OOBE completed) — **but the guest→host gateway path was
+never proven**: the post-fix guest retest was not obtained, there is **no Q9
+attestation**, and **no guest-egress property is validated**. The VM topology is
+**RECOMMENDED, not authorized for F2 execution** (F2-IMPL-AUTH-025), and F2
+execution is **BLOCKED** by required human/external prerequisites
+(`docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` §4; `python -m qwen_train.f2_preflight`).
+"VM exists" is **not** "VM topology authorized for F2". See
+`docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md`
 (F2-IMPL-AUTH-025/026/027) for the governing ledger entries.
 
 Baseline revision when this document was written:
 `488194d9b50263a237e8a1141e0ccc33aef1a990`.
+Reconciled to the 2026-10-07 host audit; repository HEAD
+`6a7ad4b990ef55a9febcec65a98dc5ab431244a3`.
 
 ---
 
@@ -59,19 +69,23 @@ F2 VM 10.72.0.2                  (exactly ONE NIC)
 
 ## 4. VM topology and identities
 
-| Property | Intended value | State |
+| Property | Intended value | State (2026-10-07 host audit) |
 |---|---|---|
-| Switch | `F2-Internal-Switch`, type **Internal** | `BLOCKED - EXTERNAL PREREQUISITE` (not created) |
-| VM | `F2-Isolation-VM`, **Generation 2** | not created |
-| NIC count | **exactly 1** | not created (enforced fail-closed by the provisioner) |
-| Host vEthernet | `10.72.0.1/24`, **no default gateway**, **no DNS** | not created |
-| Guest | `10.72.0.2/24`, **no default gateway**, **no DNS** | not created |
-| Secure Boot | On | not created |
-| vTPM | Enabled, local key protector | not created |
-| Integration services | Guest Service Interface / PowerShell Direct / Data Exchange / VSS / Time Sync **disabled**; Heartbeat + Guest Shutdown **enabled** | not created |
+| Switch | `F2-Internal-Switch`, type **Internal** | **exists**, Internal; no external switch, no NAT, no bridge — `PROVEN` |
+| VM | `F2-Isolation-VM`, **Generation 2** | **exists** (Gen 2; currently `Off`) — `PROVEN` |
+| NIC count | **exactly 1** | **exactly 1**, on `F2-Internal-Switch` (DhcpGuard/RouterGuard On, MAC spoofing Off) — `PROVEN` |
+| Host vEthernet | `10.72.0.1/24`, **no default gateway**, **no DNS** | `10.72.0.1/24`, IPv4 forwarding **Disabled**, no route via F2 — `PROVEN` |
+| Guest | `10.72.0.2/24`, **no default gateway**, **no DNS** | guest install + OOBE completed; guest-side network identity is **GUEST-REPORTED only** — `NOT ESTABLISHED` from the host |
+| Secure Boot | On | On — `PROVEN` |
+| vTPM | Enabled, local key protector | Enabled, protector present — `PROVEN` |
+| Integration services | Guest Service Interface / PowerShell Direct / Data Exchange / VSS / Time Sync **disabled**; Heartbeat + Guest Shutdown **enabled** | matches intended (GSI/KVP/VSS/Time-Sync off; Heartbeat + Shutdown on) — `PROVEN` |
 
-`Get-VM` returns **no VMs** and `Get-VMSwitch` returns only the OS-managed
-`Default Switch` (Internal). `PROVEN` (2026-10-07).
+The provisioner declares this boundary; it was **instantiated by the operator**
+(`qwen_train/f2_vm_provision.ps1 -Execute`), not by this document, and the
+host/guest socket-level enforcement remains **unproven** (no Q9 attestation).
+`Get-VM` now returns `F2-Isolation-VM` and `Get-VMSwitch` returns the OS-managed
+`Default Switch` (Internal) plus `F2-Internal-Switch` (Internal) — `PROVEN`
+(2026-10-07 host audit).
 
 ## 5. Network policy (design; provisioner-encoded)
 
@@ -122,9 +136,12 @@ TimeSpan). Extended ACLs are **stateless unless `-Stateful $true` is passed** �
 
 **Evidence classification.** The policy is **CODE PROOF**: encoded in
 `qwen_train/f2_vm_provision.ps1` and statically asserted by
-`tests/test_f2_vm_provision_acl.py` (8 cases, no VM needed). It is
-`NOT ESTABLISHED` as live **VM NETWORK PROOF**: no VM exists, so no stored-ACL
-query, IPv6 test, ICMP test, or guest socket probe has run. At apply time the
+`tests/test_f2_vm_provision_acl.py` (8 cases, no VM needed). It remains
+`NOT ESTABLISHED` as live **VM NETWORK PROOF** from the guest: the VM now
+exists and the host-side stored-ACL query confirms the authorized three-rule
+baseline, but no guest socket probe, IPv6/ICMP test, or Q9 attestation has
+produced a passing result, so guest-egress enforcement is unproven. At apply
+time the
 provisioner prints every stored ACL field (`Direction, Action, LocalIPAddress,
 RemoteIPAddress, LocalPort, RemotePort, Protocol, Weight, Stateful,
 IdleSessionTimeout`) and **fails closed** unless exactly one outbound Allow
@@ -349,7 +366,8 @@ No cross-clock ordering gate = `PROVEN` (source). Drift impact on correctness =
 | Repository-side suppression / guard / gateway implemented | `PROVEN IN CURRENT REVISION` |
 | Focused isolation + gateway tests pass (27) | `PROVEN IN CURRENT REVISION` |
 | Full F2 suite + agents smoke clean (1438 passed / 5 skipped) | `PROVEN IN CURRENT REVISION` (F2-IMPL-AUTH-027) |
-| No VM, no F2 switch, no F2 adapter exists | `PROVEN IN CURRENT REVISION` (2026-10-07 host probe) |
+| F2 VM shell exists (Gen 2, exactly 1 NIC, Internal switch, authorized 3-rule ACL baseline) | `PROVEN IN CURRENT REVISION` (2026-10-07 host audit) |
+| Guest-side egress/socket proof and Q9 attestation | `NOT ESTABLISHED` (VM exists; post-fix guest retest not obtained) |
 | Provisioner default invocation performs **no** mutation | `PROVEN IN CURRENT REVISION` (dry-run: 0 VMs / 1 switch before and after) |
 | Provisioner ACL: explicit `-Stateful $true`, `-IdleSessionTimeout 1800`, `ANY` catch-all deny, weight order, one allow, one NIC | `CODE PROOF` (`tests/test_f2_vm_provision_acl.py`) |
 | Timeout ordering 900 < 960 < 1800 (client < gateway < Hyper-V idle) | `CODE PROOF` (`tests/test_f2_isolation_timeouts.py`) |
@@ -364,31 +382,29 @@ No cross-clock ordering gate = `PROVEN` (source). Drift impact on correctness =
 | `overall_status` = PASS only if 0 required failed AND 0 required NOT_ESTABLISHED | `CODE PROOF` |
 | DNS/IPv4/IPv6 semantics separate inventory from connectivity | `CODE PROOF` |
 | Probe schema + probe script declared, no F2 execution invocation | `CODE PROOF` (`tests/test_f2_probe_schema.py`) |
-| VM/ACL/IPv6/ICMP/guest-egress live enforcement | `NOT ESTABLISHED` (no guest) |
+| VM/ACL/IPv6/ICMP/guest-egress live enforcement | `NOT ESTABLISHED` (guest exists; no passing guest probe / Q9 attestation) |
 | Guest `delivery_timestamp` origin (2-clock domains) | `PROVEN` (source) |
 | 2025-01-01 delivery floor (`f2_protocol.py:175`) is validity-only | `PROVEN` (source) |
 | No strict cross-clock ordering gate in the F2 path | `PROVEN` (source search) |
-| Official guest install media present | `BLOCKED — EXTERNAL PREREQUISITE` |
-| Host listener inventory / future guest reachability | `INFERRED` (no F2 interface yet) |
+| Official guest install media obtained; guest installed | `PROVEN` (2026-10-07: VM exists, guest OOBE completed) |
+| Host listener inventory / F2 guest reachability | `NOT ESTABLISHED` (ACL `FailedSecurityPolicy` drop observed in the failed diagnostic; cause unproven, no passing retest) |
 | Model host-side; no GPU passthrough | `SUPPORTED` (design + host hardware) |
 
 ## 13. Limitations and human prerequisites
 
-1. Obtain the **official** Microsoft Windows 11 Enterprise 25H2 x64 Evaluation
-   ISO (no repack / torrent / random VHDX).
-2. Verify its SHA-256 against Microsoft's published hash and record
-   filename/size/SHA-256/published-hash/comparison.
-3. Authorize and run `qwen_train/f2_vm_provision.ps1 -Execute -IsoPath <iso>`;
-   install Windows in VMConnect **with the single NIC attached only to the
+1. **DONE (2026-10-07).** Official Microsoft Windows 11 Enterprise 25H2 x64
+   Evaluation ISO obtained (no repack / torrent / random VHDX); SHA-256 recorded
+   at install time (see `WORK_LOG.md`).
+2. **DONE.** ISO SHA-256 recorded and compared at install time
+   (`WORK_LOG.md`).
+3. **DONE.** `qwen_train/f2_vm_provision.ps1 -Execute -IsoPath <iso>` was run;
+   Windows was installed in VMConnect **with the single NIC attached only to the
    isolated F2 Internal switch** (never Default/External/NAT, never a second
-   adapter). `INFERRED — MUST BE VERIFIED DURING INSTALL`: the audit does not
-   guarantee that the current Enterprise 25H2 evaluation build permits an
-   offline/local-account install. Attempt the documented offline (OOBE) route if
-   offered; **if the build cannot complete without Internet/account
-   connectivity, STOP and report the exact screen/error** — do not weaken the
-   network boundary.
-4. Configure the guest static IP `10.72.0.2/24`, **no default gateway, no DNS**;
-   detach the ISO; boot offline.
+   adapter) and OOBE completed with a local account. The guest-side network /
+   egress properties remain `NOT ESTABLISHED` (no passing guest probe, no Q9).
+4. Guest static IP `10.72.0.2/24`, **no default gateway, no DNS** —
+   **GUEST-REPORTED**, not host-verified. ISO detachment (the guest is currently
+   `Off`) is `REQUIRES AUTHORIZATION` and was not performed by the audit.
 5. Build the **input ISO** (design only; not built here) containing only
    immutable artifacts — Python 3.14 installer, offline wheels, the authorized
    repo snapshot, the runner/bootstrap, and immutable F2 inputs — each recorded
@@ -403,17 +419,22 @@ No cross-clock ordering gate = `PROVEN` (source). Drift impact on correctness =
    necessary.
 7. If and only if read-only diagnosis proves Avast blocks the one authorized
    flow, Robert decides on the single narrow allow (`10.72.0.2 -> 10.72.0.1
-   TCP 8099`). No agent may change Avast or Windows Firewall.
+   TCP 8099`). No agent may change Avast or Windows Firewall. **Historical note
+   (2026-10-07 failed diagnostic):** read-only WFP inspection produced no
+   matching net-event and no Avast rule was statically shown to match this flow,
+   so Avast was **not** proven responsible; the enforcement component implicated
+   by the vSwitch `FailedSecurityPolicy` counters was the **Hyper-V extended
+   ACL**. No repair was proven (the post-fix guest retest was not obtained).
 
 The evaluation OS has a **finite evaluation period**; the guest is intentionally
 offline after installation. Items 5–6 are `REQUIRES AUTHORIZATION` before
 implementation.
 
-**Offline OOBE is not promised.** Current Microsoft Evaluation Center information
-indicates the evaluation workflow can require a Microsoft-account sign-in;
-therefore offline completion of the current Enterprise 25H2 evaluation build is
-`INFERRED — MUST BE VERIFIED DURING INSTALL`. If offline setup fails, STOP; never
-add a temporary adapter/switch/NAT or weaken the ACL to finish OOBE.
+**Offline OOBE.** OOBE was **completed by the operator** on `F2-Isolation-VM`
+with a local account (guest-reported, 2026-10-07), so installation did not
+require weakening the network boundary. Whether the install ran fully offline is
+`NOT ESTABLISHED` (not recorded). The standing rule holds: never add a temporary
+adapter/switch/NAT or weaken the ACL to finish OOBE.
 
 **PROPOSAL ONLY (not implemented, not authorized): golden-VHDX staging.** A
 separate throwaway staging VM (NOT the F2 VM) could install Windows and complete
@@ -425,7 +446,13 @@ transfer — then re-verify the one-NIC/ACL contract on the F2 VM.
 
 ## 14. Final verdict
 
-`BLOCKED - EXTERNAL PREREQUISITE` — the official Windows guest install media is
-absent, so the dedicated Internal-switch F2 VM cannot be created and no
-VM/ACL/guest-egress property can be proven. Repository-side isolation is
+`BLOCKED - REQUIRED HUMAN/EXTERNAL PREREQUISITE` — the VM shell now **exists**
+(Generation 2; one NIC on the Internal `F2-Internal-Switch`; authorized
+three-rule extended-ACL baseline) and the Windows guest is installed, **but F2
+may not be run**: the guest→host gateway path was never proven (no post-fix
+guest retest, **no Q9 attestation**), the VM topology is only **RECOMMENDED and
+not authorized for F2 execution** (F2-IMPL-AUTH-025), and the readiness gate
+(`python -m qwen_train.f2_preflight`) is **BLOCKED** by the privileged host
+egress-enforcement step plus required evidence/authorization items
+(`docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` §4). Repository-side isolation is
 complete and tested. The experiment is **not** authorized to run.

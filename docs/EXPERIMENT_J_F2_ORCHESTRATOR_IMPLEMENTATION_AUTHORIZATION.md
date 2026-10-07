@@ -1490,9 +1490,15 @@ suppression.
 **Author:** Rob (human operator), implemented by the release agent on the
 operator's explicit instruction of 2026-10-07.
 
-**Status:** REPOSITORY-SIDE IMPLEMENTATION COMPLETE AND TESTED. The host/guest VM
-boundary is **BLOCKED - EXTERNAL PREREQUISITE** (no bootable guest image exists on
-this host). Not authorization to execute the experiment.
+**Status (point-in-time record, 2026-10-07):** REPOSITORY-SIDE IMPLEMENTATION
+COMPLETE AND TESTED. At the time of this entry the host/guest VM
+boundary was **BLOCKED - EXTERNAL PREREQUISITE** (no bootable guest image exists on
+this host). Not authorization to execute the experiment. **Superseding
+current-state note (2026-10-07, later):** the VM shell has since been provisioned
+and the Windows guest installed; the current VM/isolation state is maintained in
+`docs/EXPERIMENT_J_F2_VM_ISOLATION.md`. This ledger entry is preserved unchanged
+as the record of what was authorized at that time; F2 execution remains
+unauthorized (readiness gate BLOCKED).
 
 **Baseline:** `master` @ `cdd47f6362a5ab067e481583a513b99365c4d3e7` (HEAD == origin,
 divergence 0 0). Implementation commit: `INFRA: implement governed F2 isolation
