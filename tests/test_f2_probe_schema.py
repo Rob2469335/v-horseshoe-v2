@@ -23,20 +23,55 @@ def _good() -> dict:
         "clock_status": "OK",
         "clock_reason": "",
         "adapter_inventory": [],
+        "adapter_count": 1,
         "route_inventory": [],
         "dns_inventory": [],
-        "authorized_flow": {},
+        "authorized_flow": {"tcp_ok": True, "http_status": 200},
         "denied_flows": [],
         "arbitrary_ipv4": {"result": "NOT_ESTABLISHED"},
         "dns_behavior": {"result": "NOT_APPLICABLE"},
         "ipv4": {},
         "ipv6": {"result": "NOT_ESTABLISHED"},
-        "icmp": {"result": "NOT_ESTABLISHED"},
+        "icmp": {"result": "OBSERVED_BEHAVIOR"},
         "input_disk_write": {"result": "NOT_APPLICABLE"},
         "internet": {},
+        "required_checks_total": 5,
+        "required_checks_passed": 5,
+        "required_checks_failed": 0,
+        "required_checks_not_established": 0,
         "overall_status": "PASS",
         "failure_reasons": [],
     }
+
+
+def test_pass_invalid_when_required_not_established():
+    bad = _good()
+    bad["required_checks_passed"] = 4
+    bad["required_checks_not_established"] = 1
+    bad["overall_status"] = "PASS"
+    assert any("PASS is invalid" in e for e in s.validate(bad))
+
+
+def test_pass_invalid_when_required_failed():
+    bad = _good()
+    bad["required_checks_passed"] = 4
+    bad["required_checks_failed"] = 1
+    bad["overall_status"] = "PASS"
+    assert any("PASS is invalid" in e for e in s.validate(bad))
+
+
+def test_counts_must_be_consistent():
+    bad = _good()
+    bad["required_checks_total"] = 9
+    assert any("inconsistent" in e for e in s.validate(bad))
+
+
+def test_not_ready_is_accepted():
+    ok = _good()
+    ok["required_checks_passed"] = 4
+    ok["required_checks_not_established"] = 1
+    ok["overall_status"] = "NOT_READY"
+    assert s.validate(ok) == []
 
 
 def test_good_result_is_valid():
@@ -75,7 +110,7 @@ def test_canonical_is_deterministic():
     a = s.canonical(_good())
     b = s.canonical(_good())
     assert a == b
-    assert a.startswith('{"adapter_inventory"')
+    assert a.startswith('{"adapter_count"')
 
 
 def test_probe_script_declares_required_sections():

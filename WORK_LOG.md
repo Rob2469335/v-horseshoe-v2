@@ -822,4 +822,48 @@ changed files. No VM/switch/adapter/firewall/Avast/ACL/account/`.env`/secret was
 touched. Boundary remains `BLOCKED — EXTERNAL PREREQUISITE` (no official guest
 install media).
 
+## 2026-10-07 (preflight 3, last static) - PS5.1 probe, ISO/IMAPI2, status accounting
+
+**Guest probe made Windows PowerShell 5.1 compatible.** The host's
+`powershell.exe` is **5.1.26100.9549**; the prior probe used PS7-only constructs
+(`if` as a hashtable value, `Test-Connection -TargetName`, `$PSScriptRoot` in a
+param default, `Headers.ContainsKey`) and **failed to parse under 5.1**. The probe
+is rewritten PS 5.1-safe and now parses clean under both 5.1 and 7.
+
+**Clock: HTTP Date only, no fallback.** The probe uses the gateway's fresh HTTP
+`Date` header as the sole runtime reference; the manifest timestamp is provenance
+only. Missing Date ⇒ `HOST_REFERENCE_MISSING`; malformed ⇒
+`HOST_REFERENCE_MALFORMED`. Shared vectors (`f2_clock_vectors.json`, 14 cases) are
+executed by both the Python authority and a new PowerShell harness
+(`f2_clock_vectors.ps1`) under **5.1** — they agree (14/14, exit 0).
+
+**Read-only medium revised to ISO/IMAPI2.** `IMAPI2FS.MsftFileSystemImage`
+instantiates on this host (no ADK needed); a DVD/ISO medium is inherently
+read-only to the guest, closing the VHDX guest-write gap (`Mount-VHD -ReadOnly`
+proves host-side only; no `Add-VMHardDiskDrive -ReadOnly` exists). Recommendation:
+ISO/IMAPI2 for input, VHDX retained for output. ISO builder implementation is the
+next authorized item.
+
+**False-ready prevention.** The probe now reports explicit required-check
+accounting (`required_checks_total/passed/failed/not_established`); `overall_status`
+is `PASS` only when 0 required checks failed AND 0 could not be established,
+otherwise `FAIL`/`NOT_READY`. Schema + tests enforce the invariant.
+
+**Probe semantics corrected.** DNS now separates configuration from behavior
+(no `example.invalid` as "proof"); IPv4/IPv6 keep inventory separate from
+connectivity (`NOT_ESTABLISHED`/`NO_USABLE_IPV6_DESTINATION` when no destination);
+ICMP is `OBSERVED_BEHAVIOR`, not ACL proof; the input-disk write test records
+`WRITE_SUCCEEDED_UNEXPECTED`/`WRITE_FAILED` + HRESULT and only marks
+`PROVES_READ_ONLY` when the error is diagnostic (else `NOT_ESTABLISHED`).
+
+**Timeout chain.** F2 tool-decision uses `local_max_tokens=512` on the 300 s
+timeout path (`_llm_client.py:437,444`), ≈24–73 s — under the `model_router` 300 s
+ceiling; no router change required. Hyper-V idle 1800 s remains a silent-gap
+bound.
+
+105 focused tests pass; PS5.1 + PS7 parse clean; PS5.1 vectors 14/14; ruff E9,F
+clean. No VM/switch/adapter/firewall/Avast/account/`.env`/secret was touched; no
+builder re-run (executable logic unchanged). Boundary remains `BLOCKED — EXTERNAL
+PREREQUISITE` (no official guest install media).
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

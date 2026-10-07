@@ -20,6 +20,7 @@ REQUIRED_KEYS = (
     "clock_status",
     "clock_reason",
     "adapter_inventory",
+    "adapter_count",
     "route_inventory",
     "dns_inventory",
     "authorized_flow",
@@ -31,11 +32,15 @@ REQUIRED_KEYS = (
     "icmp",
     "input_disk_write",
     "internet",
+    "required_checks_total",
+    "required_checks_passed",
+    "required_checks_failed",
+    "required_checks_not_established",
     "overall_status",
     "failure_reasons",
 )
 
-ALLOWED_OVERALL = frozenset({"PASS", "FAIL", "PARTIAL"})
+ALLOWED_OVERALL = frozenset({"PASS", "FAIL", "NOT_READY"})
 ALLOWED_CLOCK = frozenset({"OK", "FAIL"})
 ALLOWED_CLOCK_REASONS = frozenset(
     {
@@ -65,6 +70,28 @@ def validate(result: object) -> list[str]:
     reasons = result.get("failure_reasons")
     if not isinstance(reasons, list) or any(not isinstance(r, str) for r in reasons):
         errors.append("failure_reasons must be a list of strings")
+
+    counts = {}
+    for key in (
+        "required_checks_total",
+        "required_checks_passed",
+        "required_checks_failed",
+        "required_checks_not_established",
+    ):
+        value = result.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append(f"{key} must be a non-negative int")
+        else:
+            counts[key] = value
+    if len(counts) == 4:
+        total = counts["required_checks_total"]
+        passed = counts["required_checks_passed"]
+        failed = counts["required_checks_failed"]
+        not_est = counts["required_checks_not_established"]
+        if passed + failed + not_est != total:
+            errors.append("required check counts are inconsistent")
+        if result.get("overall_status") == "PASS" and (failed > 0 or not_est > 0 or total == 0):
+            errors.append("overall_status PASS is invalid with failed/not_established checks")
     return errors
 
 

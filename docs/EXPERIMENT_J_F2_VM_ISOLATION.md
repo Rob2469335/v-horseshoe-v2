@@ -95,6 +95,16 @@ against a stale `300` returning. **Answer:** *can the model server/router kill a
 F2 request before the gateway/client timeout?* **Yes — the router's 300 s total is
 the effective cap** (changing it is a model-infra change, `REQUIRES
 AUTHORIZATION`).
+
+**F2 request worst case (derived, not measured).** The F2 tool-decision call uses
+`local_max_tokens = 512` (`_llm_client.py:437`) on a path with `timeout = 300.0`
+(`_llm_client.py:444`); the in-repo comment cites ~73 s at 7 tok/s
+(`_llm_client.py:431`), i.e. ≈24–73 s over a 7–21 tok/s range — **well under the
+router's 300 s**. The 900 s streaming path (`_llm_client.py:617,633`) is a
+different call. **Conclusion: no router-timeout change is required for the
+tool-decision path.** Exact worst-case duration on this host is `NOT ESTABLISHED`
+(no measured F2 run); if a future F2 call enables the 900 s streaming path, that
+is `REQUIRES AUTHORIZATION`.
 - Allow weight (`100`) **outranks** the catch-all deny weight (`1`).
 - Catch-all deny uses the Microsoft-documented wildcard `-LocalIPAddress ANY
   -RemoteIPAddress ANY` — **`ANY` = all IPv4 AND IPv6 addresses** — for
@@ -174,14 +184,37 @@ The guest must not reach the host filesystem. Candidate mechanisms:
 **Chosen direction (evidence-based).** **Read-only VHDX** for input and a
 separate output VHDX for egress, with a SHA-256 manifest on every artifact and an
 `UNTRUSTED OUTPUT` classification on egress. Input uses VHDX rather than an ISO
-because it needs no Microsoft ADK / `oscdimg` install and no download, and carries
-an easily verified SHA-256 manifest. **Correction:** a VHDX is **not** inherently
-read-only, and `Mount-VHD -ReadOnly` proves only that the **host-side mount** is
-read-only — it does **not** prove the guest sees the disk read-only. A documented
-Hyper-V mechanism to attach a VHDX to a **guest** read-only is `NOT ESTABLISHED`
-from Microsoft documentation at this revision, so the guest is given the disk and
-a **write probe** (`f2_guest_probe.ps1 -InputDisk`) is required, expected to fail.
-Guest-side read-only enforcement is `REQUIRES AUTHORIZATION`/design work. Builder: `qwen_train/f2_input_bundle.ps1`
+**Correction (read-only truth).** A VHDX is **not** inherently read-only, and
+`Mount-VHD -ReadOnly` proves only that the **host-side mount** is read-only — it
+does **not** prove the guest sees the disk read-only. A documented Hyper-V
+mechanism to attach a VHDX to a **guest** read-only is `NOT ESTABLISHED`, and no
+`Add-VMHardDiskDrive -ReadOnly` parameter exists. VHDX remains implemented
+(scratch-proven lifecycle) but its **guest-side read-only is `NOT ESTABLISHED`**;
+the guest gets a write probe (`f2_guest_probe.ps1 -InputDisk`), and a generic
+write failure does **not** prove read-only media.
+
+**Medium comparison (input delivery).**
+
+| Property | VHDX (current) | DVD/ISO (IMAPI2) |
+|---|---|---|
+| Host construction | `New-VHD`/`Mount-VHD` (done, scratch-proven) | `IMAPI2FS.MsftFileSystemImage` COM |
+| Extra software | none | none — **ADK not required** |
+| Guest write resistance | **NOT ESTABLISHED** | **inherent read-only medium** |
+| Integrity/provenance | SHA-256 manifest inside the volume | SHA-256 of the `.iso` file + manifest inside |
+| Operator error risk | mount/format correctness | lower (single artifact, add-only) |
+| Automated verification | volume read-back | `Get-FileHash` on the ISO + guest read |
+| Compatibility | Hyper-V native | Hyper-V DVD drive / Win11 mounts ISO natively |
+
+**IMAPI2 capability (host, read-only check, 2026-10-07):** `New-Object -ComObject
+IMAPI2FS.MsftFileSystemImage` succeeded (`System.__ComObject`) — the Windows-native
+path exists **without the ADK**.
+
+**Recommendation (SOTA): DVD/ISO via IMAPI2 for INPUT delivery** — the ISO medium
+is inherently read-only to the guest, closing the guest-write concern that VHDX
+leaves `NOT ESTABLISHED`; it is Windows-native (no ADK, no download) and gives a
+single hashable artifact. The VHDX builder stays for **output/egress** (§ output
+VHDX). Implementing the IMAPI2 ISO input builder is the next authorized item
+(`REQUIRES AUTHORIZATION`), not done in this static pass. Builder: `qwen_train/f2_input_bundle.ps1`
 (plan-only by default; `-Execute` creates the VHDX) with
 `tests/test_f2_input_bundle.py`. The input VHDX carries the manifest, whose
 `host_reference_utc` seeds the guest clock startup check (§11a).
@@ -271,10 +304,23 @@ and it is validity-only.
 `GET /v1/models` call (`qwen_train/f2_guest_probe.ps1` reads `$resp.Headers["Date"]`;
 `evaluate_clock_http_date`). This reuses the already-authorized 8099 path — no
 KVP, no PowerShell Direct, no extra channel, fresh at probe time. The
-input-bundle manifest `host_reference_utc` is retained as **provenance only**
-(never used as a runtime reference when hours old). Distinct error classes:
-`HOST_REFERENCE_MISSING` / `HOST_REFERENCE_MALFORMED` /
-`GUEST_TIMESTAMP_MALFORMED` / `GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`. `|skew| > tolerance` ⇒ `FAIL` with `GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`,
+input-bundle manifest `host_reference_utc` is retained as **provenance only** and
+is **never** a runtime fallback: if the HTTP `Date` is absent the probe emits
+`HOST_REFERENCE_MISSING`; if malformed, `HOST_REFERENCE_MALFORMED` — both fail the
+clock check. Distinct error classes: `HOST_REFERENCE_MISSING` /
+`HOST_REFERENCE_MALFORMED` / `GUEST_TIMESTAMP_MALFORMED` /
+`GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`.
+
+**PowerShell 5.1 (guest target).** The guest is Windows 11, whose built-in shell
+is Windows PowerShell 5.1 (`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
+verified host `5.1.26100.9549`). The probe and the clock-vector harness are
+PS 5.1-parse-clean (no `if`-as-hashtable-value, no `Test-Connection -TargetName`,
+no `$PSScriptRoot` in param defaults, no `Headers.ContainsKey`). The **same clock
+vectors** (`qwen_train/f2_clock_vectors.json`) are executed by the PowerShell
+harness (`qwen_train/f2_clock_vectors.ps1`) under 5.1 and agree with the Python
+authority (14/14). Guest launch:
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\f2_guest_probe.ps1 -GatewayIp 10.72.0.1 -GatewayPort 8099 -InputDisk <drive> -OutputPath C:\f2_probe.json`
+(exit 0 = probe completed; the JSON, not the exit code, carries readiness). `|skew| > tolerance` ⇒ `FAIL` with `GUEST_CLOCK_OUTSIDE_ALLOWED_WINDOW`,
 and the probe does not continue to network validation. Default tolerance
 **120 s** (`DEFAULT_CLOCK_TOLERANCE_S`): the guest boot clock is seeded from the
 host RTC and free-run drift over one arm is far under this, while day/year-scale
@@ -313,6 +359,10 @@ No cross-clock ordering gate = `PROVEN` (source). Drift impact on correctness =
 | Gateway HTTP `Date` header (fresh UTC clock reference) | `CODE PROOF` |
 | Guest-side VHDX read-only (vs host `Mount-VHD -ReadOnly`) | `NOT ESTABLISHED` (needs guest write probe) |
 | Effective request ceiling = model_router 300 s | `CODE PROOF` |
+| Guest probe PS 5.1 parse-clean; vectors agree Python↔PS5.1 (14/14) | `CODE PROOF` + PS-RUN |
+| IMAPI2 (`IMAPI2FS.MsftFileSystemImage`) available without ADK | `CODE PROOF` (host) |
+| `overall_status` = PASS only if 0 required failed AND 0 required NOT_ESTABLISHED | `CODE PROOF` |
+| DNS/IPv4/IPv6 semantics separate inventory from connectivity | `CODE PROOF` |
 | Probe schema + probe script declared, no F2 execution invocation | `CODE PROOF` (`tests/test_f2_probe_schema.py`) |
 | VM/ACL/IPv6/ICMP/guest-egress live enforcement | `NOT ESTABLISHED` (no guest) |
 | Guest `delivery_timestamp` origin (2-clock domains) | `PROVEN` (source) |
