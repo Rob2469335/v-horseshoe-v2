@@ -7,23 +7,29 @@ POLICY_START_COMMIT = "c8016978b08c8c2ab8e2c84334d42b537f385f6a"
 def test_arch_commits_have_sota_basis():
     """
     Validates compliance with AGENTS.md 3.7.5.
-    Every consequential engineering commit (ARCH, INFRA, API, DOMAIN)
+    Every consequential engineering commit (ARCH, INFRA, API, DOMAIN, SERVICE)
     added after the SOTA policy (c8016978) MUST contain a valid 'SOTA-Basis:' section.
     """
-    # 1. Check history availability (Fail-closed design)
+    # 1. Check history availability and ancestor relationship
     try:
-        # If POLICY_START_COMMIT is not in the history, this will throw an error.
         subprocess.run(["git", "rev-parse", "--verify", f"{POLICY_START_COMMIT}^{{commit}}"], check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError:
         pytest.fail(f"Policy start commit {POLICY_START_COMMIT} is not in the local Git history. "
                     f"If running in CI, ensure checkout uses fetch-depth: 0.")
+
+    # Validate that it is an ancestor of HEAD (not just a disconnected commit)
+    try:
+        subprocess.run(["git", "merge-base", "--is-ancestor", POLICY_START_COMMIT, "HEAD"], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        pytest.fail(f"Policy start commit {POLICY_START_COMMIT} exists but is not an ancestor of HEAD. "
+                    f"Ensure you are checking the correct branch history.")
 
     # 2. Get the consequential commits
     try:
         result = subprocess.run(
             [
                 "git", "log", f"{POLICY_START_COMMIT}..HEAD",
-                "--extended-regexp", "--grep=^(ARCH|INFRA|API|DOMAIN):",
+                "--extended-regexp", "--grep=^(ARCH|INFRA|API|DOMAIN|SERVICE):",
                 "--format=%H%n%B%n---COMMIT_SEP---"
             ],
             capture_output=True,
@@ -54,21 +60,26 @@ def test_arch_commits_have_sota_basis():
             
         sota_block = message[sota_idx:]
         
+        # Check for explicitly justified 'None'
         none_match = re.search(r'^SOTA-Basis:\s*None\s+(.+)', sota_block, re.IGNORECASE | re.DOTALL | re.MULTILINE)
         if none_match:
-            justification = none_match.group(1).strip()
+            just_lines = none_match.group(1).strip().splitlines()
+            just_lines = [L for L in just_lines if not re.match(r'^[a-zA-Z0-9-]+:', L.strip())]
+            justification = "\n".join(just_lines).strip()
             if justification:
                 continue
             else:
-                pytest.fail(f"Commit {sha} declared 'SOTA-Basis: None' but provided no justification.")
+                pytest.fail(f"Commit {sha} declared 'SOTA-Basis: None' but provided no justification or only unrelated text.")
         
-        has_source = bool(re.search(r'^(?:1\.\s*)?Source(?:.*?):\s*[^\s]+', sota_block, re.IGNORECASE | re.MULTILINE))
-        has_finding = bool(re.search(r'^(?:2\.\s*)?(?:Assumption|Finding)(?:.*?):\s*[^\s]+', sota_block, re.IGNORECASE | re.MULTILINE))
-        has_recon = bool(re.search(r'^(?:3\.\s*)?Reconciliation(?:.*?):\s*[^\s]+', sota_block, re.IGNORECASE | re.MULTILINE))
+        # Check structured fields
+        # Source must contain BOTH a URL and some other text (Title)
+        has_source = bool(re.search(r'^(?:1\.\s*)?Source(?:.*?):\s*(?:.*?[a-zA-Z].*?https?://\S+|.*?https?://\S+(?:\s+[a-zA-Z]+))', sota_block, re.IGNORECASE | re.MULTILINE))
+        has_finding = bool(re.search(r'^(?:2\.\s*)?(?:Assumption|Finding)(?:.*?):\s*(?=.*[a-z]).+', sota_block, re.IGNORECASE | re.MULTILINE))
+        has_recon = bool(re.search(r'^(?:3\.\s*)?Reconciliation(?:.*?):\s*(?=.*[a-z]).+', sota_block, re.IGNORECASE | re.MULTILINE))
         
         if not (has_source and has_finding and has_recon):
             pytest.fail(
                 f"Commit {sha} has a malformed 'SOTA-Basis:' footer.\n"
-                f"It must contain 'Source:', 'Assumption/Finding:', and 'Reconciliation:' fields with actual content, "
+                f"It must contain 'Source:' (with Title and URL), 'Assumption/Finding:', and 'Reconciliation:' fields with actual content, "
                 f"or explicitly state 'SOTA-Basis: None' followed by a justification."
             )
