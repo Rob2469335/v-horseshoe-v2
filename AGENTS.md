@@ -350,7 +350,7 @@ Every consequential engineering commit (prefixed with `ARCH:`, `INFRA:`, `API:`,
 2. The specific assumption or finding applied.
 3. How it reconciles with repository authority.
 
-If no external research was required for the architectural decision, the section must explicitly state `SOTA-Basis: None` with a brief justification.
+If no external research was required for the architectural decision, the section must explicitly state `SOTA-Basis: None` and provide a `Justification: <reason>` field on the following line.
 This requirement is enforced mechanically by `tests/test_agent_sota_enforcement.py`. Commits failing this check will fail repository validation.
 
 ### 3.8 EVIDENCE LANGUAGE
