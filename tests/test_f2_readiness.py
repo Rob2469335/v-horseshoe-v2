@@ -728,3 +728,40 @@ class TestCleanRoomIsVerifiedNotAsserted:
         })
         assert not ok
         assert "REFUSED" in detail
+
+
+class TestPopulationCountedQuantity:
+    """F2-CLARIFICATION-007: this gate counts ADMITTED tasks.
+
+    AUTH-020 named the item ``protected_population`` and AUTH-028 (operator,
+    2026-10-07) set the target as "at least 300 admitted task pairs ... consistent
+    with the frozen n = 300". The confirmatory design's ``n`` counts ANALYZABLE
+    complete pairs after Q5/Q6 exclusions, which is a different quantity. These
+    tests pin which one the readiness item measures, so a later refactor cannot
+    silently swap them, and pin that no threshold moved.
+    """
+
+    def test_the_minimum_is_still_exactly_300(self):
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS
+
+        assert FROZEN_MIN_PAIRS == 300
+
+    def test_a_full_admitted_population_passes_even_with_nothing_analyzable(self):
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+
+        ok, detail, _ = _check_population(
+            {"population": {"admitted": FROZEN_MIN_PAIRS, "analyzable": 0}}
+        )
+        assert ok is True, detail
+
+    def test_an_analyzable_count_cannot_stand_in_for_admitted(self):
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+
+        ok, detail, action = _check_population(
+            {"population": {"admitted": 0, "analyzable": FROZEN_MIN_PAIRS}}
+        )
+        assert ok is False
+        assert "admitted=0" in detail
+        # The remedy must name oversampling, because reaching n = 300 analyzable
+        # from 300 admitted is not guaranteed once Q5/Q6 exclusions apply.
+        assert "oversampled" in action and "ANALYZABLE" in action

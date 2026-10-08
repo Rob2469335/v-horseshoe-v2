@@ -1852,3 +1852,80 @@ identity check) plus `tests/test_f2_analysis.py`. No other file.
 `tests/test_f2_frozen_design_guard.py` and `tests/test_f2_q6_gate.py` pass
 unchanged — including `test_incomplete_pairs_are_reported_not_dropped_as_outcomes`,
 whose three same-`task_id` rows are all incomplete and therefore still legal.
+
+### F2-CLARIFICATION-007 - The population gate counts ADMITTED; `n` counts ANALYZABLE
+
+**Authorizing role:** repository operator (Rob).
+**Recorded by:** implementation agent.
+**Interactive-authorization basis:** the operator's explicit instruction, given
+interactively in his own session on 2026-10-08, to trace the F2 population
+lifecycle, determine the intended invariant from existing authority rather than
+repeat the ambiguity, and commit and push the authorized result.
+**Date:** 2026-10-08.
+
+**Issue.** `AUTH-013:781` sets `n = 300 **analyzable** paired task x seed units`,
+while the readiness item it names (`protected_population`, `AUTH-020`) is checked
+as `admitted >= FROZEN_MIN_PAIRS` (`f2_readiness.py:_check_population`). Two
+authorized quantities, one constant — which one does the gate measure, and is it
+the wrong one?
+
+**Traced invariant (`PROVEN` from existing authority — no decision invented).**
+
+| Stage | Quantity | Authority |
+|---|---|---|
+| Screening / population target | **≥ 300 ADMITTED task pairs** | `F2-IMPL-AUTH-028` (operator, 2026-10-07): *"The target is at least 300 admitted task pairs for the frozen confirmatory population"*; *"If fewer than **300 tasks** survive the authorized screening criteria, STOP"*; *"Target: ≥ 300 admitted pairs (**consistent with the frozen `n = 300` in F2-IMPL-AUTH-013**)"* |
+| Readiness gate | `admitted >= 300` | `AUTH-020` (item named `protected_population`), `f2_readiness._check_population` |
+| Confirmatory ledger | `N` = **complete** task pairs after Q5/Q6 | `AUTH-018` (Q5 exclusion, Q6 ceiling), `f2_analysis.finalize_f2` |
+| Design requirement | `n = 300` **ANALYZABLE** pairs | `AUTH-013:781` |
+
+**Is the gate checking the wrong quantity? `NO`.** The gate implements
+`AUTH-028` — the operator's own, most recent statement of the population target —
+which sets it on *admitted* and explicitly declares that target *"consistent with
+the frozen n = 300"*. The two counts are reconciled by authority, not by code.
+
+**Why they are nevertheless not equal (recorded, not resolved here).**
+`_check_population` measures a POPULATION prerequisite; `n` measures the ANALYZED
+ledger. Between them sit:
+
+* **Q5 exclusions**, whose reasons (missing provenance, failed base/gold
+  verification, contamination classification, malformed task, reproducibility
+  failure, missing artifact) are **admission-time** properties — `admit_f2_task`
+  already requires both T and X bundles plus the paired regrade, so a task that
+  is admitted has cleared them;
+* **infrastructure loss**, which is *rerunnable* (`f2_calibration`
+  `DEFAULT_MAX_RERUNS = 3`, infrastructure causes only, every attempt retained)
+  and is capped by the Q6 ceiling: above 30 % of the attempted set the run
+  **STOPs and diagnoses** rather than proceeding with a smaller `n`.
+
+So at admitted = 300 the worst Q6-legal outcome is analyzable = 210. As an
+`INDEPENDENT CALCULATION` (exact unconditional McNemar power, integrating over
+`D ~ Bin(N, π_d)`, same doubling rule, δ = 0.20), the minimum power over
+π_d ∈ [0.20, 1.00] at N = 210 is **0.8123**, below the authorized 0.90; the
+smallest N that clears 0.90 across that whole range is **270** (0.9035), and
+N = 300 clears it with 0.9291 at the worst point (π_d = 1.00).
+
+**Decision.**
+
+1. **No threshold change.** The gate stays at `FROZEN_MIN_PAIRS = 300` on
+   `admitted`, exactly as `AUTH-028` set it. Raising it (e.g. to ≥ 429 admitted,
+   which would guarantee 300 analyzable under the full Q6 ceiling) would **change
+   the operator's population target** and is **`REQUIRES AUTHORIZATION`** — it is
+   NOT done here.
+2. **Naming corrected.** The `FROZEN_MIN_PAIRS` comment now states which
+   quantity the constant is compared against and how the two authorized counts
+   relate; the shortfall remedy now says *admitted*, says *oversampled*, and says
+   that the design's `n = 300` counts *analyzable* pairs. No behaviour changes.
+3. **The counted quantity is now pinned by test**, so a later refactor cannot
+   silently swap `admitted` for an analyzable/N figure: an `analyzable` key of
+   300 alongside `admitted = 0` must still fail, and `admitted = 300` alongside
+   `analyzable = 0` must still pass.
+
+**Not changed:** `FROZEN_MIN_PAIRS`, the comparison operator, the item name, the
+18-item readiness list, Q5, Q6, `n`, δ, α, π_d, or any gate's strictness.
+
+**File boundary.** `qwen_train/f2_readiness.py` (module comment and the shortfall
+remedy string only) plus `tests/test_f2_readiness.py`. No other file.
+
+**Verification.** `tests/test_f2_readiness.py::TestPopulationCountedQuantity`
+(3 cases); the existing `test_population_shortfall_blocks` and
+`FROZEN_MIN_PAIRS == 300` guard both still pass unchanged.

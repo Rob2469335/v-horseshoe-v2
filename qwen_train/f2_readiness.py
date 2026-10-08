@@ -33,6 +33,19 @@ __all__ = [
 ]
 
 #: Frozen F2 design minimum (AUTH-013): n = 300 paired observations.
+#:
+#: Which quantity this gate counts — F2-CLARIFICATION-007. The constant comes
+#: from AUTH-013's ``n = 300`` (ANALYZABLE complete task pairs), but the
+#: readiness item it implements (``protected_population``, AUTH-020) is a
+#: POPULATION prerequisite, so it is compared against the ADMITTED count — which
+#: is exactly the target AUTH-028 (operator, 2026-10-07) set: "at least 300
+#: admitted task pairs ... consistent with the frozen n = 300". The two counts
+#: are related but not equal: Q5/Q6 exclusions and infrastructure loss reduce
+#: analyzable pairs below admitted ones, and the design's power claim assumes
+#: n = 300 ANALYZABLE. Reaching it from an admitted population of 300 requires
+#: oversampling and/or zero attrition; the Q6 ceiling (0.30) only guarantees
+#: n >= 210 at admitted = 300. No threshold is changed here — this is the
+#: documented meaning of the existing gate.
 FROZEN_MIN_PAIRS = 300
 
 _SHA256_RE = re.compile(r"^(?:sha256:)?[0-9a-fA-F]{64}$")
@@ -284,7 +297,9 @@ def _check_population(supplied: Mapping[str, Any]):
             f"admitted={admitted} < frozen minimum {FROZEN_MIN_PAIRS}"
         ), (
             f"Acquire/curate a protected post-cutoff population of >= {FROZEN_MIN_PAIRS} "
-            "admissible tasks (oversampled)"
+            "admitted tasks (oversampled): this gate counts ADMITTED tasks, while "
+            "the confirmatory design's n = 300 counts ANALYZABLE pairs after Q5/Q6 "
+            "exclusions, so acquire more than 300 if any attrition is expected"
         )
     return True, f"admitted={admitted} >= {FROZEN_MIN_PAIRS}", ""
 
