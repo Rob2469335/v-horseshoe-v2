@@ -284,6 +284,63 @@ compare strategies first.
 Do not stop at the first failing test. Do not weaken a test, delete a test, or
 skip a failing test to obtain green output.
 
+#### 3.7.4 SOTA AND PRIMARY-SOURCE RESEARCH
+
+Applies to any **non-trivial** technical, scientific, architectural, security,
+provenance, validation, or implementation decision where external technical
+knowledge could materially change the outcome. The order is fixed:
+
+**CURRENT REPOSITORY → EXACT PROBLEM → CURRENT SOTA / PRIMARY-SOURCE RESEARCH →
+CODE/SOTA RECONCILIATION → AUTHORITY / CONTRACT CHECK → MINIMAL DECISION →
+VALIDATION**
+
+1. **Inspect the actual repository first.** Read the relevant source-of-truth and
+   authority files, the real implementation and its call paths, and the current
+   Git state. A pasted report, another agent's claim, model memory, or an
+   assumption is never a substitute for repository evidence (§3.3).
+2. **Name the exact problem.** State what is observed; separate symptom from root
+   cause; identify the one decision that genuinely needs outside knowledge.
+   Research the problem *this* repository presents, not a generic version of it.
+3. **Do current research when it can materially affect the decision.** Prefer, in
+   order: original research papers; standards/specifications; official
+   project or vendor documentation; authoritative technical reports; and only then
+   high-quality recent secondary literature when primary material is unavailable or
+   insufficient. Something is not SOTA because it is popular, familiar, recent, or
+   repeated by another model — check current primary/authoritative sources where
+   practical.
+4. **Map the research back onto this repository.** For every consequential
+   proposed technique, state: the problem it solves; the assumptions it requires;
+   whether those assumptions hold *here*; what existing repository machinery
+   already provides; what gaps remain; and what new trust, dependency, complexity,
+   or failure mode it would introduce.
+5. **Reconcile with authority.** External best practice **never** overrides
+   explicit operator instructions, frozen experiment contracts, scoped
+   authorization, this file, or protected source-of-truth documents. If research
+   conflicts with an authorized or frozen contract, **report the conflict** — do
+   not silently change the contract (§3.7.3).
+6. **Choose the smallest solution the evidence justifies.** Do not cargo-cult a
+   SOTA architecture: no PKI, cryptographic signing, new trust roots, new
+   services, new manifests, or new frameworks merely because the literature
+   contains them. Add complexity only when the actual threat model, correctness
+   requirement, scientific design, or repository evidence demands it (§3.7.2).
+7. **Label the result with §3.8 vocabulary** — `PROVEN`, `SUPPORTED`, `INFERRED`,
+   `NOT ESTABLISHED`, `GOVERNANCE GAP`, `REQUIRES AUTHORIZATION`. A citation can
+   establish that a technique is recognized or useful; it does **not** prove this
+   repository implements it correctly.
+
+**Prohibited:** relying solely on model memory for a consequential decision;
+treating another agent's report as authority; treating generic "best practices" as
+automatically applicable; calling something SOTA without checking current primary or
+authoritative sources where practical; implementing a researched technique before
+reconciling it with actual repository code and authority; using external research as
+grounds to bypass authorization or a frozen contract.
+
+**Not required for:** trivial formatting, simple mechanical edits, obvious local
+refactors involving no external technical decision, straightforward repository
+navigation, and any task where the user explicitly requests no external research.
+Where research is materially relevant and available, perform it **before** choosing
+the consequential implementation strategy.
+
 ### 3.8 EVIDENCE LANGUAGE
 
 Label every material conclusion. This vocabulary is the repository standard. **Use
