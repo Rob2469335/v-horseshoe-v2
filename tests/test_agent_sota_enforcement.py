@@ -12,28 +12,28 @@ KNOWN_LEGACY_VIOLATIONS = {
 def parse_sota_basis(message: str) -> bool:
     lines = message.splitlines()
     sota_starts = [i for i, line in enumerate(lines) if line.startswith('SOTA-Basis:')]
-    
+
     if not sota_starts:
         return False
     if len(sota_starts) > 1:
         return False
-        
+
     start_idx = sota_starts[0]
     first_line = lines[start_idx].strip()
-    
+
     if re.match(r'^SOTA-Basis:\s*None$', first_line, re.IGNORECASE):
         if start_idx + 1 >= len(lines):
             return False
-            
+
         next_line = lines[start_idx + 1].strip()
-        
+
         justification_starts = [line for line in lines[start_idx+1:] if line.strip().lower().startswith('justification:')]
         if len(justification_starts) > 1:
             return False
-            
+
         if not re.match(r'^Justification:\s*(?=.*[a-zA-Z0-9]).+', next_line, re.IGNORECASE):
             return False
-            
+
         return True
 
     block_lines = []
@@ -48,13 +48,13 @@ def parse_sota_basis(message: str) -> bool:
                not re.match(r'^(?:3\.\s*)?Reconciliation:', stripped, re.IGNORECASE):
                 break
         block_lines.append(stripped)
-        
+
     full_block = '\n'.join(block_lines)
-    
+
     has_source = bool(re.search(r'^(?:1\.\s*)?Source(?:.*?):\s*(?=.*[a-zA-Z].*[ \t]+https?://\S+|.*?https?://\S+[ \t]+.*[a-zA-Z]).+', full_block, re.IGNORECASE | re.MULTILINE))
     has_finding = bool(re.search(r'^(?:2\.\s*)?(?:Assumption|Finding)(?:.*?):\s*(?=.*[a-zA-Z0-9]).+', full_block, re.IGNORECASE | re.MULTILINE))
     has_recon = bool(re.search(r'^(?:3\.\s*)?Reconciliation(?:.*?):\s*(?=.*[a-zA-Z0-9]).+', full_block, re.IGNORECASE | re.MULTILINE))
-    
+
     return has_source and has_finding and has_recon
 
 def test_sota_parser_cases():
@@ -66,19 +66,51 @@ def test_sota_parser_cases():
         ("ARCH: valid5\nSOTA-Basis:\nSource: https://example.com Title\nFinding: Use AES-256-GCM.\nReconciliation: Updated to AES-256-GCM! (See #123)", True),
         ("ARCH: invalid6\nSome commit", False),
         ("ARCH: invalid7\nSOTA-Basis:", False),
+
+        # 1. Valid SOTA-Basis: None with an immediate nonempty Justification:
+        ("ARCH: valid_new1\nSOTA-Basis: None\nJustification: immediate justification.", True),
+
+        # 2. Invalid intervening prose followed by a later justification.
+        ("ARCH: invalid_new2\nSOTA-Basis: None\nSome intervening prose\nJustification: later", False),
+
+        # 3. Invalid intervening Source: field followed by a later justification.
+        ("ARCH: invalid_new3\nSOTA-Basis: None\nSource: https://example.com Title\nJustification: later", False),
+
+        # 4. Missing justification.
+        ("ARCH: invalid_new4\nSOTA-Basis: None\n", False),
         ("ARCH: invalid8\nSOTA-Basis: None", False),
+
+        # 5. Empty justification.
+        ("ARCH: invalid_new5\nSOTA-Basis: None\nJustification:", False),
+
+        # 6. Whitespace-only justification.
+        ("ARCH: invalid_new6\nSOTA-Basis: None\nJustification: \t \n", False),
+        ("ARCH: invalid18\nSOTA-Basis: None\nJustification:    ", False),
+
+        # 7. Duplicate justification fields.
+        ("ARCH: invalid_new7\nSOTA-Basis: None\nJustification: first\nJustification: second", False),
+
+        # 8. Duplicate SOTA-Basis: headers.
+        ("ARCH: invalid_new8\nSOTA-Basis: None\nJustification: text\nSOTA-Basis: None", False),
+        ("ARCH: invalid19\nSOTA-Basis: None\nJustification: txt\nSOTA-Basis: None", False),
+
+        # 9. Malformed Justification labels.
+        ("ARCH: invalid_new9\nSOTA-Basis: None\nJustification text", False),
+
+        # 10. A Git footer where a justification is required.
+        ("ARCH: invalid_new10\nSOTA-Basis: None\nSigned-off-by: user@example.com", False),
         ("ARCH: invalid9\nSOTA-Basis: None\nSigned-off-by: user@example.com", False),
-        ("ARCH: invalid10\nSOTA-Basis: None\nJustification: yes\n\nSome unrelated text here.", True),
         ("ARCH: invalid11\nSOTA-Basis: None\nSigned-off-by: user\nJustification: text", False),
+
+        ("ARCH: invalid10\nSOTA-Basis: None\nJustification: yes\n\nSome unrelated text here.", True),
         ("ARCH: invalid12\nSOTA-Basis:\nSource: https://example.com\nFinding: x\nReconciliation: y", False),
         ("ARCH: invalid13\nSOTA-Basis:\nSource: Some Title Here\nFinding: x\nReconciliation: y", False),
         ("ARCH: invalid14\nSOTA-Basis:\nSource: \nFinding: \nReconciliation: ", False),
         ("ARCH: invalid15\nSOTA-Basis:\nSoruce: a https://example.com\nFnding: x\nRecon: y", False),
         ("ARCH: invalid16\nSource: Title https://example.com\nFinding: x\nReconciliation: y\n\nSOTA-Basis:", False),
         ("ARCH: valid17\nSOTA-Basis:\nSource: Title https://example.com\nFinding: x\nReconciliation: y\n\nUnrelated text", True),
-        ("ARCH: invalid18\nSOTA-Basis: None\nJustification:    ", False),
-        ("ARCH: invalid19\nSOTA-Basis: None\nJustification: txt\nSOTA-Basis: None", False),
         ("ARCH: invalid20\nSOTA-Basis:\nSource: Title httpnotavalidurl\nFinding: x\nReconciliation: y", False),
+
         # Test consequential prefixes
         ("INFRA: valid\nSOTA-Basis: None\nJustification: text", True),
         ("API: valid\nSOTA-Basis: None\nJustification: text", True),
@@ -93,21 +125,16 @@ def test_sota_parser_cases():
 def run_scanner_on_repo(repo_dir, start_commit, end_commit, legacy_exemptions=None):
     if legacy_exemptions is None:
         legacy_exemptions = KNOWN_LEGACY_VIOLATIONS
-        
-    def log_fail(msg):
-        import pathlib
-        pathlib.Path("FAIL_LOG.txt").write_text(msg)
-        pytest.fail(msg)
 
     try:
         subprocess.run(["git", "rev-parse", "--verify", f"{start_commit}^{{commit}}"], check=True, capture_output=True, text=True, cwd=repo_dir)
     except subprocess.CalledProcessError:
-        log_fail(f"Policy start commit {start_commit} is not in the local Git history. ")
+        pytest.fail(f"Policy start commit {start_commit} is not in the local Git history. ")
 
     try:
         subprocess.run(["git", "merge-base", "--is-ancestor", start_commit, end_commit], check=True, capture_output=True, cwd=repo_dir)
     except subprocess.CalledProcessError:
-        log_fail(f"Policy start commit {start_commit} exists but is not an ancestor of {end_commit}. ")
+        pytest.fail(f"Policy start commit {start_commit} exists but is not an ancestor of {end_commit}. ")
 
     result = subprocess.run(
         [
@@ -120,27 +147,27 @@ def run_scanner_on_repo(repo_dir, start_commit, end_commit, legacy_exemptions=No
         check=True,
         cwd=repo_dir
     )
-    
+
     output = result.stdout.strip()
     if not output:
         return
-        
+
     commits = output.split("---COMMIT_SEP---")
     for commit_block in commits:
         commit_block = commit_block.strip()
         if not commit_block:
             continue
-            
+
         lines = commit_block.splitlines()
         sha = lines[0]
-        
+
         if sha in legacy_exemptions:
             continue
-            
+
         message = "\n".join(lines[1:])
-        
+
         if not parse_sota_basis(message):
-            log_fail(f"Commit {sha} has a missing or malformed 'SOTA-Basis:' footer. See AGENTS.md 3.7.5.")
+            pytest.fail(f"Commit {sha} has a missing or malformed 'SOTA-Basis:' footer. See AGENTS.md 3.7.5.")
 
 def test_arch_commits_have_sota_basis():
     # Validates compliance against the current repository
@@ -161,57 +188,68 @@ def _test_history_scanner_enforcement(tmp_path):
     # Setup temporary git repository
     repo = tmp_path / "repo"
     repo.mkdir()
-    
+
     def git(*args):
         subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
-        
+
     git("init")
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Test User")
-    
+
     (repo / "file.txt").write_text("init")
     git("add", "file.txt")
     git("commit", "-m", "init")
     init_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
-    
+
     # 1. Commits with NON-GOVERNED prefixes (should be ignored by grep, even if SOTA block is missing/invalid)
     for prefix in ["FIX", "HEAL", "CI"]:
         (repo / "file.txt").write_text(prefix)
         git("commit", "-am", f"{prefix}: something\n\nNo SOTA section needed.")
-        
+
     current_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
     # Scanner should pass because these prefixes are ignored
     run_scanner_on_repo(str(repo), init_sha, current_head)
-    
+
     # 2. Commit with governed prefix and VALID SOTA block
     (repo / "file.txt").write_text("arch")
     git("commit", "-am", "ARCH: valid\n\nSOTA-Basis: None\nJustification: trivial")
-    
-    # 3. Test legacy exception mechanism
+
+    # 3. Test legacy exception mechanism (Case A - intentional exemption)
     (repo / "file.txt").write_text("legacy")
     git("commit", "-am", "ARCH: invalid\n\nSOTA-Basis: None\nbad text")
     invalid_legacy_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
-    
+
     # 4. Scanner should pass because the invalid commit is exempted
     head_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
     run_scanner_on_repo(str(repo), init_sha, head_sha, legacy_exemptions={invalid_legacy_sha})
-    
+
+    # 4b. Case B - invalid lookalike is not exempted
+    (repo / "file.txt").write_text("lookalike")
+    git("commit", "-am", "ARCH: invalid lookalike\n\nSOTA-Basis: None\nlookalike text")
+    invalid_lookalike_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
+
+    from tests.test_agent_sota_enforcement import KNOWN_LEGACY_VIOLATIONS
+    with pytest.raises(Failed, match="missing or malformed 'SOTA-Basis:' footer"):
+        run_scanner_on_repo(str(repo), init_sha, invalid_lookalike_sha, legacy_exemptions=KNOWN_LEGACY_VIOLATIONS)
+
+    git("reset", "--hard", head_sha)
+
     # 5. Verify EVERY governed prefix is scanned and caught if invalid (without being exempted)
     for prefix in ["ARCH", "INFRA", "API", "DOMAIN", "SERVICE"]:
         (repo / "file.txt").write_text(f"invalid_{prefix}")
         git("commit", "-am", f"{prefix}: invalid\n\nSOTA-Basis: None\nmissing justification")
         new_head_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), capture_output=True, text=True).stdout.strip()
-        
+
         with pytest.raises(Failed, match="missing or malformed"):
             run_scanner_on_repo(str(repo), init_sha, new_head_sha, legacy_exemptions={invalid_legacy_sha})
-            
+
         # Hard reset to remove the invalid commit so we can test the next one
         git("reset", "--hard", head_sha)
-    
+
     # 6. Test missing baseline
     with pytest.raises(Failed, match="is not in the local Git history"):
         run_scanner_on_repo(str(repo), "nonexistent_sha", head_sha, legacy_exemptions=set())
-        
+
     # 7. Test disconnected baseline
     # We create an orphaned commit
     git("checkout", "--orphan", "orphan_branch")
