@@ -345,7 +345,7 @@ the consequential implementation strategy.
 
 Written instructions alone cannot guarantee agent compliance. To ensure the process in §3.7.4 is actually followed, enforcement relies on a deterministic code gate.
 
-Every commit prefixed with `ARCH:` MUST include a `SOTA-Basis:` footer or section in the commit message. The section must record:
+Every consequential engineering commit (prefixed with `ARCH:`, `INFRA:`, `API:`, or `DOMAIN:`) MUST include a `SOTA-Basis:` footer or section in the commit message. The section must record:
 1. The primary source consulted (Title and URL) or `None`.
 2. The specific assumption or finding applied.
 3. How it reconciles with repository authority.
