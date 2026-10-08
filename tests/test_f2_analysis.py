@@ -140,3 +140,68 @@ class TestIndependentReconstruction:
         a = finalize_f2([(True, False), {"t_endpoint": True, "x_endpoint": False}])
         b = finalize_f2([PairedObservation("t", 0, True, False)])
         assert a.to_dict()["risk_difference"] == b.to_dict()["risk_difference"]
+
+
+class TestExperimentalUnit:
+    """ONE PAIR = ONE TASK (F2-IMPL-AUTH-024 s3 and s6.3).
+
+    The unit of analysis is the task: one T rollout and one X rollout. A
+    repeated run of the same task is a replicate inside a single clustered unit
+    and "MUST NOT be counted as additional independent pairs". Counting it would
+    inflate ``m`` and break the independence the exact McNemar null assumes, so
+    the ledger refuses rather than silently keeps or drops the duplicate --
+    choosing a survivor is a Q5 exclusion decision, and Q5 requires exclusions
+    to be pre-specified and outcome-independent.
+    """
+
+    def test_two_complete_pairs_for_one_task_fail_closed(self):
+        dup = [
+            PairedObservation("t1", 0, True, False),
+            PairedObservation("t1", 1, False, True),  # same task, different seed
+        ]
+        with pytest.raises(ValueError, match="one pair = one task"):
+            finalize_f2(dup)
+
+    def test_the_independent_auditor_refuses_the_same_ledger(self):
+        """Producer and auditor must enforce the unit identically."""
+        dup = [
+            PairedObservation("t1", 0, True, False),
+            PairedObservation("t1", 1, True, False),
+        ]
+        with pytest.raises(ValueError, match="pseudo-replication"):
+            independent_reconstruction(dup)
+
+    def test_repeated_attempts_pass_while_only_one_pair_completes(self):
+        """Q6 reruns retain every attempt; only one may reach a complete pair."""
+        obs = [
+            PairedObservation("t1", 0, None, None, "infrastructure:process_crash"),
+            PairedObservation("t1", 1, None, True, "infrastructure:trajectory_malformed"),
+            PairedObservation("t1", 2, True, False),
+        ]
+        r = finalize_f2(obs)
+        assert r.n_total == 3
+        assert r.n_complete == 1
+        assert r.n_missing == 2
+
+    def test_the_identity_free_coercion_path_still_pairs_up(self):
+        # Tuple/map coercion carries no task_id, so there is no identity to collide.
+        r = finalize_f2([(True, False), (False, True), (True, True)])
+        assert r.n_complete == 3
+
+    def test_m_counts_distinct_tasks_whatever_the_seed(self):
+        obs = [
+            PairedObservation(f"task-{i}", i, i % 2 == 0, i % 3 == 0)
+            for i in range(6)
+        ]
+        r = finalize_f2(obs)
+        assert r.n_complete == 6
+        assert r.n_complete == len({o.task_id for o in obs})
+
+    def test_a_missing_duplicate_never_trips_the_rule(self):
+        """Identity collisions among missing rows are reported, not refused."""
+        obs = [
+            PairedObservation("t1", 0, None, None, "infrastructure:process_crash"),
+            PairedObservation("t1", 1, None, None, "infrastructure:qdrant_unavailable"),
+        ]
+        r = finalize_f2(obs)
+        assert r.n_total == 2 and r.n_complete == 0 and r.n_missing == 2

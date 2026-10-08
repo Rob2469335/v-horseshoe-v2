@@ -1785,3 +1785,70 @@ confidence-interval construction, the Q6 ceiling, or any readiness gate.
 (9 cases) and `::TestBinomialTailNumericalStability` (4 cases); the pre-existing
 F2 statistical / analysis / Q6 / design-guard / readiness suite (154 cases)
 passes unchanged alongside them.
+
+### F2-CLARIFICATION-006 - The experimental unit is ONE PAIR = ONE TASK, enforced
+
+**Authorizing role:** repository operator (Rob).
+**Recorded by:** implementation agent.
+**Interactive-authorization basis:** the operator's explicit instruction, given
+interactively in his own session on 2026-10-08, to finish the remaining F2
+statistical/governance work, reconcile implementation and documentation with the
+authority, and commit and push the authorized result.
+**Date:** 2026-10-08.
+
+**Issue.** The authority already answers the unit question, but the analysis did
+not enforce it, and two documents phrased the unit as "task x seed", which reads
+as if several seeds of one task were several independent pairs.
+
+**What the authority already says (no new science here).**
+
+| Source | Statement |
+|---|---|
+| F0 `docs/EXPERIMENT_J.md:198` (frozen) | "Unit of analysis: Rollout (**one trajectory per arm per task**)" |
+| `EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md:51-56` (`F2-IMPL-AUTH-024`, operator, 2026-10-05) | "**One pair = one task**, run once under T and once under X ... Repeated runs of the same task are **replicates within one clustered unit** and **MUST NOT** be counted as additional independent pairs"; §6.3: "**No pseudo-replication.** Repeated runs of one task never increase `m`." |
+| `EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md:146` | "`m` = complete task pairs (each pair = one T rollout + one X rollout)" |
+| `F2-IMPL-AUTH-028` (operator, 2026-10-07) | target "**≥ 300 admitted task pairs**"; "**If fewer than 300 tasks survive** ... STOP" |
+| Implementation | `f2_arm_orchestrator.run` is keyed by `task_id`; the F2 execution path has **no seed parameter at all**; `f2_analysis.PairedObservation.seed` is a per-rollout identity field defaulting to `0` |
+
+**Classification — `PROVEN` (authority is sufficient; this is NOT a governance
+gap).** Interpretation "one seed per task" is the authorized reading: F0 §11
+fixes one trajectory per arm per task, AUTH-024 fixes one pair = one task and
+forbids counting repeats, AUTH-028 counts **tasks**, and no execution code
+accepts a second seed. "task x seed" in `F2-IMPL-AUTH-013:767/:781` and in the
+earlier `PairedObservation` docstring names the *identity* of a unit, not a
+licence to draw several.
+
+**Defect (`PROVEN`).** `f2_analysis._partition` — the single function both
+`finalize_f2` (producer) and `independent_reconstruction` (auditor) call — built
+`m = len(complete)` with no identity check, so two complete pairs for one task
+would both be counted. That is exactly the pseudo-replication AUTH-024 §6.3
+forbids: it inflates `m`, overstates effective sample size, and breaks the
+mutual independence the exact McNemar conditional null `Binomial(b + c, ½)`
+assumes. Nothing produced such a ledger today (no confirmatory run exists), so
+this is a latent enforcement gap, not a wrong number.
+
+**Decision.** `_partition` now **fails closed**: a second *complete* pair for a
+non-empty `task_id` raises `ValueError` naming the task and the rule. The check
+lives in `_partition`, so producer and auditor enforce it identically and can
+never disagree. It deliberately does **not** silently drop the duplicate:
+choosing a survivor would be an exclusion, and AUTH-018 §Q5 requires exclusions
+to be pre-specified and outcome-independent — a post-hoc pick is neither. The
+repository's own precedent is the same shape: `PopulationManifest.verify()`
+fails closed on a duplicate `instance_id`.
+
+**What remains allowed (and is tested):** several *incomplete* rows for one
+task, because Q6 reruns retain every attempt and only one attempt may reach a
+complete pair; and the documented tuple/map coercion shortcut, which carries no
+`task_id` to collide.
+
+**Not changed:** F0, `k`, α, π_d, δ, `n`, the McNemar method, the CI, the Q6
+ceiling, the `PairedObservation` schema (the `seed` field stays), and no
+statistic moves for any ledger that was already legal.
+
+**File boundary.** `qwen_train/f2_analysis.py` (docstrings + the `_partition`
+identity check) plus `tests/test_f2_analysis.py`. No other file.
+
+**Verification.** `tests/test_f2_analysis.py::TestExperimentalUnit` (6 cases);
+`tests/test_f2_frozen_design_guard.py` and `tests/test_f2_q6_gate.py` pass
+unchanged — including `test_incomplete_pairs_are_reported_not_dropped_as_outcomes`,
+whose three same-`task_id` rows are all incomplete and therefore still legal.

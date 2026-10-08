@@ -6,7 +6,8 @@ This is the final link of the F2 chain:
 
 It is PURE and OFFLINE: no experiment is executed, no service is contacted, and
 no trust is placed in any producer. Given the admitted paired observations (one
-``(T endpoint, X endpoint)`` per task x seed unit), it produces the FROZEN
+``(T endpoint, X endpoint)`` pair **per task** — F2-CLARIFICATION-006; one pair =
+one task, F2-IMPL-AUTH-024 s3), it produces the FROZEN
 confirmatory result:
 
 * the exact two-sided McNemar test; and
@@ -194,7 +195,15 @@ def evaluate_infrastructure_gate(
 
 @dataclass(frozen=True)
 class PairedObservation:
-    """One task x seed paired unit.
+    """One T/X pair for ONE task.
+
+    The experimental unit is the task: **one pair = one task**, run once under T
+    and once under X (F2-IMPL-AUTH-024 s3, which cites readiness plan s2.4 line
+    146: ``m`` = complete task pairs, each pair = one T rollout + one X
+    rollout). ``seed`` records which rollout produced the pair; it is NOT a
+    second unit. A repeated run of the same task is a replicate inside this
+    clustered unit and never increases ``m`` — ``_partition`` fails closed if a
+    second complete pair for one task reaches the ledger.
 
     ``t_endpoint`` / ``x_endpoint`` are ``True`` (a qualifying edit was observed
     inside the horizon), ``False`` (a censored observation: post-delivery steps
@@ -297,6 +306,32 @@ def _partition(observations: Iterable[Any]) -> tuple[list[PairedObservation], li
     obs = [PairedObservation.coerce(o) for o in observations]
     complete = [o for o in obs if o.complete]
     missing = [o for o in obs if not o.complete]
+
+    # F2-CLARIFICATION-006: ONE PAIR = ONE TASK (F2-IMPL-AUTH-024 s3, s6.3).
+    # Repeated runs of one task are replicates inside a single clustered unit and
+    # "MUST NOT be counted as additional independent pairs"; pseudo-replication
+    # would inflate m and break the independence the exact McNemar null assumes.
+    # Incomplete rows are exempt: a ledger legitimately carries several attempts
+    # for one task (Q6 reruns retain every attempt) as long as at most one of
+    # them reaches a complete pair. Empty task_id is the documented tuple/map
+    # coercion shortcut, which carries no identity to collide.
+    # Fail closed rather than silently drop: choosing which duplicate survives is
+    # an exclusion decision, and Q5 requires exclusions to be pre-specified and
+    # outcome-independent -- which a post-hoc pick would not be.
+    seen: set[str] = set()
+    for o in complete:
+        if not o.task_id:
+            continue
+        if o.task_id in seen:
+            raise ValueError(
+                f"two complete T/X pairs carry task_id {o.task_id!r}: one "
+                "pair = one task (F2-IMPL-AUTH-024 s3), so a second complete "
+                "pair for the same task is pseudo-replication and must not "
+                "increase m. Record the extra attempt as missing under a "
+                "pre-specified Q5 reason, or fix the ledger."
+            )
+        seen.add(o.task_id)
+
     return complete, missing
 
 
