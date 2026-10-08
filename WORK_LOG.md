@@ -1027,4 +1027,79 @@ F2-IMPL-AUTH-027 ledger entry in
 `docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md` gained a
 dated point-in-time / superseding note only; its historical text is unchanged.
 
+## 2026-10-08 - F2 statistical/governance closure (116, unit, admitted, F1 evidence)
+
+Four audit findings were carried through to implementation, test and record.
+Nothing scientific changed: δ = 0.20, α = 0.05, π_d = 0.50, `k = 12`,
+`n = 300`, the exact two-sided McNemar test and the Clopper-Pearson interval are
+untouched, and no gate was weakened.
+
+**1. What `required_pairs` actually returns (`F2-CLARIFICATION-005`, `6a38c1b2`).**
+It is the **first** `m` whose *rounded, conditional* power clears the target on a
+**non-monotone** curve — at δ = 0.20, π_d = 0.50, α = 0.05, power 0.90 that is
+**116** (power 0.900969), but power at `m = 118` is **0.839027**, at `m = 122`
+**0.895089**, at `m = 130` **0.930641**. `n = round(m·π_d)` and
+`b = round((n + m·δ)/2)` are both rounded while the exact two-sided critical
+value steps with `n`, so the alternative weakens *and* the bar rises at the same
+step. Independent exact design calculations put the corresponding requirement at
+**130** (conditional) and **135** (unconditional) pairs; the helper's own stable
+crossing is **139**. The module's claim that its returned N is "a slight
+OVER-estimate" was true only of the exact-vs-asymptotic comparison it came from
+and is now scoped accordingly. **`n = max(300, …)` is unaffected and provably so**
+— `required_pairs` returns 28 / 66 / 116 / 191 / 261 across the authorized π_d
+range, all below 300. The helper has **no production caller**; the enforced
+constant is `FROZEN_MIN_PAIRS`. Also fixed: `binom_sf` / `binom_cdf` raised
+`OverflowError` above ~n = 1024 (`comb(2000,1000) ≈ 1e600` cannot become a
+float); a log-space fallback now runs **only** on `OverflowError`, so every
+previously working input is bit-identical (verified against
+`sum(comb(n,i)) / 2**n`).
+
+**2. The experimental unit was already decided — it was just not enforced
+(`F2-CLARIFICATION-006`, `833558bb`).** `F2-IMPL-AUTH-024` §3: *"One pair = one
+task … Repeated runs of the same task are replicates within one clustered unit
+and MUST NOT be counted as additional independent pairs"*; §6.3 *"No
+pseudo-replication. Repeated runs of one task never increase `m`."* F0 §11, the
+readiness plan, AUTH-028 (which counts **tasks**) and the execution code (no seed
+parameter) all agree. `_partition` — shared by `finalize_f2` and
+`independent_reconstruction` — now **fails closed** on a second complete pair for
+one `task_id`, identically for producer and auditor, rather than silently
+dropping one (a post-hoc drop would be an exclusion AUTH-018 §Q5 does not
+permit). Incomplete attempts for the same task remain legal, because Q6 reruns
+retain every attempt. **The earlier audit's "GOVERNANCE GAP" on the unit was
+wrong: the authority was sufficient and simply had not been surfaced.**
+
+**3. Admitted vs analyzable (`F2-CLARIFICATION-007`, `3442489c`).** The readiness
+gate checks `admitted >= 300` because **AUTH-028 set the target that way** and
+declared it *"consistent with the frozen n = 300"* — so the gate is **not**
+checking the wrong quantity. The two counts are still not equal: Q5's reasons are
+cleared at admission, so post-admission loss is infrastructure (rerunnable ×3,
+capped by the Q6 30 % ceiling, which STOPs rather than proceeding with a smaller
+`n`). Worst Q6-legal case at admitted = 300 is analyzable = 210, where exact
+unconditional power bottoms out at **0.8123** (Independent calculation; the
+smallest N clearing 0.90 across π_d ∈ [0.20, 1.00] is **270**, and N = 300 gives
+**0.9291** at π_d = 1.00). **No threshold changed** — raising the population
+target to ≥ 429 admitted would change AUTH-028 and is `REQUIRES AUTHORIZATION`.
+The comment and shortfall remedy now name the counted quantity, and a test pins
+it.
+
+**4. F1 endpoint evidence (`F2-CLARIFICATION-008`).** Re-deriving every endpoint
+from the raw ATIF trajectories with the repository's own `pair_observation_ok` +
+`find_qualifying_first_edit` shows **9 of the 10 VALID observations reached the
+endpoint, all at step 4** — not 10 of 10. The tenth (`f1_observation_5.jsonl` L2,
+invocation `32a0965d7b108e25`, run `36bec9e8-…`) did `lsp diagnostics`, a
+`filesystem **read**`, a duplicate `lsp` call and an `mcp` call, and **no
+qualifying edit**; its stored `f1_endpoint_step = null` is correct, not stale.
+**`k = 12` and `P95 = 12` are unchanged** (9×4 + 11×12 → 19th value = 12).
+Corrected in `F1_FINAL_RECONCILIATION.md` §18 and the readiness plan §3 under
+those documents' own "raw artifact is authoritative" rule. Headroom is now 9/10,
+95 % CP `[0.555, 0.997]` — still consistent with `p_X > 0.80`, so δ = 0.20
+attainability remains `NOT ESTABLISHED` and Q10 is still required.
+
+**Remaining `REQUIRES AUTHORIZATION`:** (a) the superseded wording in
+`docs/EXPERIMENT_J_F1_AUTHORIZATION.md` and `docs/LEARNING_EXPERIMENT_STATE.md`
+(AGENTS.md §3.1 protects both); (b) raising the population target to guarantee
+300 *analyzable* pairs; (c) any change to the `required_pairs` algorithm.
+**F2 is not READY** — Q9, Q10, Q12, Q13, the receipt key, S8 evidence and the
+admitted population are all still outstanding.
+
 *End of WORK_LOG.md — This file contains the historical project memory migrated from the original AGENTS.md. For current standing rules and architecture, see AGENTS.md. For Experiment J scientific truth, see the three authoritative documents in docs/.*

@@ -155,6 +155,31 @@ sided)`. Exact conditional McNemar, two-sided, `α = 0.05`, target power `0.80`,
 
 One-sided comparison at δ = 0.20: `π_d = 0.30 → 42`, `π_d = 0.50 → 74`.
 
+> **CORRECTION (2026-10-08, `F2-CLARIFICATION-005`) — what the helper's return
+> value actually is.** `required_pairs` does **not** return "the number of pairs
+> needed". It returns the **first** `m` at which power clears the target when
+> power is evaluated at the *rounded* cell `n = round(m·π_d)`,
+> `b = round((n + m·δ)/2)`, `c = n − b` — a **conditional** power (the discordant
+> count is held fixed, not integrated over `Binomial(m, π_d)`) on a
+> **non-monotone** curve, because `n` and `b` are rounded and the exact two-sided
+> critical value is a step function of `n`. At δ = 0.20, π_d = 0.50, α = 0.05,
+> power = 0.90 the first crossing is **116** (power 0.900969), but power at
+> `m = 118` is **0.839027**, at `m = 122` **0.895089**, and at `m = 130`
+> **0.930641** — all three values are produced by the repository's own
+> `exact_power` and are pinned by
+> `tests/test_f2_statistics.py::TestRequiredPairsInterpretation`.
+>
+> **Consequence for `n`: none.** The frozen rule is
+> `n = max(300, required_pairs(...))`, and `required_pairs` returns **below 300
+> at every point of the authorized π_d range** (28 / 66 / **116** / 191 / 261 for
+> π_d = 0.20 / 0.30 / 0.50 / 0.75 / 1.00), so `n = 300` regardless of π_d. The
+> invariant `max(300, required) == 300` is pinned by
+> `test_every_authorized_sensitivity_point_stays_below_the_frozen_minimum`.
+> **116 must never be quoted as an unconditional total-pair requirement.**
+> The exact design calculations behind the choice of 300 (conditional 130,
+> unconditional 135, worst-case π_d = 1.00 requires 261) are recorded in
+> `F2-CLARIFICATION-005`.
+
 Two facts that govern everything downstream:
 
 1. **`δ` and `π_d` are both empirical.** Neither may be fixed by assertion.
@@ -235,8 +260,20 @@ scientific decision, not an implementation detail.
    `12` here is the **observation horizon and the F0 §5 cap**, NOT a frozen primary
    endpoint `k`: F0 §5 selects `k` during F1 as the 95th percentile of
    steps-to-first-edit across pilot runs, capped within `[8, 12]`, and F1 freezes it.
-   F1 reached the endpoint in **10/10** valid
-   no-lesson observations (all at ATIF step 4). If X is similarly saturated the
+   F1 reached the endpoint in **9 of the 10** valid
+   no-lesson observations (all nine at ATIF step 4). The tenth valid
+   observation — `f1_observation_5.jsonl` L2, invocation `32a0965d7b108e25` —
+   made **no qualifying edit** inside the 12-step horizon; its trajectory
+   contains `lsp diagnostics`, a `filesystem **read**`, a duplicate `lsp` call and
+   an `mcp` call, and no `write`/`patch`/`edit`/`create`. Re-verified 2026-10-08
+   by re-deriving every endpoint from the raw ATIF trajectories with the
+   repository's own `pair_observation_ok` + `find_qualifying_first_edit`
+   (`F1_FINAL_RECONCILIATION.md` §18). Corrected 2026-10-08: this previously
+   read "10/10 … all at ATIF step 4", which the raw artifacts contradict.
+   **Consequence for `k`: none** — a valid observation with no endpoint is
+   right-censored at the horizon and contributes 12, so the P95 set is 9×4 +
+   11×12 and `P95 = 12`, `k = 12` are unchanged.
+   If X is similarly saturated the
    binary endpoint has **zero headroom** and no positive risk difference is
    attainable at any N. This must be *measured*, not assumed;
 2. ~~the **empirical discordance `π_d`** that sets required N (a ~3× swing across

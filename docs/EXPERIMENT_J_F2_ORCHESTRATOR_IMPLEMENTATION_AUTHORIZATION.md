@@ -1929,3 +1929,103 @@ remedy string only) plus `tests/test_f2_readiness.py`. No other file.
 **Verification.** `tests/test_f2_readiness.py::TestPopulationCountedQuantity`
 (3 cases); the existing `test_population_shortfall_blocks` and
 `FROZEN_MIN_PAIRS == 300` guard both still pass unchanged.
+
+### F2-CLARIFICATION-008 - The F1 endpoint count is 9 of 10, not 10 of 10; `k` is unchanged
+
+**Authorizing role:** repository operator (Rob).
+**Recorded by:** implementation agent.
+**Interactive-authorization basis:** the operator's explicit instruction, given
+interactively in his own session on 2026-10-08, to resolve the F1 evidence
+contradiction from the artifacts and authority, without altering historical
+evidence to make the numbers match, and to commit and push the result.
+**Date:** 2026-10-08.
+
+**Issue.** `F2-IMPL-AUTH-013` (F1 freeze) states *"10 VALID endpoint observations
+(all at ATIF Step 4)"*, as do `F1_FINAL_RECONCILIATION.md` §5/§6,
+`LEARNING_EXPERIMENT_STATE.md`, `EXPERIMENT_J_F1_AUTHORIZATION.md:152`, the
+readiness plan §3 and `WORK_LOG.md`. The raw artifacts support **9**, not 10.
+
+**Method.** Each endpoint was re-derived **independently of the stored
+`interpretation` block**, from the raw ATIF trajectory
+(`data/trajectories/{run_id}.jsonl`, `record_type == "step"`) through the
+repository's own production path exactly as `run_repair_task.py` uses it —
+`pair_observation_ok(step)` then `f1_infra.find_qualifying_first_edit`. This is
+the repository's own reconciliation rule applied: `F1_FINAL_RECONCILIATION.md` §8
+— *"Raw JSONL artifact is authoritative; batch summaries are stale snapshots"* —
+and `LEARNING_EXPERIMENT_STATE.md:646-648`, which names
+`interpretation.f1_endpoint_step` as the authoritative field.
+
+**Result — `PROVEN IN CURRENT REVISION`:**
+
+| | count |
+|---|---|
+| VALID official observations | **10** (unchanged) |
+| stored `f1_endpoint_step == 4` | **9** |
+| stored `f1_endpoint_step == null` | **1** — `f1_observation_5.jsonl` L2, invocation `32a0965d7b108e25`, run `36bec9e8-d0e9-47f7-a8b8-2b0940dd9c01` |
+| re-derived from the trajectory, agreeing with the stored field | **10 of 10** |
+
+The tenth run's four ATIF steps are `lsp diagnostics`, a
+`filesystem {"operation": "read"}`, a duplicate `lsp` call and an
+`mcp memory read_graph` — **no `write`/`patch`/`edit`/`create` at all**, so
+`find_qualifying_first_edit` correctly returns `None` under
+`F1-OP-004-CLARIFICATION` (which requires `function=filesystem` **and**
+`operation ∈ {write, patch, edit, create}`). The stored record is **not stale**:
+`interpretation.decision_boundary_reached` is already `false` in it. The raw
+artifact is correct; **the documentation was wrong** — branch "historical
+documentation is stale", not "artifact misclassified" and not "endpoint
+definition changed".
+
+**Effect on `F1-OP-004b` and `k`: `PROVEN` none.** A VALID observation with no
+qualifying edit inside the horizon is right-censored and contributes the horizon
+value 12. The true contribution set is **9×4 + 11×12** (not `10×4 + 10×12`):
+
+```
+sorted: 4,4,4,4,4,4,4,4,4, 12,12,12,12,12,12,12,12,12,12,12
+nearest-rank P95 (n = 20, rank 19) = 12  ->  k = min(12, max(8, 12)) = 12
+```
+
+`P95 = 12` and `k = 12` therefore stand exactly as `AUTH-013` recorded them, and
+so do δ, α, π_d, `n` and the McNemar method. **The F1 freeze is unaffected.**
+
+**Effect on endpoint headroom — the only scientifically material consequence.**
+Two-sided 95 % Clopper-Pearson exact binomial intervals (α/2 = 0.025, bisection
+on the binomial probability tail through the repository's own
+`_clopper_pearson_lower/_clopper_pearson_upper`, cross-checked against the
+closed form `(α/2)^(1/n)` for `k = n`):
+
+| | p̂ | 95 % CP |
+|---|---|---|
+| **9 / 10 — raw artifacts, correct** | **0.900000** | **[0.554984, 0.997471]** |
+| 10 / 10 — previous wording | 1.000000 | [0.691503, 1.000000] |
+
+Headroom for δ = 0.20 requires `p_X ≤ 0.80`; `[0.555, 0.997]` still contains
+values above 0.80, so attainability remains **`NOT ESTABLISHED`** and the Q10
+no-lesson calibration is still required. The pilot is also **one task** at
+`temp = 0`, so it does not bound `p_X` over the F2 population. Correction of the
+numerator **strengthens** rather than weakens the readiness plan's warning: the
+endpoint is not perfectly saturated even on the pilot task.
+
+**Superseded on this one point.** `F1_FINAL_RECONCILIATION.md` §5/§6 and the
+readiness plan §3 are corrected in this same change. Two further documents still
+carry the superseded wording and were deliberately **NOT** edited:
+
+* `docs/EXPERIMENT_J_F1_AUTHORIZATION.md:152`
+* `docs/LEARNING_EXPERIMENT_STATE.md:23, :30, :925, :933`
+
+Both are protected Experiment J authority documents under AGENTS.md §3.1 rows 3
+and 4, which forbids modifying them without explicit authorization. Correcting
+those two lines is **`REQUIRES AUTHORIZATION`** and is NOT done here. The
+supersession is recorded so no reader is misled in the meantime.
+
+**Nothing else in the F1 record changes:** the execution registry, the official-20
+boundary, the 10 VALID / 10 INVALID split, manifest statuses, frozen hashes,
+`P95`, `k`, and every frozen F0/F1 parameter.
+
+**File boundary.** `docs/F1_FINAL_RECONCILIATION.md` (new dated §18),
+`docs/EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md` (§2.4 clarification and
+§3 numerator), `WORK_LOG.md`, and this document. **No** F0/F1 authority document,
+no code, no test, no experiment run.
+
+**Verification.** The endpoint detector itself is pinned by
+`tests/test_f1_atif_wiring.py` and `tests/test_f1_evidence.py`; both pass
+unchanged, since no code moved.

@@ -413,3 +413,100 @@ A proposal existed to extend `_forced_edit` (triggered by loop guard) to also ac
 - Rejection-loop behavioral finding preserved (Obs 18-20)
 
 **The F1 pilot data collection is complete and frozen. Ready to transition out of F1 for post-F1 Experiment J work.**
+
+---
+
+## 18. Endpoint-step re-verification (2026-10-08) — CORRECTS §5 and §6 on ONE point
+
+**Scope.** This section corrects a single factual claim made in §5 and §6 above —
+*"All 10 VALID observations reached endpoint step 4"* — under this document's own
+governing rule stated in §8: *"Raw JSONL artifact is authoritative; batch
+summaries are stale snapshots."* It changes **nothing else**: the official-20
+boundary, the validity split, the execution registry, the P95 value and `k` are
+all unchanged.
+
+**Method.** Every endpoint was re-derived independently of the stored
+`interpretation` block, from the raw ATIF trajectory
+(`data/trajectories/{run_id}.jsonl`, `record_type == "step"`), using the
+repository's own production code path exactly as `run_repair_task.py` does:
+
+```python
+tcs = [tc for d in step_records for tc in pair_observation_ok(d)]
+step = find_qualifying_first_edit(tcs)          # qwen_train/f1_infra.py
+```
+
+**Result — 10 VALID official observations:**
+
+| Observation | Artifact | invocation_id | run_id | stored `f1_endpoint_step` | re-derived | agree |
+|---|---|---|---|---|---|---|
+| 6* | `f1_observation_5.jsonl` L2 | `32a0965d7b108e25` | `36bec9e8-…` | `null` | **`None`** | yes |
+| 7 | `f1_obs_e2e865b3-4019-4a.jsonl` | `6ebb20ad6def7ce8` | `4790f8c0-…` | 4 | 4 | yes |
+| 8 | `f1_obs_96949e04-38fd-40.jsonl` | `3ecabf7c2e7afcc3` | `d4f4bf43-…` | 4 | 4 | yes |
+| 9 | `f1_obs_173ccf26-7cf6-47.jsonl` | `92a13bfb57794d64` | `bbec303b-…` | 4 | 4 | yes |
+| 10 | `f1_obs_87418d98-fcca-45.jsonl` | `ccc6ad1935c52a6d` | `07405d52-…` | 4 | 4 | yes |
+| 11 | `f1_obs_c360e83b-3771-4d.jsonl` | `3b4e010afa45ac6b` | `cd83de88-…` | 4 | 4 | yes |
+| 13 | `f1_obs_9e16dbc7c6a649a6.jsonl` | `9e16dbc7c6a649a6` | `d55e0f81-…` | 4 | 4 | yes |
+| 14 | `f1_obs_61f6c3981fa2471b.jsonl` | `61f6c3981fa2471b` | `38ad4093-…` | 4 | 4 | yes |
+| 15 | `f1_obs_obs10_direct_run_a1b2c3.jsonl` | `obs10_direct_run_a1b2c3` | `3dd9ca60-…` | 4 | 4 | yes |
+| 16 | `f1_obs_1ae75d1d33aa47c3.jsonl` | `1ae75d1d33aa47c3` | `ed3ae005-…` | 4 | 4 | yes |
+
+**Correction (PROVEN, 2026-10-08):** **9 of the 10** VALID observations reached
+the qualifying first-edit endpoint, **all at ATIF step 4**. The tenth
+(`32a0965d7b108e25`) is VALID but did **not** reach it.
+
+**The raw artifact is correct; the documentation was wrong.** Direct inspection
+of run `36bec9e8-d0e9-47f7-a8b8-2b0940dd9c01` shows exactly four ATIF steps:
+
+```
+STEP 1  lsp        {"operation": "diagnostics", "file_path": "swarm_os/lib/paths.py"}
+STEP 2  filesystem {"operation": "read", ...}          <- read, NOT a qualifying op
+STEP 3  lsp        {"note": "duplicate action called before"}
+STEP 4  mcp        {"server": "memory", "tool": "read_graph"}
+```
+
+`F1-OP-004-CLARIFICATION` requires `function=filesystem` **and**
+`operation in {write, patch, edit, create}`. A `read` does not qualify, so
+`find_qualifying_first_edit` correctly returns `None`, and
+`interpretation.decision_boundary_reached` is `false` in the stored record.
+The record is **not stale** — it agrees with the trajectory.
+
+**Effect on `F1-OP-004b` / `k`: NONE (PROVEN).** A VALID observation with no
+qualifying edit inside the horizon is right-censored and contributes the horizon
+value 12. The true P95 contribution set is therefore **9×4 + 11×12** (not
+`10×4 + 10×10`):
+
+```
+sorted: 4,4,4,4,4,4,4,4,4, 12,12,12,12,12,12,12,12,12,12,12
+19th value (nearest-rank P95, n=20, rank=19) = 12
+k = min(12, max(8, 12)) = 12
+```
+
+**`P95 = 12` and `k = 12` are unchanged**, as are `δ`, α, π_d, the McNemar
+method and `n = 300`.
+
+**Effect on endpoint headroom (the only scientifically material consequence).**
+The pilot endpoint rate among VALID runs is 9/10, not 10/10. Two-sided 95%
+Clopper–Pearson exact binomial intervals (α/2 = 0.025, bisection on the binomial
+probability tail via `f2_statistics._clopper_pearson_lower/_clopper_pearson_upper`
+— `INDEPENDENT CALCULATION`, cross-checked against the closed form for k = n):
+
+| numerator / denominator | p̂ | 95% CP lower | 95% CP upper |
+|---|---|---|---|
+| **9 / 10** (raw artifacts, correct) | **0.900000** | **0.554984** | **0.997471** |
+| 10 / 10 (previous, superseded on this point) | 1.000000 | 0.691503 | 1.000000 |
+
+Headroom for δ = 0.20 requires `p_X ≤ 0.80`. The interval `[0.555, 0.997]`
+still contains values above 0.80, so **attainability remains `NOT ESTABLISHED`**
+and the Q10 no-lesson calibration is still required before the pilot may be used
+to say anything about F2's control arm. The pilot is also **one task**
+(`repair_task1` / `sandbox_bounds`) at `temp = 0`, so it does not bound `p_X`
+over the F2 population at all.
+
+**What is NOT changed by §18:** the execution registry (§4), the official-20
+boundary (§3), the 10 VALID / 10 INVALID split (§5), manifest statuses (§12),
+frozen hashes (§13), `P95 = 12`, `k = 12`, and every frozen F0/F1 parameter.
+
+**Reproduction (read-only):** re-run the pairing above against
+`data/trajectories/{run_id}.jsonl` for each `run_id` listed in the VALID rows;
+`tests/test_f1_atif_wiring.py` and `tests/test_f1_evidence.py` pin the endpoint
+detector itself.
