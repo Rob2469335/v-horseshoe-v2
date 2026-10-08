@@ -191,7 +191,7 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 
 ---
 
-### B. Population / task authorization — **AUTHORIZED (`F2-IMPL-AUTH-028`, 2026-10-07)**
+### B. Population / task authorization — **AUTHORIZATION REQUIRED**
 
 - **Owner:** experiment authority (Rob), recorded by the agent on his explicit instruction
 - **Inputs:** an explicit authorization to acquire the F2 task population — **RECORDED** as `F2-IMPL-AUTH-028`
