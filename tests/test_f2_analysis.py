@@ -13,10 +13,17 @@ from __future__ import annotations
 import pytest
 
 from qwen_train.f2_analysis import (
+    DESIGN_CLASS_CONFIRMATORY,
+    DESIGN_CLASS_EXPLORATORY,
+    FROZEN_MIN_PAIRS,
     PairedObservation,
     finalize_f2,
     independent_reconstruction,
 )
+
+_CONFIRM = DESIGN_CLASS_CONFIRMATORY
+_CLEAN = "POST_CUTOFF"
+_HASH64 = "a" * 64
 
 
 def _pairs(b, c, both, neither):
@@ -205,3 +212,151 @@ class TestExperimentalUnit:
         ]
         r = finalize_f2(obs)
         assert r.n_total == 2 and r.n_complete == 0 and r.n_missing == 2
+
+
+# ---------------------------------------------------------------------------
+# F2-IMPL-AUTH-024 s4 / s6.1 / s6.6  -  the confirmatory trust boundary.
+#
+# These exercise the REAL entry point (finalize_f2 / independent_reconstruction),
+# never a helper that builds trusted objects without traversing it. What they
+# prove is REPOSITORY ENFORCEMENT: a declared confirmatory claim must clear task
+# identity, S10 contamination, retained-evidence identity, analyzable N and Q6.
+# They do NOT prove authority - design_class is a declared label, not a grant.
+# ---------------------------------------------------------------------------
+def _confirmatory_unit(
+    task_id, *, seed=0, state=_CLEAN, evidence=_HASH64, t=True, x=False
+):
+    return PairedObservation(task_id, seed, t, x, "", state, evidence)
+
+
+def _confirmatory_ledger(n=FROZEN_MIN_PAIRS, **kw):
+    return [_confirmatory_unit(f"task-{i}", seed=i, **kw) for i in range(n)]
+
+
+class TestConfirmatoryTrustBoundary:
+    """Arbitrary caller input must not be able to produce a confirmatory claim."""
+
+    def test_bare_tuples_cannot_carry_a_confirmatory_claim(self):
+        """Attack: caller-created PairedObservation-by-tuple with no identity."""
+        with pytest.raises(ValueError, match="no task_id"):
+            finalize_f2([(True, False)] * FROZEN_MIN_PAIRS, design_class=_CONFIRM)
+
+    def test_no_eligibility_object_is_accepted_by_the_analysis(self):
+        """Attack: a forged eligibility decision has nowhere to be passed."""
+        import inspect
+
+        from qwen_train.f2_admission import F2Admission
+
+        params = inspect.signature(finalize_f2).parameters
+        assert not any(
+            "eligib" in p or "admission" in p or "decision" in p for p in params
+        ), "finalize_f2 must consume observations, never a caller verdict"
+        forged = F2Admission(
+            admissible=True,
+            detail="forged",
+            readiness={},
+            protocol_state="STATE_VERIFIED",
+            clean_room_ok=True,
+            results={},
+        )
+        with pytest.raises(TypeError):
+            finalize_f2([forged], design_class=_CONFIRM)
+
+    def test_an_unrecognised_design_class_fails_closed(self):
+        """Attack: unauthorized design class ('CONFIRMATORY' != 'confirmatory')."""
+        with pytest.raises(ValueError, match="unknown design class"):
+            finalize_f2(_confirmatory_ledger(), design_class="CONFIRMATORY")
+        with pytest.raises(ValueError, match="unknown design class"):
+            finalize_f2(_confirmatory_ledger(), design_class=None)
+
+    def test_unknown_contamination_is_refused(self):
+        """UNKNOWN is NOT CLEAN for confirmatory inference (AUTH-028)."""
+        obs = _confirmatory_ledger()
+        obs[-1] = _confirmatory_unit("task-299", state="NOT_DECLARED")
+        with pytest.raises(ValueError, match="NOT CLEAN"):
+            finalize_f2(obs, design_class=_CONFIRM)
+
+    def test_every_non_clean_contamination_state_is_refused(self):
+        for state in ("NOT_DECLARED", "NO_DATE", "PRE_CUTOFF", ""):
+            obs = _confirmatory_ledger()
+            obs[0] = _confirmatory_unit("task-0", state=state)
+            with pytest.raises(ValueError, match="NOT CLEAN"):
+                finalize_f2(obs, design_class=_CONFIRM)
+
+    def test_an_undersized_confirmatory_population_is_refused(self):
+        """AUTH-013: n = 300 ANALYZABLE paired tasks, not 300 admitted tasks."""
+        with pytest.raises(ValueError, match="below the frozen minimum"):
+            finalize_f2(_confirmatory_ledger(FROZEN_MIN_PAIRS - 1), design_class=_CONFIRM)
+
+    def test_a_unit_without_an_evidence_identity_is_refused(self):
+        """AUTH-019: the ledger analyses retained evidence, not bare booleans."""
+        for bad in ("", "not-a-digest", "A" * 64, "a" * 63):
+            obs = _confirmatory_ledger()
+            obs[0] = _confirmatory_unit("task-0", evidence=bad)
+            with pytest.raises(ValueError, match="evidence identity"):
+                finalize_f2(obs, design_class=_CONFIRM)
+
+    def test_duplicate_task_ids_are_refused_before_any_statistic(self):
+        obs = _confirmatory_ledger(FROZEN_MIN_PAIRS - 1)
+        obs.append(_confirmatory_unit("task-0"))
+        with pytest.raises(ValueError, match="pseudo-replication"):
+            finalize_f2(obs, design_class=_CONFIRM)
+
+    def test_a_breached_q6_gate_refuses_a_confirmatory_claim(self):
+        """AUTH-018: STOP-AND-DIAGNOSE is 'not a valid run'."""
+        lost = [
+            PairedObservation(
+                f"infra-{k}", k, None, None, "infrastructure:process_crash"
+            )
+            for k in range(FROZEN_MIN_PAIRS // 2)
+        ]
+        with pytest.raises(ValueError, match="STOP-AND-DIAGNOSE"):
+            finalize_f2(_confirmatory_ledger() + lost, design_class=_CONFIRM)
+
+    def test_the_auditor_applies_the_identical_gate(self):
+        """Producer and auditor must refuse the SAME ledger the same way."""
+        for bad in (_confirmatory_ledger(FROZEN_MIN_PAIRS - 1), [
+            _confirmatory_unit(f"task-{i}", state="NOT_DECLARED")
+            for i in range(FROZEN_MIN_PAIRS)
+        ]):
+            with pytest.raises(ValueError, match="confirmatory eligibility"):
+                finalize_f2(bad, design_class=_CONFIRM)
+            with pytest.raises(ValueError, match="confirmatory eligibility"):
+                independent_reconstruction(bad, design_class=_CONFIRM)
+
+    def test_the_default_is_exploratory_and_is_labelled_as_such(self):
+        """AUTH-024 s6: exploratory output must never be silently confirmatory."""
+        r = finalize_f2(_pairs(3, 1, 2, 4))
+        assert r.to_dict()["design_class"] == DESIGN_CLASS_EXPLORATORY
+        assert r.to_dict()["design_class"] != DESIGN_CLASS_CONFIRMATORY
+        assert r.p_value is not None
+
+    def test_exploratory_keeps_unknown_contamination_and_small_n(self):
+        """The UNKNOWN rule is confirmatory-specific; exploratory stays open."""
+        r = finalize_f2(_confirmatory_ledger(4, state="NOT_DECLARED"))
+        assert r.to_dict()["design_class"] == DESIGN_CLASS_EXPLORATORY
+        assert r.n_complete == 4
+        assert r.p_value is not None
+
+    def test_valid_authorized_evidence_produces_a_labelled_confirmatory_result(self):
+        r = finalize_f2(_confirmatory_ledger(), design_class=_CONFIRM)
+        d = r.to_dict()
+        assert d["design_class"] == DESIGN_CLASS_CONFIRMATORY
+        assert d["N"] == FROZEN_MIN_PAIRS
+        assert r.p_value is not None
+        # The producer and the independent auditor agree on the gated ledger.
+        recon = independent_reconstruction(_confirmatory_ledger(), design_class=_CONFIRM)
+        assert recon["design_class"] == DESIGN_CLASS_CONFIRMATORY
+        assert recon["N"] == d["N"]
+        assert recon["p_value"] == pytest.approx(d["p_value"], abs=1e-9)
+
+    def test_the_contamination_vocabulary_is_imported_not_redeclared(self):
+        """Single source of truth: same object, not a copied mapping."""
+        import qwen_train.f2_analysis as fa
+        import qwen_train.f2_population as fp
+        import qwen_train.f2_readiness as fr
+
+        assert fa._CONTAMINATION_CLASS_MAP is fp._CONTAMINATION_CLASS
+        assert fa.CONTAMINATION_CLEAN == fp.CONTAMINATION_CLEAN == "CLEAN"
+        assert fa._CONTAMINATION_CLASS_MAP["NOT_DECLARED"] == "UNKNOWN"
+        assert fa.FROZEN_MIN_PAIRS is fr.FROZEN_MIN_PAIRS == 300

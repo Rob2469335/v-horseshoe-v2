@@ -25,6 +25,19 @@ Missingness (Q5/Q6, `F2-IMPL-AUTH-018`): a pair with either arm missing is NOT a
 success, NOT a failure, and is NOT silently dropped. It is excluded from the
 primary paired analysis and reported in the ledger accounting. Missing is
 missing.
+
+Design-class firewall (`F2-IMPL-AUTH-024` s4, s6.1, s6.6): this module does not
+let an exploratory ledger silently become a confirmatory claim. Every call
+**declares** a ``design_class``; the default is ``exploratory``, and only
+``confirmatory`` is subject to - and must pass -
+:func:`evaluate_confirmatory_eligibility` (task identity, S10 contamination
+CLEAN, retained evidence identity, analyzable ``n``, Q6 valid run) before any
+statistic is computed.
+
+    ``design_class`` is a STRUCTURAL label and gate selector. It is **not** an
+    authority grant. Authority to execute or claim a confirmatory F2 rests on
+    the operator authorization documents, which no runtime code reads; nothing
+    here can substitute for it.
 """
 from __future__ import annotations
 
@@ -39,15 +52,35 @@ from typing import Any, Iterable, Mapping
 # into disagreeing about what counts as an infrastructure fault.
 from qwen_train.f2_calibration import INFRASTRUCTURE_RERUN_CAUSES
 
+# The S10 contamination vocabulary and the frozen analyzable-pair minimum each
+# live with the layer that computes them. Importing them here (rather than
+# re-declaring them) guarantees the confirmatory eligibility gate can never
+# drift out of step with the population screen about what CLEAN means, or with
+# the readiness gate about what 300 means - the same single-source-of-truth rule
+# this module already applies to INFRASTRUCTURE_RERUN_CAUSES above.
+#   contamination vocabulary -> F2-IMPL-AUTH-014, F2-IMPL-AUTH-028 (:1624)
+#   analyzable-pair minimum  -> F2-IMPL-AUTH-013 (:781)
+from qwen_train.f2_population import (
+    CONTAMINATION_CLEAN,
+    CONTAMINATION_UNKNOWN,
+    _CONTAMINATION_CLASS as _CONTAMINATION_CLASS_MAP,
+)
+from qwen_train.f2_readiness import FROZEN_MIN_PAIRS
+
 __all__ = [
     "F2_ALPHA",
     "F2_CONFIDENCE",
     "F2_INFRA_MAX_FRACTION",
+    "FROZEN_MIN_PAIRS",
+    "DESIGN_CLASS_CONFIRMATORY",
+    "DESIGN_CLASS_EXPLORATORY",
+    "DESIGN_CLASSES",
     "PairedObservation",
     "F2ConfirmatoryResult",
     "InfrastructureGate",
     "classify_missing_reason",
     "evaluate_infrastructure_gate",
+    "evaluate_confirmatory_eligibility",
     "finalize_f2",
     "independent_reconstruction",
 ]
@@ -61,6 +94,18 @@ F2_CONFIDENCE = 0.95
 #: STOP-AND-DIAGNOSE condition, not a scientific result. The ledger already
 #: recorded missingness; what was missing was the gate itself.
 F2_INFRA_MAX_FRACTION = 0.30
+
+#: Design-class firewall (`F2-IMPL-AUTH-024` s4/s6.1/s6.6).
+#:
+#: AUTH-024 binds two things: a pilot drawn from the ``UNKNOWN`` pool may carry
+#: **no confirmatory claim** (s4), and "No promotion of this pilot into the
+#: confirmatory record. Confirmatory F2 remains gated on a separately authorized
+#: design" (s6.6). Both require the analysis to be TOLD which class it is
+#: producing rather than inferring it from a function name. The default is
+#: ``exploratory`` so an omitted argument can never yield a confirmatory claim.
+DESIGN_CLASS_CONFIRMATORY = "confirmatory"
+DESIGN_CLASS_EXPLORATORY = "exploratory"
+DESIGN_CLASSES = (DESIGN_CLASS_CONFIRMATORY, DESIGN_CLASS_EXPLORATORY)
 
 #: Marker prefix the authorized calibration/admission layers use when they record
 #: an infrastructure cause (``invalid_reason=f"infrastructure:{cause}"``).
@@ -209,6 +254,17 @@ class PairedObservation:
     inside the horizon), ``False`` (a censored observation: post-delivery steps
     existed but no qualifying edit), or ``None`` (missing: the observation could
     not be established). ``None`` in EITHER arm makes the pair incomplete.
+
+    ``contamination_state`` is the S10 provenance recorded for this unit's task
+    (``POST_CUTOFF`` / ``PRE_CUTOFF`` / ``NO_DATE`` / ``NOT_DECLARED``). It is
+    reported, never reinterpreted here: the confirmatory gate asks
+    ``qwen_train.f2_population`` what class that state maps to.
+
+    ``evidence_identity`` is the SHA-256 identity of the retained evidence the
+    endpoints were derived from (``F2Result.digest()``). It is required for a
+    confirmatory unit because the confirmatory ledger must analyse retained
+    evidence, not bare booleans (F2-IMPL-AUTH-019). Both new fields default to
+    ``""`` so exploratory/tuple coercion keeps working unchanged.
     """
 
     task_id: str
@@ -216,6 +272,8 @@ class PairedObservation:
     t_endpoint: bool | None
     x_endpoint: bool | None
     missing_reason: str = ""
+    contamination_state: str = ""
+    evidence_identity: str = ""
 
     @property
     def complete(self) -> bool:
@@ -233,8 +291,14 @@ class PairedObservation:
                 t_endpoint=raw.get("t_endpoint"),
                 x_endpoint=raw.get("x_endpoint"),
                 missing_reason=str(raw.get("missing_reason") or ""),
+                contamination_state=str(raw.get("contamination_state") or ""),
+                evidence_identity=str(raw.get("evidence_identity") or ""),
             )
         if isinstance(raw, (tuple, list)) and len(raw) == 2:
+            # The tuple shortcut carries no identity at all, so it can only ever
+            # satisfy the EXPLORATORY path: task_id, contamination_state and
+            # evidence_identity all default to "" and the confirmatory gate
+            # refuses them (F2-IMPL-AUTH-024 s3; F2-IMPL-AUTH-019).
             return cls(task_id="", seed=0, t_endpoint=raw[0], x_endpoint=raw[1])
         raise TypeError(f"cannot interpret {raw!r} as a PairedObservation")
 
@@ -268,6 +332,9 @@ class F2ConfirmatoryResult:
     alpha: float = F2_ALPHA
     confidence: float = F2_CONFIDENCE
     sid: str = "two-sided"
+    #: Declared design class. ALWAYS recorded so an exploratory ledger can never
+    #: be mistaken for, or reported as, a confirmatory one (F2-IMPL-AUTH-024 s6).
+    design_class: str = DESIGN_CLASS_EXPLORATORY
     missing_by_reason: dict[str, int] = field(default_factory=dict)
     infrastructure_gate: dict[str, Any] = field(default_factory=dict)
 
@@ -297,6 +364,7 @@ class F2ConfirmatoryResult:
             "alpha": self.alpha,
             "confidence": self.confidence,
             "sided": self.sid,
+            "design_class": self.design_class,
             "missing_by_reason": dict(self.missing_by_reason),
             "infrastructure_gate": dict(self.infrastructure_gate),
         }
@@ -335,16 +403,116 @@ def _partition(observations: Iterable[Any]) -> tuple[list[PairedObservation], li
     return complete, missing
 
 
+def _is_sha256_hex(value: Any) -> bool:
+    """True iff ``value`` is a 64-char lowercase SHA-256 hex string."""
+    s = str(value or "")
+    return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+
+
+def evaluate_confirmatory_eligibility(
+    complete: list[PairedObservation],
+    *,
+    gate: InfrastructureGate,
+    design_class: str,
+) -> tuple[bool, str]:
+    """Fail-closed CONFIRMATORY eligibility verdict over the analyzable units.
+
+    Every clause restates authority that already exists; this function adds no
+    science and no parameter:
+
+    * ``F2-IMPL-AUTH-024`` s4 / s6.1 / s6.6 - exploratory data may carry no
+      confirmatory claim, and the class must be declared rather than inferred.
+      An unrecognised class fails closed rather than defaulting to safe.
+    * ``F2-IMPL-AUTH-013`` (:781) - ``n`` = 300 **analyzable** paired task units.
+      ``FROZEN_MIN_PAIRS`` is the readiness gate's own constant, so the analysis
+      cannot disagree with the population gate about what 300 means.
+    * ``F2-IMPL-AUTH-024`` s3 / s6.3 - one pair = one task. A unit with no
+      ``task_id`` is not a task pair at all, and accepting one would also defeat
+      ``_partition``'s duplicate-task control (the tuple coercion shortcut
+      produces exactly such units).
+    * ``F2-IMPL-AUTH-028`` (:1624) and ``F2-IMPL-AUTH-014`` - UNKNOWN is NOT
+      CLEAN. The class is derived from ``f2_population``'s own mapping, never
+      re-declared here.
+    * ``F2-IMPL-AUTH-019`` - the ledger -> final result link analyses retained
+      evidence, so a unit must carry that evidence's identity.
+    * ``Q6`` (``F2-IMPL-AUTH-018``) - a breached gate is "STOP-AND-DIAGNOSE, not
+      a valid run"; a confirmatory claim cannot come from an invalid run.
+
+    This is REPOSITORY ENFORCEMENT, not GOVERNANCE AUTHORIZATION: it decides
+    whether a declared confirmatory result may be produced, never whether a
+    confirmatory F2 was authorized to run.
+    """
+    if design_class == DESIGN_CLASS_EXPLORATORY:
+        return True, (
+            f"design class {design_class!r} is not confirmatory: exploratory "
+            "output is reported descriptively and carries no confirmatory claim"
+        )
+    if design_class not in DESIGN_CLASSES:
+        return False, (
+            f"unknown design class {design_class!r}; only "
+            f"{DESIGN_CLASS_CONFIRMATORY!r} and {DESIGN_CLASS_EXPLORATORY!r} "
+            "are recognised (fail closed rather than infer a class)"
+        )
+
+    # Q6: a breached gate is not a valid run, so it cannot seed a claim.
+    if not gate.satisfied:
+        return False, f"{gate.detail}; a confirmatory result needs a valid run"
+
+    if len(complete) < FROZEN_MIN_PAIRS:
+        return False, (
+            f"analyzable paired tasks = {len(complete)} is below the frozen "
+            f"minimum n = {FROZEN_MIN_PAIRS} (F2-IMPL-AUTH-013); the confirmatory "
+            "population is undersized"
+        )
+
+    for o in complete:
+        if not str(o.task_id or "").strip():
+            return False, (
+                "a confirmatory unit carries no task_id: one pair = one task "
+                "(F2-IMPL-AUTH-024 s3), so a taskless unit is not an analyzable "
+                "pair and would bypass duplicate-task control"
+            )
+        cls = _CONTAMINATION_CLASS_MAP.get(
+            str(o.contamination_state or ""), CONTAMINATION_UNKNOWN
+        )
+        if cls != CONTAMINATION_CLEAN:
+            return False, (
+                f"task {o.task_id!r} has contamination_state="
+                f"{o.contamination_state!r}, which classifies as {cls}; UNKNOWN "
+                "is NOT CLEAN for confirmatory inference (F2-IMPL-AUTH-028)"
+            )
+        if not _is_sha256_hex(o.evidence_identity):
+            return False, (
+                f"task {o.task_id!r} carries no SHA-256 evidence identity; the "
+                "confirmatory ledger must analyse retained evidence, not bare "
+                "booleans (F2-IMPL-AUTH-019)"
+            )
+
+    return True, (
+        f"eligible: {len(complete)} unique task pairs, all CLEAN, all carrying "
+        f"an evidence identity, n >= {FROZEN_MIN_PAIRS}, Q6 within its ceiling"
+    )
+
+
 def finalize_f2(
     observations: Iterable[Any],
     *,
     observation_window: Mapping[str, Any] | None = None,
     alpha: float = F2_ALPHA,
     confidence: float = F2_CONFIDENCE,
+    design_class: str = DESIGN_CLASS_EXPLORATORY,
 ) -> F2ConfirmatoryResult:
-    """Produce the frozen confirmatory result from the raw paired ledger.
+    """Produce the frozen result from the raw paired ledger.
 
-    The point estimate, exact two-sided McNemar p-value and the authoritative
+    ``design_class`` is DECLARED, never inferred (F2-IMPL-AUTH-024 s6.6). It
+    defaults to ``exploratory`` so a caller that says nothing cannot obtain a
+    confirmatory claim by accident; declaring ``confirmatory`` makes this
+    function run :func:`evaluate_confirmatory_eligibility` first and refuse
+    unless every confirmatory gate holds. An unrecognised class is refused.
+
+    No gate below changes a statistic: they decide WHETHER a confirmatory
+    result may be produced, never WHAT it says. The point estimate, exact
+    two-sided McNemar p-value and the authoritative
     Clopper-Pearson-transformed paired-risk-difference interval are delegated to
     the shared ``f2_statistics`` implementation, so this function cannot drift
     from the frozen method.
@@ -352,10 +520,6 @@ def finalize_f2(
     from qwen_train.f2_statistics import mcnemar_exact
 
     complete, missing = _partition(observations)
-    t_values = [bool(o.t_endpoint) for o in complete]
-    x_values = [bool(o.x_endpoint) for o in complete]
-
-    res = mcnemar_exact(t_values, x_values, sided="two-sided")
 
     missing_by_reason: dict[str, int] = {}
     for o in missing:
@@ -364,6 +528,16 @@ def finalize_f2(
 
     n_total = len(complete) + len(missing)
     gate = evaluate_infrastructure_gate(n_total, missing_by_reason)
+    eligible, why = evaluate_confirmatory_eligibility(
+        complete, gate=gate, design_class=design_class
+    )
+    if not eligible:
+        raise ValueError(f"F2 confirmatory eligibility refused: {why}")
+
+    t_values = [bool(o.t_endpoint) for o in complete]
+    x_values = [bool(o.x_endpoint) for o in complete]
+
+    res = mcnemar_exact(t_values, x_values, sided="two-sided")
 
     return F2ConfirmatoryResult(
         observation_window=dict(observation_window or {}),
@@ -385,6 +559,7 @@ def finalize_f2(
         alpha=alpha,
         confidence=confidence,
         sid=res.sided,
+        design_class=design_class,
         missing_by_reason=missing_by_reason,
         infrastructure_gate=gate.to_dict(),
     )
@@ -450,16 +625,33 @@ def independent_reconstruction(
     *,
     alpha: float = F2_ALPHA,
     confidence: float = F2_CONFIDENCE,
+    design_class: str = DESIGN_CLASS_EXPLORATORY,
 ) -> dict[str, Any]:
-    """Recompute the confirmatory statistics from raw booleans, independently.
+    """Recompute the statistics from raw booleans, independently.
 
     Returns the same fields ``finalize_f2().to_dict()`` reports (minus the
     free-form observation window). The two must agree; a mismatch is a hard
     blocker (F2 section 21).
+
+    The auditor applies the SAME declared design class and the SAME
+    eligibility gate as the producer, so a ledger the producer refuses is also
+    refused here - an auditor that silently answered what the producer declined
+    to produce would be useless.
     """
     complete, missing = _partition(observations)
     n_total = len(complete) + len(missing)
     n = len(complete)
+
+    missing_by_reason: dict[str, int] = {}
+    for o in missing:
+        key = o.missing_reason or "unspecified"
+        missing_by_reason[key] = missing_by_reason.get(key, 0) + 1
+    gate = evaluate_infrastructure_gate(n_total, missing_by_reason)
+    eligible, why = evaluate_confirmatory_eligibility(
+        complete, gate=gate, design_class=design_class
+    )
+    if not eligible:
+        raise ValueError(f"F2 confirmatory eligibility refused: {why}")
 
     b = sum(1 for o in complete if bool(o.t_endpoint) and not bool(o.x_endpoint))
     c = sum(1 for o in complete if (not bool(o.t_endpoint)) and bool(o.x_endpoint))
@@ -488,12 +680,6 @@ def independent_reconstruction(
     else:
         direction = "null"
 
-    missing_by_reason: dict[str, int] = {}
-    for o in missing:
-        key = o.missing_reason or "unspecified"
-        missing_by_reason[key] = missing_by_reason.get(key, 0) + 1
-    gate = evaluate_infrastructure_gate(n_total, missing_by_reason)
-
     return {
         "N": n,
         "n_total": n_total,
@@ -512,6 +698,7 @@ def independent_reconstruction(
         "direction": direction,
         "alpha": alpha,
         "confidence": confidence,
+        "design_class": design_class,
         "missing_by_reason": missing_by_reason,
         "infrastructure_gate": gate.to_dict(),
     }
