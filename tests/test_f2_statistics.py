@@ -15,9 +15,13 @@ synthetic arithmetic check, not a manufactured observation.
 """
 from __future__ import annotations
 
+from math import comb
+
 import pytest
 
 from qwen_train.f2_statistics import (
+    binom_cdf,
+    binom_sf,
     contingency_table,
     exact_power,
     mcnemar_exact,
@@ -300,3 +304,118 @@ class TestAuthoritativeConfidenceInterval:
         assert r.ci_low < 0.0
         assert r.ci_low == pytest.approx(-0.0218, abs=1e-3)
         assert r.risk_difference - wald_hw > 0.0
+
+
+# ---------------------------------------------------------------------------
+# F2-CLARIFICATION-005 - what required_pairs ACTUALLY returns, and the one
+# invariant that protects the frozen rule n = max(300, required_pairs(...)).
+# ---------------------------------------------------------------------------
+
+
+class TestRequiredPairsInterpretation:
+    """The return value is a rounded-cell, CONDITIONAL FIRST CROSSING.
+
+    These tests do not re-decide the design number. They pin the MEANING of the
+    function so 116 cannot later be quoted as an unconditional total-pair
+    requirement, and they pin the invariant that actually makes the frozen
+    ``n = max(300, ...)`` equal 300 for every authorized planning value.
+    """
+
+    AUTHORIZED = dict(
+        delta=0.20, discordance=0.50, alpha=0.05, power=0.90, sided="two-sided"
+    )
+
+    @staticmethod
+    def _conditional_power_at(m, delta=0.20, pi_d=0.50, alpha=0.05):
+        """The exact power required_pairs evaluates for a given m."""
+        n = round(m * pi_d)
+        b = round((n + m * delta) / 2.0)
+        c = n - b
+        return exact_power(b, c, alpha=alpha, sided="two-sided")
+
+    def test_it_matches_the_value_recorded_in_f2_impl_auth_013(self):
+        plan = required_pairs(**self.AUTHORIZED)
+        assert plan.required_pairs == 116
+        assert max(300, plan.required_pairs) == 300
+
+    def test_the_crossing_is_not_monotone_in_m(self):
+        """m = 116 clears the target and m = 118 does not.
+
+        Both halves are the contract: the achieved-power curve is a sawtooth,
+        because n and b are rounded and the exact two-sided critical value is a
+        step function of n. A later reader must not "fix" 118 by assuming the
+        curve rises, and must not read 116 as a guaranteed lower bound.
+        """
+        at_116 = self._conditional_power_at(116)
+        at_118 = self._conditional_power_at(118)
+        at_130 = self._conditional_power_at(130)
+        assert at_116 >= 0.90
+        assert at_118 < 0.90, "power FELL when m grew - that is the documented shape"
+        assert at_118 < at_116
+        assert at_130 >= 0.90
+        assert at_130 < 1.0
+
+    @pytest.mark.parametrize("pi_d", [0.20, 0.30, 0.50, 0.75, 1.00])
+    def test_every_authorized_sensitivity_point_stays_below_the_frozen_minimum(
+        self, pi_d
+    ):
+        """THE invariant protecting n: max(300, required) == 300 everywhere."""
+        plan = required_pairs(
+            delta=0.20, discordance=pi_d, alpha=0.05, power=0.90, sided="two-sided"
+        )
+        assert plan.required_pairs is not None, pi_d
+        assert plan.required_pairs < 300, pi_d
+        assert max(300, plan.required_pairs) == 300, pi_d
+
+    def test_pi_d_below_delta_is_refused_rather_than_estimated(self):
+        """AUTH-013's sensitivity row '0.10 | not attainable' is the code's rule."""
+        with pytest.raises(ValueError, match="cannot be larger"):
+            required_pairs(delta=0.20, discordance=0.10, power=0.90)
+
+    def test_the_plan_caveats_its_own_return_value(self):
+        """The metadata must not claim the returned N is a safe over-estimate."""
+        note = required_pairs(**self.AUTHORIZED).assumptions()["note"]
+        assert "FIRST m" in note
+        assert "OVER-estimate" not in note
+
+
+class TestBinomialTailNumericalStability:
+    """comb(n, i) cannot be converted to a float once it exceeds ~1.8e308.
+
+    Above roughly n = 1024 the exact-integer product raises OverflowError, which
+    used to abort the whole calculation. The fallback must return the same value
+    the exact integer arithmetic gives, not an approximation nobody checked.
+    """
+
+    N = 2000
+
+    @staticmethod
+    def _exact_tail(lo: int, hi: int, n: int) -> float:
+        """Exact rational tail, integer arithmetic only."""
+        return sum(comb(n, i) for i in range(lo, hi + 1)) / (1 << n)
+
+    def test_large_n_no_longer_raises(self):
+        assert 0.0 <= binom_sf(1000, self.N, 0.5) <= 1.0
+        assert 0.0 <= binom_cdf(999, self.N, 0.5) <= 1.0
+
+    def test_large_n_matches_an_exact_integer_oracle(self):
+        assert binom_sf(1000, self.N, 0.5) == pytest.approx(
+            self._exact_tail(1000, self.N, self.N), rel=1e-9
+        )
+        assert binom_cdf(999, self.N, 0.5) == pytest.approx(
+            self._exact_tail(0, 999, self.N), rel=1e-9
+        )
+
+    def test_the_two_tails_still_partition_the_distribution(self):
+        for k in (1000, 1234, 1750):
+            sf = binom_sf(k, self.N, 0.5)
+            cdf = binom_cdf(k - 1, self.N, 0.5)
+            assert sf + cdf == pytest.approx(1.0, abs=1e-9), k
+
+    def test_the_exact_path_is_untouched_where_it_already_worked(self):
+        """The fallback may only run on OverflowError - never in place of exacts."""
+        for k, n in ((6, 20), (10, 20), (150, 300), (500, 1000)):
+            exact = sum(
+                comb(n, i) * 0.5**i * 0.5 ** (n - i) for i in range(k, n + 1)
+            )
+            assert binom_sf(k, n, 0.5) == exact

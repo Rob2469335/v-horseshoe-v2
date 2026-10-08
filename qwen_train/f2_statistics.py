@@ -26,8 +26,13 @@ Methodological constraints taken from current SOTA
   memory-HARMFUL environments, so a benefit-only test would make harm
   unreportable. ``sided`` is a parameter, not an assumption.
 * Exact/conditional variants are ~3pp CONSERVATIVE relative to the asymptotic
-  normal approximation (arXiv 2605.30315), so required N computed here is a
-  slight OVER-estimate. That is the safe direction for planning.
+  normal approximation (arXiv 2605.30315). That comparison is about the TEST,
+  and it is the safe direction for planning.
+
+  It is NOT a statement about the value ``required_pairs`` returns. See
+  ``required_pairs`` for what that return value is and is not: it is a
+  rounded-cell, conditional FIRST CROSSING of a non-monotone curve, and it can
+  sit BELOW the sample size at which the power target is robustly met.
 
 Every function here is pure and offline: no experiment is executed.
 """
@@ -52,6 +57,32 @@ __all__ = [
 Sided = Literal["one-sided", "two-sided"]
 
 
+def _binom_log_sum(lo: int, hi: int, n: int, p: float) -> float:
+    """Sum the binomial pmf over ``lo <= i <= hi`` in log space.
+
+    Fallback for n large enough that ``comb(n, i)`` can no longer be converted
+    to a float (comb(2000, 1000) is ~1e600, and ``int * float`` raises
+    ``OverflowError``). Only reached when the exact-integer path overflows; the
+    exact path is preferred wherever it works because it keeps the arithmetic
+    integral until the final product.
+    """
+    if lo > hi:
+        return 0.0
+    if p <= 0.0:
+        return 1.0 if lo <= 0 else 0.0
+    if p >= 1.0:
+        return 0.0 if hi < n else 1.0
+    lp = math.log(p)
+    lq = math.log1p(-p)
+    log_n = math.lgamma(n + 1)
+    total = 0.0
+    for i in range(lo, hi + 1):
+        total += math.exp(
+            log_n - math.lgamma(i + 1) - math.lgamma(n - i + 1) + i * lp + (n - i) * lq
+        )
+    return min(1.0, total)
+
+
 def binom_sf(k: int, n: int, p: float) -> float:
     """P(X >= k) for X ~ Binomial(n, p). Numerically stable for small n."""
     if n <= 0:
@@ -60,7 +91,12 @@ def binom_sf(k: int, n: int, p: float) -> float:
         return 1.0
     if k > n:
         return 0.0
-    return sum(comb(n, i) * p**i * (1.0 - p) ** (n - i) for i in range(k, n + 1))
+    try:
+        return sum(comb(n, i) * p**i * (1.0 - p) ** (n - i) for i in range(k, n + 1))
+    except OverflowError:
+        # comb(n, i) too large for a float: fall back to log space rather than
+        # failing the whole calculation.
+        return _binom_log_sum(k, n, n, p)
 
 
 def binom_cdf(k: int, n: int, p: float) -> float:
@@ -71,7 +107,10 @@ def binom_cdf(k: int, n: int, p: float) -> float:
         return 0.0
     if k >= n:
         return 1.0
-    return sum(comb(n, i) * p**i * (1.0 - p) ** (n - i) for i in range(0, k + 1))
+    try:
+        return sum(comb(n, i) * p**i * (1.0 - p) ** (n - i) for i in range(0, k + 1))
+    except OverflowError:
+        return _binom_log_sum(0, k, n, p)
 
 
 @dataclass(frozen=True)
@@ -329,6 +368,13 @@ def exact_power(b: int, c: int, *, alpha: float = 0.05, sided: Sided = "two-side
 
     H0 rejection threshold is derived at the nominal alpha; power is then the
     probability of exceeding it under the Binomial(n, b/n) alternative.
+
+    When no rejection threshold exists (``t is None``) the alpha fallback is
+    reported rather than 0.0. Under the two-sided doubling rule at alpha=0.05
+    that happens for n < 6 discordant pairs, where even the most extreme split
+    is not significant. The fallback is BELOW any planning target (0.80/0.90),
+    so ``required_pairs`` can never mistake it for a crossing; it is a
+    conservative floor for a test that in fact cannot reject.
     """
     n = b + c
     if n == 0:
@@ -368,8 +414,12 @@ class PowerPlan:
             "estimator": "paired risk difference (b - c) / m",
             "note": (
                 "Exact conditional variants are ~3pp conservative vs the "
-                "asymptotic normal approximation (arXiv 2605.30315), so this N "
-                "is a slight OVER-estimate."
+                "asymptotic normal approximation (arXiv 2605.30315). That is a "
+                "property of the TEST, not a guarantee about this return value: "
+                "required_pairs returns the FIRST m whose rounded, conditional "
+                "power clears the target, on a non-monotone curve. See the "
+                "function docstring before quoting any returned N as a "
+                "requirement."
             ),
         }
 
@@ -383,11 +433,31 @@ def required_pairs(
     sided: Sided = "two-sided",
     max_pairs: int = 5000,
 ) -> PowerPlan:
-    """Smallest m reaching ``power`` for a target risk difference ``delta``.
+    """Smallest m whose power reaches ``power`` for a target risk difference ``delta``.
 
-    ``discordance`` is the expected fraction of pairs that are discordant
-    (pi_d = (b + c) / m). It is an EMPIRICAL quantity: for Experiment J it must
-    come from the no-lesson X/C0 calibration, not from this module.
+    **What this returns — read before quoting it.** The answer is the FIRST ``m``
+    for which power clears the target when power is evaluated at the ROUNDED
+    cell ``n = round(m * discordance)``, ``b = round((n + m * delta) / 2)``,
+    ``c = n - b``. Two consequences:
+
+    * The power evaluated is **CONDITIONAL**: it fixes the discordant count at
+      ``round(m * pi_d)`` and asks P(reject | exactly that many). It is not the
+      unconditional power, which averages over ``Binomial(m, pi_d)``.
+    * Achieved power is **NOT monotone in m**: ``n`` and ``b`` are rounded and
+      the exact two-sided critical value is a step function of ``n``, so a
+      larger ``m`` can have LOWER power than the returned one.
+
+    The return value is therefore a *first crossing*, not a guaranteed lower
+    bound — power can dip below ``power`` again at larger ``m``. For Experiment
+    J's authorized parameters this does not change ``n`` (the frozen rule is
+    ``n = max(300, ...)`` and every ``required_pairs`` result in the authorized
+    pi_d range is below 300), but the value must not be quoted as "the number
+    of pairs needed" without that qualification.
+
+    ``discordance`` (pi_d) is an EMPIRICAL quantity this module cannot estimate:
+    ``pi_d = P(T xor X)`` requires both arms plus their association, so a
+    no-lesson X/C0 calibration (no T arm) cannot identify it
+    (`F2-IMPL-AUTH-013`; readiness plan s2.4 correction, 2026-10-05).
 
     Given pi_d and delta, the discordant counts are
     ``b = m(pi_d + delta)/2`` and ``c = m(pi_d - delta)/2``, which requires

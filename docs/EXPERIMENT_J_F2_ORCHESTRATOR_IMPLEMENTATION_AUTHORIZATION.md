@@ -1701,3 +1701,87 @@ replacing `SWARM_RECEIPT_KEY`; or changing `qwen_train/f2_preflight.py`.
 not_authorized` because that finding is **hard-coded** (`f2_preflight.py:391`) and
 does not read this ledger; recognizing this entry from the ledger would be a code
 change and **REQUIRES AUTHORIZATION**.
+
+### F2-CLARIFICATION-005 - What `required_pairs` returns, and why n = 300 is unaffected
+
+**Authorizing role:** repository operator (Rob).
+**Recorded by:** implementation agent.
+**Interactive-authorization basis:** the operator's explicit instruction, given
+interactively in his own session on 2026-10-08, to finish the remaining F2
+statistical/governance work, reconcile documentation, and commit and push the
+authorized result.
+**Date:** 2026-10-08.
+
+**Issue.** `F2-IMPL-AUTH-013` records
+`required_pairs(delta=0.20, discordance=0.50, alpha=0.05, power=0.90, sided="two-sided") = 116`
+and describes the step as an *"Exact sample-size calculation"*. The module
+docstring and `PowerPlan.assumptions()["note"]` additionally asserted that the
+returned N is *"a slight OVER-estimate ... the safe direction for planning"*.
+That sentence was true only of the exact-vs-asymptotic comparison it was lifted
+from (arXiv 2605.30315); applied to the function's return value it is false, and
+with the AUTH-013 sentence it invites reading **116** as a safe lower bound on
+the pairs needed. It is not.
+
+**Classification — `PROVEN` by independent calculation (2026-10-08).** Every row
+is reproducible from the repository alone.
+
+| Quantity | Value | Method |
+|---|---|---|
+| `required_pairs(...)` first crossing | **116**, power **0.900969** | repository function called directly |
+| conditional power at m = 118 | **0.839027** | `exact_power` at the rounded cell (n = 59, b = 41, c = 18) |
+| conditional power at m = 122 | **0.895089** | idem (n = 61, b = 43, c = 18) |
+| conditional power at m = 130 | **0.930641** | idem (n = 65, b = 46, c = 19) |
+| **conditional-exact design requirement** | **130 pairs** | smallest discordant count `d` with `P(Bin(d,0.70) ≥ k*(d)) + P(Bin(d,0.70) ≤ d−k*(d)) ≥ 0.90` is **d = 65** (0.910044; d = 64 gives 0.878, d = 66 gives 0.895); `m = d/π_d = 65/0.50 = 130` |
+| **unconditional-exact design requirement** | **135 pairs** | smallest `N` with `Σ_d BinomPMF(d; N, 0.50) · P(reject \| d) ≥ 0.90` is **N = 135** (0.902227); monotone thereafter |
+| implementation's *stable* crossing | **139** | smallest m₀ with power ≥ 0.90 for **every** m in [m₀, 600]. Below 0.90 above 116: exactly 118-129, 131-133, 138 |
+
+Decision rule for every power figure: exact two-sided McNemar with the doubling
+correction — reject iff `2 · P(Bin(d, 0.5) ≥ max(b, c)) ≤ 0.05` — which is what
+`f2_statistics._critical_value` and `mcnemar_exact` already implement, so no new
+statistical method is introduced or assumed.
+
+**Why the curve falls when m rises.** `n = round(m·π_d)` and
+`b = round((n + m·δ)/2)` are both rounded, so the achieved alternative
+`θ = b/n` is not monotone in m — m = 116 gives θ = 41/58 = 0.7069 while m = 118
+gives θ = 41/59 = 0.6949 — while the exact two-sided critical value jumps at the
+same step (n = 58 → k\* = 37, n = 59 → k\* = 38). The alternative gets weaker
+*and* the bar rises together. The result is a sawtooth, and the function returns
+its **first** crossing.
+
+**Decisions.**
+
+1. **No algorithm change.** `required_pairs` has no production caller anywhere in
+   `qwen_train/` — its own definition is the only occurrence — and the enforced
+   constant is `FROZEN_MIN_PAIRS = 300` (`qwen_train/f2_readiness.py`). Rewriting
+   the helper would contradict the value AUTH-013 recorded while changing no
+   runtime behaviour. Changing the algorithm is **`REQUIRES AUTHORIZATION`** and
+   is NOT done here.
+2. **Documentation corrected.** The return value is now described as a
+   rounded-cell, conditional **first crossing** of a non-monotone curve, and the
+   "OVER-estimate" claim is scoped to the exact-vs-asymptotic comparison it came
+   from (`f2_statistics` module docstring, `required_pairs` docstring,
+   `PowerPlan.assumptions()["note"]`).
+3. **`n = 300` is untouched and provably unaffected:** `max(300, required) == 300`
+   for every π_d in the authorized sensitivity range — 28 / 66 / **116** / 191 /
+   261 for π_d = 0.20 / 0.30 / 0.50 / 0.75 / 1.00 (AUTH-013's own table). The
+   authorization's statement that "n = 300 exceeds the requirement at every point
+   of the authorized sensitivity range" remains `PROVEN`.
+4. **Numerical robustness corrected.** `binom_sf` / `binom_cdf` raised
+   `OverflowError` above roughly n = 1024, because `comb(2000, 1000) ≈ 1e600`
+   cannot be converted to a float — so `required_pairs` would have crashed
+   instead of returning its documented `None` on an unattainable specification,
+   and `mcnemar_exact`'s Clopper-Pearson bisection would have crashed on a large
+   ledger. A log-space fallback now runs **only** when the exact-integer product
+   overflows, so every input that previously worked returns bit-identical values.
+   Verified against an exact integer oracle (`sum(comb(n,i)) / 2**n`) at n = 2000.
+
+**Not changed:** δ, α, π_d, `k`, `n`, `max_pairs`, the McNemar method, the
+confidence-interval construction, the Q6 ceiling, or any readiness gate.
+
+**File boundary.** `qwen_train/f2_statistics.py` (docstrings, comments and the
+`OverflowError` fallback only) plus `tests/test_f2_statistics.py`. No other file.
+
+**Verification.** `tests/test_f2_statistics.py::TestRequiredPairsInterpretation`
+(9 cases) and `::TestBinomialTailNumericalStability` (4 cases); the pre-existing
+F2 statistical / analysis / Q6 / design-guard / readiness suite (154 cases)
+passes unchanged alongside them.
