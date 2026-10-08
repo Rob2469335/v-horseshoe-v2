@@ -1523,3 +1523,60 @@ F0, F1, or the frozen statistical design. **A green software suite is not experi
 readiness.** Preflight remains the final fail-closed gate: READY means the evidence
 and environmental prerequisites have actually been established, never that the code
 capable of checking readiness exists.
+
+---
+
+## Population Acquisition Authorization (2026-10-07, repository `8d8d5b49`)
+
+This entry records an operator-authorized decision and the screening result it
+permitted. It grants nothing beyond what `F2-IMPL-AUTH-028` grants.
+
+### D-21. Population acquisition/screening AUTHORIZED (`F2-IMPL-AUTH-028`); admitted population still 0
+
+**Supersedes the current-state claim of D-18 item 2** ("Population admission remains
+unauthorized", 2026-10-05) for present-state purposes only; D-18 is preserved as the
+historical record of what was true then.
+
+**Authorization (Rob, experiment authority, 2026-10-07; recorded by the agent as
+`F2-IMPL-AUTH-028`).** Acquisition and admission *screening* of the F2 task population
+from the already-downloaded source `data/f2_population/population_census_swe_bench_live_full.json`
+and `data/f2_population/raw/swe_bench_live_full.jsonl`. Target **≥ 300 admitted pairs**
+for the frozen confirmatory population. **UNKNOWN contamination is NOT CLEAN.** Explicitly
+NOT authorized: lowering the target, inventing screening criteria, executing tasks,
+running models, starting or using the VM, establishing Q9, running Q10/Q12/Q13, or
+declaring F2 READY.
+
+**Download provenance (pre-dates the authorization).** Raw file 512,707,210 bytes
+(created 2026-10-05 15:11:59, SHA-256
+`2200464695BE1E5563E8C1790C9A564EA35D31922E04796385E3A64FA237E7C6`); census file
+545,575,384 bytes (created 2026-10-05 15:15:57, SHA-256
+`EC2D8DA26F69331C34765ED9C2C0ABD34C100D36B4E626140233A113148A0DD9`). Rows declare
+`_source.dataset = "SWE-bench-Live/SWE-bench-Live"`, `split = "full"`, `license = "mit"`.
+**Dataset revision: NOT ESTABLISHED. Downloader: NOT ESTABLISHED.** The download is
+recorded as a fact and is **not** retroactively authorized.
+
+**Screening result (PROVEN IN CURRENT REVISION; read-only, existing machinery, no
+execution).** 1888 source rows, 223 repositories, 0 malformed lines, 1 duplicate
+`instance_id` (`conan-io__conan-18153`). S1–S5 and S9 pass for all rows; **S6, S7 and
+S8 fail for all 1888** (no frozen `relevant_file_set`; no base/gold evidence);
+`PopulationManifest.verify()` fails closed on the duplicate. **Admitted = 0.**
+
+**Contamination.** No model training cutoff is declared by any authority document or
+constant, so S10 runs `NOT_DECLARED` and **all 1888 rows classify UNKNOWN** — per this
+authorization, not CLEAN. **GOVERNANCE GAP: model cutoff value missing.**
+
+**Static runnability (INFERRED, metadata only, not an admission rule):** 1722
+`STATIC-CANDIDATE`, 166 `UNKNOWN`, 0 refused on OS/infrastructure metadata; no
+`test_cmd` names a container runtime.
+
+**Shortfall.** 0 admitted of the ≥ 300 required → **CONFIRMATORY TARGET SHORTFALL —
+HUMAN DECISION REQUIRED.** The target was not lowered.
+
+### D-22. What this entry does not decide
+
+It admits no task; selects no model cutoff, contamination criterion, evaluator or
+admission rule; authorizes no execution of any task, model, VM, Q9, Q10, Q12 or Q13;
+provisions no credential; changes no code (the preflight `authz.population_acquisition`
+finding remains hard-coded at `qwen_train/f2_preflight.py:391` and still reports
+`not_authorized` — recognizing the ledger entry there **REQUIRES AUTHORIZATION**); and
+does not declare F2 READY.

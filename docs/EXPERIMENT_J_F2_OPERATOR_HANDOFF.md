@@ -143,9 +143,27 @@ That is correct behaviour, not an error to work around. No agent may provision i
 
 ### 1.4 Authorization you must obtain (1)
 
-Population acquisition. `F2-IMPL-AUTH-013` **explicitly does not authorize** it.
-Until an explicit authorization exists, the admitted population is **zero** and
-nothing downstream can be run.
+**RECORDED 2026-10-07 as `F2-IMPL-AUTH-028`** (Rob, experiment authority). It
+authorizes acquisition and admission **screening** of the F2 task population from
+the already-downloaded source `data/f2_population/population_census_swe_bench_live_full.json`
+and `data/f2_population/raw/swe_bench_live_full.jsonl` (both created 2026-10-05,
+i.e. **before** this authorization; the download is recorded as provenance, not
+retroactively authorized). Target: **≥ 300 admitted pairs**; **UNKNOWN contamination
+is NOT CLEAN**. It does not authorize lowering the target, inventing criteria,
+executing tasks, running models, the VM, Q9, Q10, Q12, Q13, or declaring F2 READY.
+
+**Screening is authorized; admission is NOT satisfied.** The screening pass (read-only,
+no execution) found 1888 source rows / 223 repositories and **0 admitted**: S6 (R8
+relevant file set), S7 and S8 (base/gold execution evidence) fail for every row, one
+`instance_id` is duplicated (`conan-io__conan-18153`, so `PopulationManifest.verify()`
+fails closed), and **no model training cutoff is declared anywhere**, so all 1888 rows
+are `UNKNOWN` contamination. The admitted population therefore stays **zero**.
+
+**Note on preflight:** `authz.population_acquisition` is hard-coded
+(`qwen_train/f2_preflight.py:391`) and does not read the ledger, so it still reports
+`not_authorized`; making it recognize `F2-IMPL-AUTH-028` is a code change that
+**REQUIRES AUTHORIZATION**. The checklist count above is unchanged because it mirrors
+preflight.
 
 ### 1.5 Host control you must obtain (1)
 
@@ -173,12 +191,12 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 
 ---
 
-### B. Population / task authorization — **AUTHORIZATION REQUIRED**
+### B. Population / task authorization — **AUTHORIZED (`F2-IMPL-AUTH-028`, 2026-10-07)**
 
-- **Owner:** experiment authority (not the agent, not the operator acting alone)
-- **Inputs:** an explicit authorization to acquire the F2 task population
-- **Output:** a recorded authorization entry naming scope, size, and contamination policy
-- **Fail-closed if:** no such entry. **Admitted population stays 0.** No task may be admitted.
+- **Owner:** experiment authority (Rob), recorded by the agent on his explicit instruction
+- **Inputs:** an explicit authorization to acquire the F2 task population — **RECORDED** as `F2-IMPL-AUTH-028`
+- **Output:** a recorded authorization entry naming scope, size, and contamination policy — scope: the two named downloaded files; size: **≥ 300 admitted pairs**; contamination policy: **UNKNOWN is NOT CLEAN** (no model cutoff value is declared anywhere, so nothing is `CLEAN`)
+- **Fail-closed if:** no such entry. **Admitted population stays 0.** No task may be admitted. Screening of the source is authorized; admission remains blocked by S6/S7/S8, by the undeclared model cutoff, and by a duplicate `instance_id`. Reported shortfall: **0 admitted of ≥ 300 required** — target not lowered.
 - **Next:** C
 
 ---
@@ -774,7 +792,7 @@ mechanism is.
 
 | # | Step | § | Owner | Gate that must be satisfied first | Unlocks |
 |---|---|---|---|---|---|
-| 1 | Population authorization | B | experiment authority | an explicit authorization exists (AUTH-013 does not grant it) | step 2 |
+| 1 | Population authorization | B | experiment authority | **SATISFIED 2026-10-07** by `F2-IMPL-AUTH-028` (AUTH-013 does not grant it); screening authorized, admission still fail-closed at 0 | step 2 |
 | 2 | Curator-office decision | I | experiment authority | none - can run in parallel with 1 | steps 9, 15 |
 | 3 | Operator environment provisioning | D/A | operator | step 3 only needs step 1 for the artifact-store location | steps 4-8 |
 | 4 | Receipt-key provisioning | E | operator | step 3 | step 8, 13 |

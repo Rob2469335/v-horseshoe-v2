@@ -1583,3 +1583,113 @@ account change; the P2 host/guest execution split; and any F2 experiment run.
 *Scope: F2 orchestrator implementation — bounded file set (§10), scientific design unchanged (§3-§9)*
 *Boundaries preserved: F0, F1, F2 execution contract, design document, state documentation*
 *Not authorized: N=2, Experiment J execution, evaluation, certification, promotion, QLoRA, frontend*
+
+---
+
+### F2-IMPL-AUTH-028 - Population acquisition and admission screening (operator-granted)
+
+**Author:** Rob (human operator), recorded by the agent on the operator's explicit
+instruction of 2026-10-07.
+
+**Date:** 2026-10-07
+
+**Authority.** Recorded under §13(4) and §13(7) on the operator's explicit
+instruction of 2026-10-07. This entry records an operator-authorized decision; the
+agent selected no scope, no target, no cutoff and no screening criterion. It
+records no new science, selects no scientific parameter, and modifies no frozen
+element.
+
+**Authorization (the operator's instruction, recorded as given).**
+
+> I authorize acquisition and admission screening of the F2 task population from
+> the existing downloaded source:
+>
+> `data/f2_population/population_census_swe_bench_live_full.json`
+> `data/f2_population/raw/swe_bench_live_full.jsonl`
+>
+> The source is authorized for screening; its contents are NOT automatically
+> admitted.
+>
+> The target is at least 300 admitted task pairs for the frozen confirmatory
+> population.
+>
+> UNKNOWN contamination status is NOT CLEAN.
+>
+> This authorization does not authorize lowering the target, inventing screening
+> criteria, executing tasks, running models, starting or using the VM, establishing
+> Q9 isolation, running Q10, Q12, or Q13, or declaring F2 READY.
+>
+> If fewer than 300 tasks survive the authorized screening criteria, STOP and
+> report the shortfall. Do not lower the target or create substitute criteria.
+
+**Scope (what this entry grants).** Permission to *use* the two named files as the
+population source for the acquisition/screening phase, and to run the existing,
+non-execution screening machinery (`qwen_train.f2_population.screen_pool_rows`,
+S1–S10) over them. Target: **≥ 300 admitted pairs** (consistent with the frozen
+`n = 300` in F2-IMPL-AUTH-013). Contamination policy: **UNKNOWN is NOT CLEAN** —
+consistent with F2-IMPL-AUTH-014 (`UNKNOWN` never becomes `CLEAN`) and with
+`docs/EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md` §6 Q1.
+
+**Download provenance (recorded accurately; the download PREDATES this
+authorization).**
+
+| Fact | Value |
+|---|---|
+| Raw source | `data/f2_population/raw/swe_bench_live_full.jsonl` — 512,707,210 bytes, created **2026-10-05 15:11:59**, SHA-256 `2200464695BE1E5563E8C1790C9A564EA35D31922E04796385E3A64FA237E7C6` |
+| Screened census | `data/f2_population/population_census_swe_bench_live_full.json` — 545,575,384 bytes, created **2026-10-05 15:15:57**, SHA-256 `EC2D8DA26F69331C34765ED9C2C0ABD34C100D36B4E626140233A113148A0DD9` |
+| Declared source (inside the data) | `_source.dataset = "SWE-bench-Live/SWE-bench-Live"`, `split = "full"`, `license = "mit"`, `log_parser = "pytest"` |
+| Dataset revision / commit pin | **NOT ESTABLISHED** (no revision recorded anywhere in the repository or the files) |
+| Who/what downloaded them | **NOT ESTABLISHED** (no tracked record; `data/` is gitignored and `git log -- data/f2_population` is empty) |
+| Related same-day artifacts | `q8_derivation_probe.json` (112,980 bytes, 2026-10-05 16:11:22, SHA-256 `81DEF660760F1D651C2834E5F8A2C8BC0C10D825C8033F7F51303D1E8A9E6325`) and 133 cloned repositories under `data/f2_population/work/` — creator **NOT ESTABLISHED** |
+
+The 2026-10-05 download is a **provenance fact, not an authorization**: nothing in
+this entry retroactively authorizes it. This entry establishes permission to use
+the already-present files as the population source for this screening phase.
+
+**Screening result (PROVEN IN CURRENT REVISION, produced by this authorization's
+screening pass, read-only, no execution).**
+
+| Measure | Value |
+|---|---|
+| Source rows | 1888 (0 malformed JSON lines) |
+| Distinct repositories | 223 |
+| Duplicate `instance_id` | 1 — `conan-io__conan-18153` (1887 unique ids) |
+| S1–S5, S9 | pass for all 1888 rows |
+| S6 `relevant_file_set` (R8) | **FAIL 1888** — no frozen relevant file set (R8 not delivered for this source) |
+| S7 `source_not_test` | **FAIL 1888** (consequence of S6: no endpoint) |
+| S8 `evidence_provenance` | **FAIL 1888** — `evidence_state = MISSING` (no base/gold evidence; S8 requires real base=FAIL / gold=PASS executions) |
+| S10 contamination | no `model_cutoff` declared anywhere → state `NOT_DECLARED`, screen passes, **contamination class = UNKNOWN for all 1888** (never CLEAN) |
+| **Admitted** | **0** |
+| `PopulationManifest.verify()` | **FAIL CLOSED** — `ValueError: duplicate instance_id in manifest: conan-io__conan-18153` |
+
+**Static runnability analysis (INFERRED — metadata only, NOT an admission rule).**
+Of the 1888 rows: **1722** `STATIC-CANDIDATE` (S1–S5 + S9 pass, `test_cmd` is a
+direct pytest/python-style invocation, no container runtime named), **166**
+`UNKNOWN` (POSIX/`make`/shell-composite/venv-path or tool-bootstrap commands whose
+Windows-guest requirements cannot be determined from metadata), **0** refused on
+OS/infrastructure metadata. `docker` appears in **0** of 1888 `test_cmd` values;
+Python/OS/dependency installation requirements are **NOT ESTABLISHED** offline.
+
+**Consequence for the target (CONFIRMATORY TARGET SHORTFALL — HUMAN DECISION
+REQUIRED).** Static-metadata viability (1722) exceeds 300, but **admitted = 0**:
+S6, S7 and S8 fail for every row, and no authorized model cutoff exists, so
+**0 tasks are admissible under the existing authoritative criteria**. The ≥300
+target is NOT met and is NOT lowered by this entry.
+
+**GOVERNANCE GAP.** No authoritative **model training cutoff value** exists:
+F2-IMPL-AUTH-012 and -014 explicitly decline to select one, no other authority
+document declares one, and no code constant carries one. Without it every task is
+`UNKNOWN` contamination, which this authorization states is NOT CLEAN.
+
+**Explicit non-authorization.** This entry does NOT authorize lowering the ≥300
+target; inventing a contamination, temporal, model-cutoff, evaluator or admission
+criterion; admitting any task; recovering or acquiring gold patches; executing any
+task or repository test; running any model; starting or using the VM; establishing
+Q9 isolation; running Q10, Q12 or Q13; declaring F2 READY; provisioning or
+replacing `SWARM_RECEIPT_KEY`; or changing `qwen_train/f2_preflight.py`.
+
+**Implementation status.** Documentation only — no code and no test is changed.
+`qwen_train/f2_preflight.py` still reports `authz.population_acquisition =
+not_authorized` because that finding is **hard-coded** (`f2_preflight.py:391`) and
+does not read this ledger; recognizing this entry from the ledger would be a code
+change and **REQUIRES AUTHORIZATION**.
