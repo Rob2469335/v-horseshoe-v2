@@ -341,6 +341,18 @@ navigation, and any task where the user explicitly requests no external research
 Where research is materially relevant and available, perform it **before** choosing
 the consequential implementation strategy.
 
+### 3.7.5 SOTA ENFORCEMENT AND TRACEABILITY
+
+Written instructions alone cannot guarantee agent compliance. To ensure the process in §3.7.4 is actually followed, enforcement relies on a deterministic code gate.
+
+Every commit prefixed with `ARCH:` MUST include a `SOTA-Basis:` footer or section in the commit message. The section must record:
+1. The primary source consulted (Title and URL) or `None`.
+2. The specific assumption or finding applied.
+3. How it reconciles with repository authority.
+
+If no external research was required for the architectural decision, the section must explicitly state `SOTA-Basis: None` with a brief justification.
+This requirement is enforced mechanically by `tests/test_agent_sota_enforcement.py`. Commits failing this check will fail repository validation.
+
 ### 3.8 EVIDENCE LANGUAGE
 
 Label every material conclusion. This vocabulary is the repository standard. **Use
