@@ -57,7 +57,7 @@ SOURCES: dict[str, dict[str, str]] = {
         "revision": "10483de0f50fe5da545942705a76c6150171af7f",
         "license": "cc-by-4.0",
         "split": "train",
-        "allow_patterns": "*",
+        "allow_patterns": "data/train-*.parquet",
     },
 }
 

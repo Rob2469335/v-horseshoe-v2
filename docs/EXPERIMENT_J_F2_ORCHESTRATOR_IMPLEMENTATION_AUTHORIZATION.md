@@ -2211,3 +2211,94 @@ execute any task, patch, benchmark test, model, Docker/VM/service, or Q9/Q10/Q12
 does NOT provision or read `SWARM_RECEIPT_KEY`; does NOT reclassify any task or claim
 a model training cutoff. S8 remains blocked until task execution is separately
 authorized and an isolated execution environment exists; `admitted` stays 0.
+
+### F2-IMPL-AUTH-031 - Multi-source population union, frozen R8 alignment, and JSONL parsing repair
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-09
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-09
+(multi-source population acquisition), entered by the agent. Records no new
+science and changes no frozen element.
+
+**Defects fixed (`PROVEN`).**
+
+* **JSONL parsing (acquisition-blocking).** `f2_population_build` read JSONL with
+  `str.read_text().splitlines()`. `str.splitlines()` splits on Unicode line
+  boundaries (U+2028, U+2029, NEL, ...) that occur *inside* JSON strings, tearing a
+  record apart -- reproduced as `JSONDecodeError: Unterminated string` on the real
+  SWE-rebench-V2 acquisition. Fixed to split on `\n` only (`_read_jsonl`); the
+  repository-wide `splitlines()` calls were deliberately NOT touched. Regression
+  tests embed U+2028/U+2029/NEL in a record and assert one record + exact round-trip.
+* **R8 deviation corrected.** F2-IMPL-AUTH-029 derived `relevant_file_set` with a
+  **source-extension allowlist**, which is not the frozen rule. The frozen Q8 rule
+  (`qwen_train/f2_endpoint_derivation.is_test_path`) is the SWE-bench test/source
+  split with **no extension filter**. `f2_relevant_files` now IMPORTS that predicate
+  (a test pins `is_test_path is f2_endpoint_derivation.is_test_path`), so the
+  derivation cannot drift. Documentation/config paths are non-test and therefore
+  REMAIN in the set under the frozen rule; the earlier "docs are excluded" tests
+  were corrected. The predicate is applied to the reference fix's `diff --git`
+  path metadata (no gold *content* is read).
+
+**Second source.** Acquired `nebius/SWE-rebench-V2` at the immutable full-length
+revision `10483de0f50fe5da545942705a76c6150171af7f` (32,079 rows, CC-BY-4.0), single
+shard `data/train-00000-of-00001.parquet` (428,839,266 B), normalised JSONL SHA-256
+`577b56ff483885ac3e22d78759f88453f33a3586fab4dd84b8b38a41eb3f5198`. The source-specific
+adapter reads `test_cmd` from `install_config.test_cmd`, coerces `created_at`
+(observed as the string `"YYYY-MM-DD HH:MM:SS"`, UTC; an epoch-ms form is also
+handled) to extended ISO, and copies `FAIL_TO_PASS`/`PASS_TO_PASS` **verbatim** --
+SWE-rebench-V2's are log-parser outcome identifiers, NOT pytest node ids, and are
+preserved as such. `patch`, `test_patch`, `repo`, and `base_commit` are preserved.
+
+**Union policy.** Canonical identity is `instance_id` (exact). Identical payload
+across sources -> keep the highest-priority source (`swe-bench-live` first).
+Same-id payload divergence across sources -> keep the priority source's record
+(recorded; fields are never merged); same-id divergence within one source -> all
+copies excluded (internal data defect).
+
+**Census (two-source union, cutoff 2024-01-01 proxy).**
+
+| Stage | Count |
+|---|---|
+| Raw rows (live 1,888 + rebench 32,079) | 33,967 |
+| Pre-screen exclusions (195 cross-source identical + 1 cross-source conflict + 1 within-source conflict pair) | 197 |
+| Accepted after union | 33,770 |
+| S10 PRE_CUTOFF (2014-2023; genuine, `created_at` strings) | 22,784 |
+| S4 empty `PASS_TO_PASS` (all swe-rebench-V2; genuine, verified on samples) | 6,102 |
+| S6 no non-test reference path / endpoint refused | 239 |
+| S7 source-not-test | 253 |
+| S8 no base/gold execution evidence | 33,770 |
+| **Metadata-eligible (all gates except S8)** | **9,198** |
+| **ADMITTED** | **0** |
+
+The 22,784 S10 failures are genuine PRE_CUTOFF tasks (year histogram 2014:3 ...
+2023:5,229; 2024:6,844; 2025:4,142). No millisecond/second error exists: every
+`created_at` is a string, so the epoch-ms branch never fires. The 6,102 S4 failures
+are source rows with an empty `PASS_TO_PASS` (spot-checked: `aio-libs__aiohttp-9047`,
+`wtforms__wtforms-614`, `dtolnay__cxx-839`), not a normalisation error.
+
+**S8 execution blocker (unchanged, evidenced).** `f2_preflight` reports
+`evidence.s8_base_gold = absent` and `docs/EXPERIMENT_J_F2_VM_ISOLATION.md` records
+the guest-side egress/socket proof and Q9 attestation as **NOT ESTABLISHED** (VM
+exists, guest installed + OOBE completed, but "post-fix guest retest not obtained"),
+and the topology as only RECOMMENDED. AUTH-027 lists "the P2 host/guest execution
+split" among items **REQUIRES AUTHORIZATION**. The Hyper-V VM `F2-Isolation-VM`
+exists (Gen2, 2 vCPU, internal-only `F2-Internal-Switch`, disk 17.69 GB) and is
+**Off**; it was not started. No base/gold execution was performed.
+
+**File boundary.** `qwen_train/f2_population_build.py` (+ new union builder),
+`qwen_train/f2_relevant_files.py`, `qwen_train/f2_population_acquire.py`,
+`tests/test_f2_population_union.py` (new), `tests/test_f2_population_recovery.py`,
+and this document. Data (gitignored): `data/f2_population/upstream_swe_rebench_v2_10483de0/`
+and `data/f2_population/union/`.
+
+**Verification.** `pytest tests/ -k f2` -> **1597 passed, 4 skipped**. Focused union +
+recovery + population tests -> 96 passed. `ruff check --select E9,F` on all changed
+files -> clean. Census rebuild is deterministic (same inputs -> same manifest).
+
+**Explicit non-authorization.** Does NOT execute any task, patch, benchmark test,
+model, or F2 run; does NOT start the VM or complete the guest retest; does NOT
+provision `SWARM_RECEIPT_KEY`; does NOT change `FROZEN_MIN_PAIRS`, F0/F1, `k`, `n`,
+alpha, delta, pi_d, the endpoint, the contamination policy, or any eligibility rule.
+`admitted` stays 0; F2 is NOT ready.

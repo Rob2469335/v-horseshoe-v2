@@ -152,13 +152,18 @@ class TestDeduplicate:
 
 
 class TestRelevantFilesFromPatch:
-    def test_source_only_and_sorted(self):
-        assert relevant_file_set_from_patch(_PATCH) == ("pkg/mod.py", "removed/old.py")
+    """The frozen Q8 rule is the SWE-bench test/source split (no extension filter)."""
 
-    def test_non_source_docs_are_excluded(self):
-        """S7 measures a SOURCE edit; docs are not source (fail-closed on unknown ext)."""
-        assert "docs/guide.md" in changed_paths_from_patch(_PATCH)
-        assert "docs/guide.md" not in relevant_file_set_from_patch(_PATCH)
+    def test_frozen_rule_keeps_non_test_paths_including_docs(self):
+        assert relevant_file_set_from_patch(_PATCH) == (
+            "docs/guide.md",
+            "pkg/mod.py",
+            "removed/old.py",
+        )
+
+    def test_docs_are_not_excluded_by_the_frozen_rule(self):
+        """F2-IMPL-AUTH-031: no extension allowlist may be substituted for the rule."""
+        assert "docs/guide.md" in relevant_file_set_from_patch(_PATCH)
 
     def test_test_paths_are_excluded(self):
         assert patch_test_paths(_PATCH) == ("tests/test_mod.py",)
@@ -171,10 +176,16 @@ class TestRelevantFilesFromPatch:
             "docs/guide.md",
         )
 
-    def test_specs_as_source_package_is_not_a_test_dir(self):
-        """Regression: ``litserve/specs/openai.py`` is source, not a test file."""
+    def test_predicate_is_the_frozen_one(self):
+        """The derivation imports the planted predicate; it must be the same object."""
+        from qwen_train import f2_endpoint_derivation as fed
+
+        assert is_test_path is fed.is_test_path
+
+    def test_specs_directory_is_source_under_the_frozen_rule(self):
+        """The frozen predicate only treats test/tests/testing as test dirs."""
         assert is_test_path("src/litserve/specs/openai.py") is False
-        assert is_test_path("specs/thing.js") is True
+        assert is_test_path("specs/thing.js") is False
 
     @pytest.mark.parametrize(
         "path,expected",
@@ -182,9 +193,11 @@ class TestRelevantFilesFromPatch:
             ("tests/t.py", True),
             ("test/thing.py", True),
             ("pkg/tests/test_x.py", True),
-            ("conftest.py", True),
-            ("pkg/conftest.py", True),
+            ("testing/helper.py", True),
+            ("conftest.py", False),  # the frozen rule has no conftest special case
             ("mod_test.py", True),
+            ("FooTest.java", True),
+            ("BarTests.cs", True),
             ("pkg/mod.py", False),
             ("contest.py", False),
             ("src/litserve/specs/openai.py", False),
