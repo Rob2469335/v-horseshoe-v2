@@ -39,6 +39,46 @@ jobs:
 
       - name: Run SOTA enforcement
         run: python -m pytest tests/test_agent_sota_enforcement.py -q
+
+  # Independent security gate. It intentionally has NO `needs` edge to or from
+  # any other job: a failing audit must fail the overall workflow on its own,
+  # and it must never be able to skip the Python test job (or vice versa).
+  # No `continue-on-error` here - the audit stays a required, failure-producing
+  # check, and no vulnerability is suppressed, excluded or hidden.
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+
+      - name: Cache pip
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Install dev tools (SCA)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Run pip-audit
+        run: pip-audit -r requirements.txt
+
   test:
     runs-on: ubuntu-latest
     services:
@@ -81,10 +121,10 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Install dev tools (linting, typing, SCA)
+      - name: Install dev tools (linting, typing)
         run: |
           python -m pip install --upgrade pip
-          pip install ruff mypy pip-audit
+          pip install ruff mypy
 
       - name: Validate installed dependencies
         run: python -m pip check
@@ -95,9 +135,6 @@ jobs:
       - name: Run mypy (advisory)
         continue-on-error: true
         run: mypy --ignore-missing-imports swarm_os runtime_v2 organism_console
-
-      - name: Run pip-audit
-        run: pip-audit -r requirements.txt
 
       - name: Wait for Qdrant
         run: |
