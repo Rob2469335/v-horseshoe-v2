@@ -1188,3 +1188,33 @@ supplementary real scratch VHDX still round-trips.
 
 **Limitation.** Live guest-written-disk evidence remains **NOT ESTABLISHED**;
 synthetic fixtures only. No VM started, no disk attached or mounted.
+
+---
+
+## 2026-10-09 - F2 S8 VHDX reader: header/region/metadata invariant completion (Stage 1)
+
+**State on entry.** HEAD `89e6965c`, worktree clean except the pre-existing
+`tests/conftest.py` and untracked user files.
+
+**Corrections (qwen_train/f2_s8_vhdx.py).**
+* Region table: a zero-length entry could `continue` past GUID-uniqueness and
+  required-field checks. Uniqueness is now enforced for every entry, and a required
+  (or BAT/metadata) region may not have zero length.
+* Metadata table: entries are now unpacked as {ItemId, Offset, Length, Flags,
+  Reserved}; a nonzero Reserved field or reserved flag bits are rejected;
+  `(ItemId, IsUser)` uniqueness is enforced; a zero-length item must carry a zero
+  offset; only non-user (system) items populate the field map.
+* Headers: two valid copies with EQUAL sequence numbers must be byte-identical;
+  a disagreement is refused (no arbitrary tie-breaker).
+
+**Tests (tests/test_f2_s8_stage1.py).** The synthetic builder now writes the full
+metadata-entry record (flags/reserved). Added `TestNewInvariants`: zero-length
+required region, zero-length entry not bypassing uniqueness, metadata reserved field
+and reserved flag bits, duplicate `(ItemId, IsUser)`, zero-length item with nonzero
+offset, equal-sequence identical headers accepted, equal-sequence differing headers
+refused. **69 passed**; `ruff --select E9,F` clean; the real Hyper-V scratch VHDX
+still round-trips.
+
+**Limitations.** Live guest-written-disk evidence remains NOT ESTABLISHED; synthetic
+fixtures only. Page83/VirtualDiskID presence is not required. No VM started; no disk
+attached or mounted; no production integration or F2/S8 readiness.

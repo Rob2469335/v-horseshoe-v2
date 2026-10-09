@@ -89,10 +89,13 @@ def _put_metadata(buf: bytearray, items) -> None:
     buf[META_OFF:META_OFF + 8] = b"metadata"
     struct.pack_into("<H", buf, META_OFF + 10, len(items))
     item_off = 32 + len(items) * 32
-    for i, (guid, blob) in enumerate(items):
+    for i, item in enumerate(items):
+        guid, blob = item[0], item[1]
+        flags = item[2] if len(item) > 2 else 0
+        reserved = item[3] if len(item) > 3 else 0
         base = META_OFF + 32 + i * 32
         buf[base:base + 16] = guid
-        struct.pack_into("<II", buf, base + 16, item_off, len(blob))
+        struct.pack_into("<IIII", buf, base + 16, item_off, len(blob), flags, reserved)
         buf[META_OFF + item_off:META_OFF + item_off + len(blob)] = blob
         item_off += len(blob)
 
@@ -469,6 +472,63 @@ class TestBatInterleaving:
     def test_small_disk_is_unchanged_by_interleaving(self):
         # For a small disk (block_count < chunk_ratio) payload index == block index.
         assert [bat_payload_index(i, 4096) for i in range(8)] == list(range(8))
+
+
+class TestNewInvariants:
+    def test_zero_length_required_region_rejected(self, tmp_path):
+        entries = [(GUID_BAT, BAT_OFF, 0, 1), (GUID_METADATA, META_OFF, META_LEN, 1)]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(region_entries=entries)))
+
+    def test_zero_length_entry_does_not_bypass_uniqueness(self, tmp_path):
+        entries = [(GUID_BAT, BAT_OFF, BAT_LEN, 1), (GUID_METADATA, META_OFF, META_LEN, 1),
+                   (GUID_BAT, 5 * MB, 0, 0)]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(region_entries=entries)))
+
+    def test_metadata_reserved_field_rejected(self, tmp_path):
+        items = [(GUID_FILE_PARAMETERS, struct.pack("<II", BLOCK, 1), 0, 1),
+                 (GUID_VIRTUAL_DISK_SIZE, struct.pack("<Q", VDS)),
+                 (GUID_LOGICAL_SECTOR, struct.pack("<I", 512)),
+                 (GUID_PHYSICAL_SECTOR, struct.pack("<I", 4096))]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=items)))
+
+    def test_metadata_reserved_flag_bits_rejected(self, tmp_path):
+        items = [(GUID_FILE_PARAMETERS, struct.pack("<II", BLOCK, 1), 0b1000),
+                 (GUID_VIRTUAL_DISK_SIZE, struct.pack("<Q", VDS)),
+                 (GUID_LOGICAL_SECTOR, struct.pack("<I", 512)),
+                 (GUID_PHYSICAL_SECTOR, struct.pack("<I", 4096))]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=items)))
+
+    def test_duplicate_item_id_and_isuser_rejected(self, tmp_path):
+        items = [(GUID_FILE_PARAMETERS, struct.pack("<II", BLOCK, 1)),
+                 (GUID_FILE_PARAMETERS, struct.pack("<II", BLOCK, 1)),
+                 (GUID_VIRTUAL_DISK_SIZE, struct.pack("<Q", VDS)),
+                 (GUID_LOGICAL_SECTOR, struct.pack("<I", 512)),
+                 (GUID_PHYSICAL_SECTOR, struct.pack("<I", 4096))]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=items)))
+
+    def test_zero_length_item_with_nonzero_offset_rejected(self, tmp_path):
+        items = [(GUID_VIRTUAL_DISK_SIZE, b""),
+                 (GUID_FILE_PARAMETERS, struct.pack("<II", BLOCK, 1)),
+                 (GUID_LOGICAL_SECTOR, struct.pack("<I", 512)),
+                 (GUID_PHYSICAL_SECTOR, struct.pack("<I", 4096))]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=items)))
+
+    def test_equal_sequence_identical_headers_ok(self, tmp_path):
+        info = inspect_vhdx(_write(tmp_path, build_vhdx(seqs=(3, 3))))
+        assert info.sequence_number == 3
+
+    def test_equal_sequence_differing_headers_rejected(self, tmp_path):
+        buf = build_vhdx(seqs=(3, 3))
+        buf[HEADER_OFFS[1] + 16] ^= 0xFF  # change one byte of the second copy
+        _seal_header(buf, HEADER_OFFS[1])
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
 
 
 class TestReaderMechanics:

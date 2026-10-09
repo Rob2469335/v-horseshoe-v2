@@ -186,11 +186,18 @@ def _parse_region_table(raw: bytes, file_size: int, off: int):
     if not 1 <= entry_count <= 2047:
         raise VhdxError(f"implausible region entry count {entry_count}")
     entries = []
+    seen_guids: set[bytes] = set()
     for i in range(entry_count):
         base = 16 + i * 32
         guid = bytes(raw[base:base + 16])
         (file_offset, length, required) = struct.unpack_from("<QII", raw, base + 16)
+        if guid in seen_guids:
+            raise VhdxError(f"duplicate region GUID at index {i}")
+        seen_guids.add(guid)
         if length == 0:
+            # A zero-length entry MUST NOT bypass uniqueness/required checks.
+            if guid in (GUID_BAT, GUID_METADATA) or (required & REQUIRED_FLAG):
+                raise VhdxError(f"region {i}: required region has zero length")
             continue
         if file_offset % MB != 0 or length % MB != 0:
             raise VhdxError(f"region {i}: offset/length not 1 MiB aligned")
@@ -245,6 +252,13 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
         if not valid:
             raise VhdxError("no valid VHDX header found (signature/checksum)")
         seq, header_offset = max(valid, key=lambda t: (t[0], -t[1]))
+        if len(valid) == 2 and valid[0][0] == valid[1][0]:
+            # Equal sequence numbers: the two copies must be identical; a
+            # disagreement means the file is inconsistent and must be refused.
+            a = _read_exact(fh, valid[0][1], 4096, file_size, "header copy")
+            b = _read_exact(fh, valid[1][1], 4096, file_size, "header copy")
+            if a != b:
+                raise VhdxError("two valid headers have equal sequence numbers but differ")
         header = _read_exact(fh, header_offset, 4096, file_size, "current header")
         (log_version,) = struct.unpack_from("<H", header, 64)
         (log_length,) = struct.unpack_from("<I", header, 68)
@@ -285,12 +299,24 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
             raise VhdxError("metadata table does not fit in the metadata region")
         meta_entries = _read_exact(fh, metadata["offset"] + 32, meta_count * 32, file_size, "metadata entries")
         fields: dict[bytes, bytes] = {}
+        seen_items: set[tuple[bytes, bool]] = set()
         spans = []
         for i in range(meta_count):
             base = i * 32
             guid = bytes(meta_entries[base:base + 16])
-            (item_offset, item_length) = struct.unpack_from("<II", meta_entries, base + 16)
+            (item_offset, item_length, flags, reserved) = struct.unpack_from("<IIII", meta_entries, base + 16)
+            if reserved != 0:
+                raise VhdxError(f"metadata item {i} has a nonzero reserved field")
+            if flags & ~0b111:
+                raise VhdxError(f"metadata item {i} has reserved flag bits set ({flags:#x})")
+            is_user = bool(flags & 0b1)
+            key = (guid, is_user)
+            if key in seen_items:
+                raise VhdxError(f"duplicate (ItemId, IsUser) metadata entry at index {i}")
+            seen_items.add(key)
             if item_length == 0:
+                if item_offset != 0:
+                    raise VhdxError(f"metadata item {i} is zero-length but has a nonzero offset")
                 continue
             if item_length > 1 * MB:
                 raise VhdxError(f"metadata item {i} length {item_length} too large")
@@ -299,11 +325,10 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
             if item_offset + item_length > metadata["length"]:
                 raise VhdxError(f"metadata item {i} extends past the metadata region")
             spans.append((item_offset, item_offset + item_length, i))
-            if guid in fields:
-                raise VhdxError(f"duplicate metadata item id at index {i}")
-            fields[guid] = _read_exact(
-                fh, metadata["offset"] + item_offset, item_length, file_size, f"metadata item {i}"
-            )
+            if not is_user:
+                fields[guid] = _read_exact(
+                    fh, metadata["offset"] + item_offset, item_length, file_size, f"metadata item {i}"
+                )
         spans.sort()
         for a, b in zip(spans, spans[1:]):
             if a[1] > b[0]:
