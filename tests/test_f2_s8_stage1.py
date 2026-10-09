@@ -30,6 +30,7 @@ from qwen_train.f2_s8_vhdx import (
     GUID_LOGICAL_SECTOR,
     GUID_METADATA,
     GUID_PHYSICAL_SECTOR,
+    GUID_VIRTUAL_DISK_ID,
     GUID_VIRTUAL_DISK_SIZE,
     VhdxError,
     bat_payload_index,
@@ -70,6 +71,7 @@ def _put_header(buf: bytearray, off: int, seq: int) -> None:
     buf[off:off + 4096] = b"\x00" * 4096
     buf[off:off + 4] = b"head"
     struct.pack_into("<Q", buf, off + 8, seq)
+    struct.pack_into("<H", buf, off + 66, 1)  # Version MUST be 1
     _seal_header(buf, off)
 
 
@@ -115,6 +117,7 @@ def build_vhdx(*, block_size=BLOCK, vds=VDS, flags=0b1, seqs=(1, 2), region_entr
         (GUID_VIRTUAL_DISK_SIZE, struct.pack("<Q", vds)),
         (GUID_LOGICAL_SECTOR, struct.pack("<I", 512)),
         (GUID_PHYSICAL_SECTOR, struct.pack("<I", 4096)),
+        (GUID_VIRTUAL_DISK_ID, b"\x01" * 16),
     ]
     _put_metadata(buf, items)
     count = vds // block_size
@@ -529,6 +532,104 @@ class TestNewInvariants:
         _seal_header(buf, HEADER_OFFS[1])
         with pytest.raises(VhdxError):
             inspect_vhdx(_write(tmp_path, buf))
+
+
+class TestHeaderLogAndRegionInvariants:
+    def test_invalid_header_version(self, tmp_path):
+        buf = build_vhdx()
+        struct.pack_into("<H", buf, HEADER_OFFS[1] + 66, 2)
+        _seal_header(buf, HEADER_OFFS[1])
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_invalid_log_version(self, tmp_path):
+        buf = build_vhdx()
+        struct.pack_into("<H", buf, HEADER_OFFS[1] + 64, 1)
+        _seal_header(buf, HEADER_OFFS[1])
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_reserved_header_byte(self, tmp_path):
+        buf = build_vhdx()
+        buf[HEADER_OFFS[1] + 200] = 0xFF
+        _seal_header(buf, HEADER_OFFS[1])
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_active_log_guid_refused(self, tmp_path):
+        buf = build_vhdx()
+        buf[HEADER_OFFS[1] + 48] = 0xAA  # non-zero LogGuid
+        _seal_header(buf, HEADER_OFFS[1])
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_log_out_of_bounds(self, tmp_path):
+        buf = build_vhdx()
+        struct.pack_into("<I", buf, HEADER_OFFS[1] + 68, 64 * MB)  # log length beyond file
+        _seal_header(buf, HEADER_OFFS[1])
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_valid_empty_log(self, tmp_path):
+        # A zero LogGuid with a reserved (nonzero-length, in-bounds) log region is valid.
+        buf = build_vhdx()
+        struct.pack_into("<I", buf, HEADER_OFFS[1] + 68, MB)
+        struct.pack_into("<Q", buf, HEADER_OFFS[1] + 72, MB)
+        _seal_header(buf, HEADER_OFFS[1])
+        assert inspect_vhdx(_write(tmp_path, buf)).sequence_number == 2
+
+    def test_region_table_reserved_field(self, tmp_path):
+        buf = build_vhdx()
+        struct.pack_into("<I", buf, REGION_OFFS[0] + 12, 1)
+        _seal_region(buf, REGION_OFFS[0])
+        buf[REGION_OFFS[1]:REGION_OFFS[1] + 4] = b"XXXX"  # force use of the primary copy
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_invalid_required_value(self, tmp_path):
+        entries = [(GUID_BAT, BAT_OFF, BAT_LEN, 0x2), (GUID_METADATA, META_OFF, META_LEN, 1)]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(region_entries=entries)))
+
+
+class TestMetadataInvariants:
+    def _items(self, extra=(), vdisk_id=b"\x01" * 16):
+        items = [
+            (GUID_FILE_PARAMETERS, struct.pack("<II", BLOCK, 1)),
+            (GUID_VIRTUAL_DISK_SIZE, struct.pack("<Q", VDS)),
+            (GUID_LOGICAL_SECTOR, struct.pack("<I", 512)),
+            (GUID_PHYSICAL_SECTOR, struct.pack("<I", 4096)),
+            (GUID_VIRTUAL_DISK_ID, vdisk_id),
+        ]
+        return items + list(extra)
+
+    def test_missing_virtual_disk_id(self, tmp_path):
+        items = [(GUID_FILE_PARAMETERS, struct.pack("<II", BLOCK, 1)),
+                 (GUID_VIRTUAL_DISK_SIZE, struct.pack("<Q", VDS)),
+                 (GUID_LOGICAL_SECTOR, struct.pack("<I", 512)),
+                 (GUID_PHYSICAL_SECTOR, struct.pack("<I", 4096))]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=items)))
+
+    def test_wrong_virtual_disk_id_length(self, tmp_path):
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=self._items(vdisk_id=b"\x01" * 8))))
+
+    def test_metadata_header_reserved_field(self, tmp_path):
+        buf = build_vhdx()
+        buf[META_OFF + 8] = 0x01
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_unknown_required_metadata_rejected(self, tmp_path):
+        unknown = (bytes.fromhex("11" * 16), b"x" * 4, 0b100)  # IsRequired
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=self._items(extra=[unknown]))))
+
+    def test_unknown_optional_metadata_allowed(self, tmp_path):
+        unknown = (bytes.fromhex("11" * 16), b"x" * 4, 0)  # optional
+        info = inspect_vhdx(_write(tmp_path, build_vhdx(meta_items=self._items(extra=[unknown]))))
+        assert info.layout == "fixed"
 
 
 class TestReaderMechanics:

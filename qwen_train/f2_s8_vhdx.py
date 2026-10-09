@@ -60,8 +60,15 @@ GUID_FILE_PARAMETERS = bytes.fromhex("3767a1ca36fa434db3b633f0aa44e76b")
 GUID_VIRTUAL_DISK_SIZE = bytes.fromhex("2442a52f1bcd7648b2115dbed83bf4b8")
 GUID_LOGICAL_SECTOR = bytes.fromhex("1dbf41816fa90947ba47f233a8faab5f")
 GUID_PHYSICAL_SECTOR = bytes.fromhex("c748a3cd5d4471449cc9e9885251c556")
+GUID_VIRTUAL_DISK_ID = bytes.fromhex("ab12cabee6b2234593efc309e000c746")  # {BECA12AB-B2E6-4523-93EF-C309E000C746}
 GUID_KNOWN = {GUID_BAT, GUID_METADATA, GUID_FILE_PARAMETERS, GUID_VIRTUAL_DISK_SIZE,
-              GUID_LOGICAL_SECTOR, GUID_PHYSICAL_SECTOR}
+              GUID_LOGICAL_SECTOR, GUID_PHYSICAL_SECTOR, GUID_VIRTUAL_DISK_ID}
+# Metadata entry flag bits ([MS-VHDX] 2.6.1).
+META_FLAG_ISUSER = 0b1
+META_FLAG_ISVIRTUALDISK = 0b10
+META_FLAG_ISREQUIRED = 0b100
+KNOWN_METADATA_ITEMS = {GUID_FILE_PARAMETERS, GUID_VIRTUAL_DISK_SIZE, GUID_LOGICAL_SECTOR,
+                        GUID_PHYSICAL_SECTOR, GUID_VIRTUAL_DISK_ID}
 REQUIRED_FLAG = 0x1
 
 
@@ -183,6 +190,9 @@ def _parse_region_table(raw: bytes, file_size: int, off: int):
     if crc32c(bytes(body)) != declared:
         return None
     (entry_count,) = struct.unpack_from("<I", raw, 8)
+    (rt_reserved,) = struct.unpack_from("<I", raw, 12)
+    if rt_reserved != 0:
+        raise VhdxError("region table reserved field is nonzero")
     if not 1 <= entry_count <= 2047:
         raise VhdxError(f"implausible region entry count {entry_count}")
     entries = []
@@ -191,6 +201,8 @@ def _parse_region_table(raw: bytes, file_size: int, off: int):
         base = 16 + i * 32
         guid = bytes(raw[base:base + 16])
         (file_offset, length, required) = struct.unpack_from("<QII", raw, base + 16)
+        if required & ~REQUIRED_FLAG:
+            raise VhdxError(f"region {i}: invalid Required value {required:#x} (reserved bits set)")
         if guid in seen_guids:
             raise VhdxError(f"duplicate region GUID at index {i}")
         seen_guids.add(guid)
@@ -261,11 +273,25 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
                 raise VhdxError("two valid headers have equal sequence numbers but differ")
         header = _read_exact(fh, header_offset, 4096, file_size, "current header")
         (log_version,) = struct.unpack_from("<H", header, 64)
+        (version,) = struct.unpack_from("<H", header, 66)
         (log_length,) = struct.unpack_from("<I", header, 68)
         (log_offset,) = struct.unpack_from("<Q", header, 72)
+        log_guid = header[48:64]
+        if version != 1:
+            raise VhdxError(f"unsupported VHDX header version {version}")
+        if log_version != 0:
+            raise VhdxError(f"unsupported VHDX log version {log_version}")
+        if any(header[80:4096]):
+            raise VhdxError("header reserved bytes are not zero")
+        if log_guid != b"\x00" * 16:
+            # A non-zero LogGuid means the log may require replay, which this
+            # reader does not implement; refuse rather than mis-parse.
+            raise VhdxError("VHDX log is active (LogGuid set); log replay is not supported")
         if log_length:
-            if log_length % MB != 0 or log_offset + log_length > file_size:
+            if log_length % MB != 0 or log_offset % MB != 0 or log_offset + log_length > file_size:
                 raise VhdxError("invalid log region in header")
+        elif log_offset != 0:
+            raise VhdxError("log_offset is nonzero but log_length is zero")
 
         # --- Region table: two fixed copies; use the valid one ---
         entries = None
@@ -292,6 +318,10 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
         meta_hdr = _read_exact(fh, metadata["offset"], 32, file_size, "metadata header")
         if meta_hdr[:8] != b"metadata":
             raise VhdxError("bad metadata signature")
+        if meta_hdr[8:10] != b"\x00\x00":
+            raise VhdxError("metadata header reserved field is nonzero")
+        if any(meta_hdr[12:32]):
+            raise VhdxError("metadata header trailing reserved bytes are nonzero")
         (meta_count,) = _unpack("<H", meta_hdr[10:12], "metadata entry count")
         if not 1 <= meta_count <= 2047:
             raise VhdxError(f"implausible metadata entry count {meta_count}")
@@ -309,7 +339,9 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
                 raise VhdxError(f"metadata item {i} has a nonzero reserved field")
             if flags & ~0b111:
                 raise VhdxError(f"metadata item {i} has reserved flag bits set ({flags:#x})")
-            is_user = bool(flags & 0b1)
+            is_user = bool(flags & META_FLAG_ISUSER)
+            if (flags & META_FLAG_ISREQUIRED) and guid not in KNOWN_METADATA_ITEMS:
+                raise VhdxError(f"metadata item {i} is unknown but marked required")
             key = (guid, is_user)
             if key in seen_items:
                 raise VhdxError(f"duplicate (ItemId, IsUser) metadata entry at index {i}")
@@ -335,6 +367,8 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
                 raise VhdxError(f"metadata items overlap: {a[2]} and {b[2]}")
 
         # --- File Parameters / geometry ---
+        if GUID_VIRTUAL_DISK_ID not in fields or len(fields[GUID_VIRTUAL_DISK_ID]) != 16:
+            raise VhdxError("Virtual Disk ID metadata missing or wrong length (expected 16 bytes)")
         if GUID_FILE_PARAMETERS not in fields or len(fields[GUID_FILE_PARAMETERS]) != 8:
             raise VhdxError("File Parameters missing or wrong length (expected 8 bytes)")
         block_size, flags = struct.unpack_from("<II", fields[GUID_FILE_PARAMETERS], 0)

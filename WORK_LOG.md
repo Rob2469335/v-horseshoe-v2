@@ -1218,3 +1218,34 @@ still round-trips.
 **Limitations.** Live guest-written-disk evidence remains NOT ESTABLISHED; synthetic
 fixtures only. Page83/VirtualDiskID presence is not required. No VM started; no disk
 attached or mounted; no production integration or F2/S8 readiness.
+
+---
+
+## 2026-10-09 - F2 S8 VHDX reader: header/log/region/metadata completion (Stage 1)
+
+**State on entry.** HEAD `f56adc7d`, worktree clean except the pre-existing
+`tests/conftest.py` and untracked user files.
+
+**Corrections (qwen_train/f2_s8_vhdx.py).** Header: Version MUST be 1; LogVersion
+MUST be 0; header reserved bytes [80,4096) MUST be zero; a non-zero LogGuid means an
+active log requiring replay (not implemented) and is refused; a nonzero log must be
+1 MiB aligned and in-bounds, and a zero log length with a nonzero log offset is
+refused. Region table: the header reserved field MUST be zero; the entry `Required`
+field is a bitmask whose reserved bits MUST be zero. Metadata: the table header
+reserved field and trailing reserved bytes MUST be zero; an unknown item marked
+`IsRequired` is refused; the required **Virtual Disk ID** item (16 bytes) must be
+present.
+
+**Tests (tests/test_f2_s8_stage1.py).** The builder now writes the header Version and
+the Virtual Disk ID item. New `TestHeaderLogAndRegionInvariants` and
+`TestMetadataInvariants` cover invalid Version, invalid LogVersion, reserved header
+bytes, active LogGuid, out-of-bounds log, valid empty log, region-table reserved
+field, invalid `Required` value, metadata-header reserved field, unknown required
+metadata, unknown optional metadata, missing/wrong-length Virtual Disk ID. Existing
+header/region/metadata/BAT/payload/unsupported tests retained. **82 passed**;
+`ruff --select E9,F` clean; the real Hyper-V scratch VHDX still round-trips
+(Version=1, LogVersion=0, LogGuid=0, reserved tail zero confirmed by inspection).
+
+**Limitations.** Live guest-written-disk evidence remains NOT ESTABLISHED; synthetic
+fixtures only. Page83 metadata is not required. No VM started; no disk attached or
+mounted; no production integration or F2/S8 readiness.
