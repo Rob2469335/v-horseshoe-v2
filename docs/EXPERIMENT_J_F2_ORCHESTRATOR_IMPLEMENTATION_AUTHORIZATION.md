@@ -2302,3 +2302,70 @@ model, or F2 run; does NOT start the VM or complete the guest retest; does NOT
 provision `SWARM_RECEIPT_KEY`; does NOT change `FROZEN_MIN_PAIRS`, F0/F1, `k`, `n`,
 alpha, delta, pi_d, the endpoint, the contamination policy, or any eligibility rule.
 `admitted` stays 0; F2 is NOT ready.
+
+### F2-IMPL-AUTH-032 - F2-Isolation-VM start, guest-boot verification, and the guest-channel blocker
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-09
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-09,
+which authorized starting the existing `F2-Isolation-VM` from the elevated session
+and performing ordinary boot/guest-readiness operations. Entered by the agent.
+
+**What was done (all read-only except starting and stopping the VM).**
+
+* Started the existing VM (`Start-VM`). No replacement VM created; no external
+  switch, NAT/ICS, firewall change, integration-service change, account/ACL change,
+  or security-policy change was made. PowerShell Direct and Enhanced Session were
+  **not** used.
+* Observed boot: after ~3.5 min the VM reached **State Running with Heartbeat OK**
+  (`Get-VMIntegrationService` Heartbeat `Enabled=True`, `PrimaryStatusDescription=OK`).
+  `Get-VMFirmware`: **SecureBoot On** (template `MicrosoftWindows`); `Get-VMSecurity`
+  **TpmEnabled True**; NIC on the internal-only `F2-Internal-Switch`; disk
+  `C:\Users\rober\F2_VM\F2-Isolation-VM-os.vhdx` (17.69 GB).
+* Shut the VM down cleanly through the integration service (`Stop-VM`, no `-Force`
+  needed): final **State Off**. No agent-started service is left running.
+
+**Verified finding (upgrade).** The guest OS is installed and OOBE completed --
+this is now **VERIFIED** by a running guest Heartbeat, where the prior record had
+it as NOT ESTABLISHED.
+
+**Blocker (PROVEN).** Every host<->guest channel needed to run
+`qwen_train/f2_guest_probe.ps1` inside the guest is either **disabled** or
+**prohibited**: host-side integration services are
+`Guest Service Interface = False`, `Key-Value Pair Exchange = False`,
+`Time Synchronization = False`, `VSS = False` (only Heartbeat and Shutdown are
+enabled); the adapter reports **no IP** (KVP disabled); and the operator
+instruction **prohibits PowerShell Direct and Enhanced Session**. Therefore the
+guest-side proofs remain **NOT ESTABLISHED**: guest network identity, egress/socket
+denial, the authorized gateway path, VHDX guest-read-only, guest clock, and the Q9
+attestation. The isolation design (`docs/EXPERIMENT_J_F2_VM_ISOLATION.md` Section 8)
+routes this through a **read-only input ISO/VHDX bundle** built by
+`qwen_train/f2_input_bundle.ps1`, whose IMAPI2 **ISO input builder is itself
+`REQUIRES AUTHORIZATION`** and not implemented; and it requires guest-side
+automation to run the probe (no PS Direct), which is also not established.
+
+**Consequence.** The S8 base/gold execution path cannot be driven inside the VM
+under the current boundaries, so **no S8 batch was run** and no task was admitted.
+Counts are unchanged from F2-IMPL-AUTH-031: **9,198 metadata-eligible, 0 admitted,
+0 analyzable**. No task was declared ineligible on the basis of a missing
+execution.
+
+**Stale preflight finding (reconciled in record, not by code).**
+`qwen_train/f2_preflight.py:391` reports
+`authz.population_acquisition = not_authorized` on the premise that no
+authorization to acquire the population exists. That premise is superseded by
+F2-IMPL-AUTH-028/029/031 (acquisition is authorized); the finding's *conclusion*
+(admitted population is zero) remains correct. Editing `f2_preflight.py` is
+**`REQUIRES AUTHORIZATION`** under F2-IMPL-AUTH-028 and was **not** performed.
+
+**Smallest next authorized step.** Authorize the IMAPI2 read-only ISO input bundle
+(`f2_input_bundle.ps1 -Execute` build path) plus an in-guest automation that runs
+`f2_guest_probe.ps1` from that read-only medium and writes its result to the output
+VHDX; then attach, boot, collect the guest probe, and close the guest-side proofs.
+With the guest proofs closed, the host/guest base-gold execution split (AUTH-027
+`REQUIRES AUTHORIZATION`) becomes the next gate. No science was weakened.
+
+**File boundary.** This document, and `docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md`.
+No code, test, data, or frozen artifact changed.

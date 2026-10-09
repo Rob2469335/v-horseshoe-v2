@@ -214,7 +214,12 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 > both verified genuine, not mapping errors. The >= 300 target is unchanged and
 > **not** met at the admitted tier: S8 base/gold execution evidence is still
 > missing, the Hyper-V `F2-Isolation-VM` guest proof is NOT ESTABLISHED, and the
-> host/guest execution split is REQUIRES AUTHORIZATION.
+> host/guest execution split is REQUIRES AUTHORIZATION. **Update AUTH-032:** the VM
+> was started and the guest OS is now VERIFIED up by a running Heartbeat
+> (SecureBoot On, vTPM on, internal-only NIC), then shut down cleanly; but every
+> host<->guest channel is disabled (KVP / Guest Service Interface / Time Sync /
+> VSS) and PowerShell Direct is prohibited, so `f2_guest_probe.ps1` still cannot be
+> run and the guest-side proofs remain NOT ESTABLISHED.
 
 ---
 
