@@ -32,6 +32,9 @@ from qwen_train.f2_s8_vhdx import (
     GUID_PHYSICAL_SECTOR,
     GUID_VIRTUAL_DISK_SIZE,
     VhdxError,
+    bat_payload_index,
+    bat_sb_index,
+    chunk_ratio_for,
     crc32c,
     inspect_vhdx,
     read_record_from_vhdx,
@@ -442,6 +445,30 @@ class TestBatAndPayload:
     def test_invalid_block_size(self, tmp_path):
         with pytest.raises(VhdxError):
             inspect_vhdx(_write(tmp_path, build_vhdx(block_size=3 * MB)))
+
+
+class TestBatInterleaving:
+    """[MS-VHDX] 2.5: payload and sector-bitmap BAT entries are interleaved."""
+
+    def test_chunk_ratio_formula(self):
+        # (2^23 * 512) / 1 MiB == 4096
+        assert chunk_ratio_for(MB, 512) == 4096
+        assert chunk_ratio_for(MB, 4096) == 32768
+        with pytest.raises(VhdxError):
+            chunk_ratio_for(3 * MB, 512)  # not an integer ratio
+
+    def test_payload_index_interleaves(self):
+        # chunk_ratio 4 -> P P P P SB P P P P SB ... ; payload i -> i + i//4
+        assert [bat_payload_index(i, 4) for i in range(10)] == [0, 1, 2, 3, 5, 6, 7, 8, 10, 11]
+
+    def test_sb_index_follows_each_chunk(self):
+        assert [bat_sb_index(c, 4, 10) for c in range(3)] == [4, 9, 12]
+        # a partial final chunk places the SB entry right after its payloads
+        assert bat_sb_index(0, 4096, 8) == 8
+
+    def test_small_disk_is_unchanged_by_interleaving(self):
+        # For a small disk (block_count < chunk_ratio) payload index == block index.
+        assert [bat_payload_index(i, 4096) for i in range(8)] == list(range(8))
 
 
 class TestReaderMechanics:

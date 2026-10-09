@@ -1158,3 +1158,33 @@ supplementary real scratch VHDX. **57 passed**; `ruff --select E9,F` clean.
 **READER MECHANICS ONLY; A HOSTILE GUEST-WRITTEN DISK IS NOT TESTED.** No production
 integration, live isolation, S8 evidence, or F2 readiness is established. No VM was
 started; no disk was attached or mounted; Run 2 did not begin.
+
+---
+
+## 2026-10-09 - F2 S8 VHDX reader: BAT interleaving correction (Stage 1)
+
+**State on entry.** HEAD `8d79c1b3` (post-audit hardening), worktree clean except the
+pre-existing `tests/conftest.py` and untracked user files.
+
+**Defect found.** The reader treated the BAT as one entry per payload block
+(`BAT[i]` for block `i`). [MS-VHDX] 2.5 interleaves payload and sector-bitmap
+entries: a chunk holds `ChunkRatio = (2^23 * LogicalSectorSize) / BlockSize` payload
+entries followed by one sector-bitmap entry. For the reader's small-disk contract
+`ChunkRatio` is large (e.g. 4096 at 1 MiB blocks / 512-byte sectors), so the payload
+index equals the block index in practice - but the assumption was wrong in general and
+sector-bitmap entries were never validated.
+
+**Correction.** `qwen_train/f2_s8_vhdx.py` now computes `chunk_ratio_for`,
+`bat_payload_index` and `bat_sb_index` ([MS-VHDX] 2.5), sizes the BAT from the
+payload-block count plus the sector-bitmap-entry count, indexes payload entries
+through the interleaving map, and requires every sector-bitmap entry to be
+`SB_BLOCK_NOT_PRESENT` (0) with a zero offset - fixed VHDX must not allocate
+sector-bitmap blocks. Duplicate nonzero payload offsets are now rejected.
+
+**Tests.** `tests/test_f2_s8_stage1.py` gains a `TestBatInterleaving` class (chunk
+ratio formula, payload index interleaving, sector-bitmap index across full and
+partial chunks, small-disk no-op). **61 passed**; `ruff --select E9,F` clean. The
+supplementary real scratch VHDX still round-trips.
+
+**Limitation.** Live guest-written-disk evidence remains **NOT ESTABLISHED**;
+synthetic fixtures only. No VM started, no disk attached or mounted.

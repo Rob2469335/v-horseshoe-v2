@@ -39,7 +39,8 @@ from typing import Any
 
 from qwen_train.f2_s8_record import HEADER_SIZE, MAGIC, MAX_PAYLOAD, RecordError, decode_record
 
-__all__ = ["VhdxError", "VhdxInfo", "inspect_vhdx", "read_record_from_vhdx", "crc32c"]
+__all__ = ["VhdxError", "VhdxInfo", "inspect_vhdx", "read_record_from_vhdx", "crc32c",
+           "chunk_ratio_for", "bat_payload_index", "bat_sb_index"]
 
 HEADER_OFFSETS = (64 * 1024, 128 * 1024)
 REGION_TABLE_OFFSETS = (192 * 1024, 256 * 1024)
@@ -47,6 +48,9 @@ HEADER_SECTION_END = 192 * 1024
 REGION_TABLE_END = 320 * 1024
 MB = 1024 * 1024
 PAYLOAD_BLOCK_FULLY_PRESENT = 6
+SB_BLOCK_NOT_PRESENT = 0
+SB_BLOCK_PRESENT = 6
+CHUNK_BASE = 1 << 23  # [MS-VHDX] 2.5: chunk ratio uses 2^23 * logical sector size
 MAX_BLOCKS = 1 << 16  # bound on BAT entries we will inspect
 
 # On-disk GUID byte order (Data1/2/3 little-endian, Data4 big-endian).
@@ -63,6 +67,29 @@ REQUIRED_FLAG = 0x1
 
 class VhdxError(ValueError):
     """The VHDX container is malformed, unsupported, or fails an invariant."""
+
+
+def chunk_ratio_for(block_size: int, logical_sector_size: int) -> int:
+    """[MS-VHDX] 2.5: ChunkRatio = (2^23 * LogicalSectorSize) / BlockSize."""
+    span = CHUNK_BASE * logical_sector_size
+    if span % block_size != 0:
+        raise VhdxError("chunk ratio is not an integer for this geometry")
+    ratio = span // block_size
+    if ratio < 1:
+        raise VhdxError(f"invalid chunk ratio {ratio}")
+    return ratio
+
+
+def bat_payload_index(block: int, chunk_ratio: int) -> int:
+    """BAT index of payload block ``block`` (payload/SB entries are interleaved)."""
+    chunk, within = divmod(block, chunk_ratio)
+    return chunk * (chunk_ratio + 1) + within
+
+
+def bat_sb_index(chunk: int, chunk_ratio: int, block_count: int) -> int:
+    """BAT index of the sector-bitmap entry that follows payload ``chunk``."""
+    payloads_in_chunk = min(chunk_ratio, block_count - chunk * chunk_ratio)
+    return chunk * (chunk_ratio + 1) + payloads_in_chunk
 
 
 def crc32c(data: bytes) -> int:
@@ -316,35 +343,69 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
         if logical_sector > physical_sector:
             raise VhdxError("logical sector size exceeds physical sector size")
 
-        # --- BAT sizing against the required block count ---
+        # --- BAT geometry: payload and sector-bitmap entries are INTERLEAVED ---
+        # [MS-VHDX] 2.5: ChunkRatio = (2^23 * LogicalSectorSize) / BlockSize.  A
+        # chunk holds ChunkRatio payload entries followed by ONE sector-bitmap
+        # entry, so payload block i is NOT at BAT index i.  Fixed VHDX never
+        # allocates sector-bitmap blocks, so every SB entry MUST be
+        # SB_BLOCK_NOT_PRESENT (0).
         block_count = virtual_disk_size // block_size
         if not 1 <= block_count <= MAX_BLOCKS:
             raise VhdxError(f"implausible block count {block_count}")
-        required_bat_bytes = block_count * 8
+        chunk_ratio = chunk_ratio_for(block_size, logical_sector)
+        num_chunks = (block_count + chunk_ratio - 1) // chunk_ratio
+        total_entries = block_count + num_chunks
+        required_bat_bytes = total_entries * 8
         if bat["length"] < required_bat_bytes:
             raise VhdxError(f"BAT region too small ({bat['length']} < {required_bat_bytes})")
         bat_entries = _read_exact(fh, bat["offset"], required_bat_bytes, file_size, "BAT entries")
 
+        def payload_index(block: int) -> int:
+            return bat_payload_index(block, chunk_ratio)
+
+        def sb_index(chunk: int) -> int:
+            return bat_sb_index(chunk, chunk_ratio, block_count)
+
         structural = _structural_ranges(entries, log_offset, log_length)
         payload_offset = None
         bat0 = 0
+        seen_offsets: set[int] = set()
         for i in range(block_count):
-            (entry,) = struct.unpack_from("<Q", bat_entries, i * 8)
+            idx = payload_index(i)
+            (entry,) = struct.unpack_from("<Q", bat_entries, idx * 8)
             state = entry & 0x7
             if (entry >> 3) & 0x1FFFF:
-                raise VhdxError(f"BAT entry {i} has non-zero reserved bits")
+                raise VhdxError(f"BAT payload entry {i} (index {idx}) has non-zero reserved bits")
             if state != PAYLOAD_BLOCK_FULLY_PRESENT:
-                raise VhdxError(f"BAT entry {i} state {state} is not FULLY_PRESENT (fixed disk must allocate all blocks)")
+                raise VhdxError(
+                    f"BAT payload entry {i} state {state} is not FULLY_PRESENT "
+                    "(a fixed disk must allocate every block)"
+                )
             block_off = (entry >> 20) * MB
+            if block_off in seen_offsets:
+                raise VhdxError(f"BAT payload entry {i} aliases an earlier block offset")
+            seen_offsets.add(block_off)
             if block_off + block_size > file_size:
-                raise VhdxError(f"BAT entry {i} block extends beyond the file")
+                raise VhdxError(f"BAT payload entry {i} block extends beyond the file")
             if block_off < REGION_TABLE_END:
-                raise VhdxError(f"BAT entry {i} block overlaps the header/region-table section")
+                raise VhdxError(f"BAT payload entry {i} block overlaps the header/region-table section")
             for r0, r1 in structural:
                 if block_off < r1 and r0 < block_off + block_size:
-                    raise VhdxError(f"BAT entry {i} block overlaps a structural region [{r0},{r1})")
+                    raise VhdxError(f"BAT payload entry {i} block overlaps a structural region [{r0},{r1})")
             if i == 0:
                 bat0, payload_offset = entry, block_off
+        for chunk in range(num_chunks):
+            idx = sb_index(chunk)
+            (entry,) = struct.unpack_from("<Q", bat_entries, idx * 8)
+            if (entry >> 3) & 0x1FFFF:
+                raise VhdxError(f"sector-bitmap entry {idx} has non-zero reserved bits")
+            if (entry & 0x7) != SB_BLOCK_NOT_PRESENT:
+                raise VhdxError(
+                    f"sector-bitmap entry {idx} state {entry & 0x7} is not NOT_PRESENT "
+                    "(fixed VHDX must not allocate sector-bitmap blocks)"
+                )
+            if entry != 0:
+                raise VhdxError(f"sector-bitmap entry {idx} carries a nonzero offset")
 
         # virtual disk size must be addressable by the located blocks
         if payload_offset + block_size > file_size:
