@@ -1116,3 +1116,45 @@ admitted population are all still outstanding.
 **Scratch results (PROVEN, scratch-only).** Route A/B: `Mount-VHD -ReadOnly -NoDriveLetter` on a scratch GPT+NTFS disk still let Windows fully recognise and parse it (Get-Disk PartitionStyle=GPT, Get-Partition Basic, Get-Volume F2S8/NTFS); `-NoDriveLetter` suppresses the letter, not filesystem recognition. A raw no-partition disk showed PartitionStyle=RAW with no volume. Route B2: a fixed scratch VHDX's record at the validated payload offset 4194304 was written by a host-side file write (no attachment) and read back byte-for-byte, digest verified. Defect found from scratch evidence and fixed against [MS-VHDX]: New-VHD -Fixed uses a 2 MiB block size, and BAT state is bits 0-2 with FULLY_PRESENT = 6.
 
 **Label: READER MECHANICS ONLY; A HOSTILE GUEST-WRITTEN DISK IS NOT TESTED.** No live isolation, S8 evidence, or F2 readiness is claimed. Route C (serial/named pipe) was NOT implemented and remains REQUIRES SEPARATE EXPLICIT AUTHORIZATION. The VM was not started or reconfigured.
+
+---
+
+## 2026-10-09 - F2 S8 VHDX reader hardening (post-audit repair, Stage 1)
+
+**Trigger.** The post-Run-1 adversarial audit of `46834d67` returned **FAIL**: the
+reader accepted a payload offset on a mere low bound, did not verify the region-table
+CRC, and selected the header without the specification's sequence-number rule. This
+entry records the corrective repair (commit follows) without rewriting the earlier
+Run 1 entry.
+
+**Verified against [MS-VHDX] and corrected.** (a) The region-table copies live at
+**fixed** offsets 192 KiB and 256 KiB - the earlier audit's "read RegionTableOffset
+from the header" lead was **wrong** and was not implemented; both fixed copies are
+now validated and the valid one used. (b) The header `SequenceNumber` (offset 8) now
+selects the current header (higher sequence wins), both copies are validated
+independently, and the log range is checked. (c) The region table's CRC-32C over the
+64 KiB copy is now verified (checksum field zeroed for the computation); entry
+count/reserved, GUID uniqueness, unknown-required rejection, 1 MiB alignment, in-file
+bounds, and region overlap are enforced. (d) Metadata items are now bounded by the
+metadata region (not the file), the table must fit the region, items must not overlap
+or duplicate, and required item lengths/reserved bits are validated before unpacking.
+(e) File Parameters reserved bits, sector sizes, virtual-disk size, and the required
+BAT mapping (every block of a fixed disk must be FULLY_PRESENT) are validated.
+(f) **The payload block must not overlap the header section, region tables, the log,
+the metadata region, or the BAT** - the previous ">= 256 KiB" check accepted a BAT
+entry pointing into metadata or the BAT itself; that is now rejected. (g) The module
+docstring was corrected (it had contradicted the code on BAT bit fields, state value,
+block-size range, and supported layout).
+
+**Tests.** `tests/test_f2_s8_stage1.py` was rebuilt around a self-contained synthetic
+fixed-VHDX fixture builder (no disk is ever attached/mounted): valid round-trip,
+header selection/recovery, region-table CRC + recovery + overlap/duplicate/unknown/
+alignment, metadata bounds/duplicates/lengths, BAT state/reserved/geometry, payload
+inside metadata, payload inside BAT, payload beyond file, dynamic/differencing
+refusal, record block-boundary, a behavioral "opened read-only" guard, and the
+supplementary real scratch VHDX. **57 passed**; `ruff --select E9,F` clean.
+
+**Evidence boundary.** Code proof + synthetic-fixture proof only.
+**READER MECHANICS ONLY; A HOSTILE GUEST-WRITTEN DISK IS NOT TESTED.** No production
+integration, live isolation, S8 evidence, or F2 readiness is established. No VM was
+started; no disk was attached or mounted; Run 2 did not begin.

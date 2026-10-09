@@ -1,31 +1,34 @@
 """Direct, unattached reader for a FIXED VHDX containing one bounded record.
 
-Stage 1 / Run 1.  This is the leading candidate ("Route B2") for recovering a
-guest-written result without ever attaching the virtual disk and without letting
-Windows recognise, mount, or parse any guest filesystem.
+Stage 1 / Run 1, hardened after the post-Run-1 adversarial audit (F1-F9).
 
-Design basis: Microsoft [MS-VHDX] "Virtual Hard Disk (VHDX) File Format".
-  * 2.1 File Identifier ("vhdxfile" at file offset 0)
-  * 2.2 Header (signature "head"; CRC32C over the 4 KiB header block)
-  * 2.3 Region Table (signature "regi"; BAT + Metadata region GUIDs)
-  * 2.4 Metadata Region (signature "metadata"; File Parameters / Virtual Disk
-        Size / Logical + Physical Sector Size entries)
-  * 2.5 BAT / payload blocks (uint64 entry; bits 0..19 = offset in MiB,
-        bit 63 = state, 1 = PAYLOAD_BLOCK_FULLY_PRESENT)
-  * 2.7 Fixed VHDX (BlockSize = 1 MiB, LeaveBlocksAllocated = 1, HasParent = 0)
+Design basis: Microsoft [MS-VHDX] "Virtual Hard Disk (VHDX) File Format":
+  * 2.1 Layout - the two region-table copies live at FIXED offsets 192 KiB and
+        256 KiB; the header section occupies [0, 192 KiB).
+  * 2.2.2 Headers - two copies at 64 KiB and 128 KiB; each has Signature
+        "head", a CRC-32C Checksum over the 4 KiB block, and a SequenceNumber.
+        The current header is the valid copy with the higher sequence number.
+  * 2.2.3.1/2.2.3.2 Region Table - Signature "regi", a CRC-32C Checksum over the
+        64 KiB copy (computed with the checksum field zeroed), EntryCount, and
+        32-byte entries {Guid, FileOffset (1 MiB units), Length (1 MiB units),
+        Required}.
+  * 2.6 Metadata Region - Signature "metadata"; 32-byte entries {ItemId,
+        Offset, Length, IsUser, Reserved}; item offsets/lengths are relative to
+        the region start and MUST lie inside it.
+  * 2.6.2.1 File Parameters - BlockSize (uint32) + Flags (uint32); bit 0 =
+        LeaveBlocksAllocated, bit 1 = HasParent; other bits reserved (0).
+  * 2.6.2.2 Virtual Disk Size - uint64.
+  * 2.5.1 BAT Entry - bits 0-2 State (PAYLOAD_BLOCK_FULLY_PRESENT = 6),
+        bits 3-19 Reserved (MUST be 0), bits 20-63 FileOffsetMB (1 MiB units).
 
-What this reader does NOT do
-----------------------------
-* It never attaches the VHDX, never mounts it, and never asks Windows to parse
-  its payload as a filesystem.
-* It parses only container metadata plus one bounded record.
-* It does NOT prove a hostile guest-written disk is safe.  Record integrity is
-  not container/guest safety.  A guest with write access controls the payload
-  bytes and *can* alter container metadata; every field read here is bounds- and
-  invariant-checked, but the file is still untrusted input.
+Supported: FIXED VHDX only.  Dynamic and differencing VHDX are refused.  The
+reader parses only container metadata plus one bounded record; it never attaches
+or mounts the disk and never asks Windows to parse its payload as a filesystem.
 
-Supported: FIXED VHDX only, BlockSize 1 MiB, record at the first payload block.
-Dynamic and differencing VHDX are refused.
+SAFETY LIMITATION: **READER MECHANICS ONLY; A HOSTILE GUEST-WRITTEN DISK IS NOT
+TESTED.**  A valid record digest proves the *record bytes* match their hash.  It
+does NOT prove the container, the guest, or the evidence source is trustworthy,
+and it is not container authenticity or scientific provenance.
 """
 from __future__ import annotations
 
@@ -39,17 +42,23 @@ from qwen_train.f2_s8_record import HEADER_SIZE, MAGIC, MAX_PAYLOAD, RecordError
 __all__ = ["VhdxError", "VhdxInfo", "inspect_vhdx", "read_record_from_vhdx", "crc32c"]
 
 HEADER_OFFSETS = (64 * 1024, 128 * 1024)
-REGION_TABLE_OFFSET = 192 * 1024
+REGION_TABLE_OFFSETS = (192 * 1024, 256 * 1024)
+HEADER_SECTION_END = 192 * 1024
+REGION_TABLE_END = 320 * 1024
 MB = 1024 * 1024
 PAYLOAD_BLOCK_FULLY_PRESENT = 6
+MAX_BLOCKS = 1 << 16  # bound on BAT entries we will inspect
 
-# On-disk GUID byte order (Data1/2/3 little-endian, Data4 big-endian), per [MS-VHDX] 2.3/2.4.
-GUID_BAT = bytes.fromhex("6677c22d23f600429d64115e9bfd4a08")            # {2DC27766-F623-4200-9D64-115E9BFD4A08}
-GUID_METADATA = bytes.fromhex("06a27c8b90479a4bb8fe575f050f886e")       # {8B7CA206-4790-4B9A-B8FE-575F050F886E}
-GUID_FILE_PARAMETERS = bytes.fromhex("3767a1ca36fa434db3b633f0aa44e76b")  # {CAA16737-FA36-4D43-B3B6-33F0AA44E76B}
-GUID_VIRTUAL_DISK_SIZE = bytes.fromhex("2442a52f1bcd7648b2115dbed83bf4b8")  # {2FA54224-CD1B-4876-B211-5DBED83BF4B8}
-GUID_LOGICAL_SECTOR = bytes.fromhex("1dbf41816fa90947ba47f233a8faab5f")   # {8141BF1D-A96F-4709-BA47-F233A8FAAB5F}
-GUID_PHYSICAL_SECTOR = bytes.fromhex("c748a3cd5d4471449cc9e9885251c556")  # {CDA348C7-445D-4471-9CC9-E9885251C556}
+# On-disk GUID byte order (Data1/2/3 little-endian, Data4 big-endian).
+GUID_BAT = bytes.fromhex("6677c22d23f600429d64115e9bfd4a08")
+GUID_METADATA = bytes.fromhex("06a27c8b90479a4bb8fe575f050f886e")
+GUID_FILE_PARAMETERS = bytes.fromhex("3767a1ca36fa434db3b633f0aa44e76b")
+GUID_VIRTUAL_DISK_SIZE = bytes.fromhex("2442a52f1bcd7648b2115dbed83bf4b8")
+GUID_LOGICAL_SECTOR = bytes.fromhex("1dbf41816fa90947ba47f233a8faab5f")
+GUID_PHYSICAL_SECTOR = bytes.fromhex("c748a3cd5d4471449cc9e9885251c556")
+GUID_KNOWN = {GUID_BAT, GUID_METADATA, GUID_FILE_PARAMETERS, GUID_VIRTUAL_DISK_SIZE,
+              GUID_LOGICAL_SECTOR, GUID_PHYSICAL_SECTOR}
+REQUIRED_FLAG = 0x1
 
 
 class VhdxError(ValueError):
@@ -76,9 +85,14 @@ class VhdxInfo:
     logical_sector_size: int
     physical_sector_size: int
     bat_offset: int
+    bat_length: int
     bat_entry0: int
     payload_offset: int
+    payload_block_size: int
     file_size: int
+    header_offset: int
+    sequence_number: int
+    region_table_offset: int
     layout: str = "fixed"
 
     def to_dict(self) -> dict[str, Any]:
@@ -91,13 +105,15 @@ class VhdxInfo:
             "logical_sector_size": self.logical_sector_size,
             "physical_sector_size": self.physical_sector_size,
             "bat_offset": self.bat_offset,
+            "bat_length": self.bat_length,
             "bat_entry0": self.bat_entry0,
             "payload_offset": self.payload_offset,
+            "payload_block_size": self.payload_block_size,
             "file_size": self.file_size,
+            "header_offset": self.header_offset,
+            "sequence_number": self.sequence_number,
+            "region_table_offset": self.region_table_offset,
         }
-
-
-
 
 
 def _read_exact(fh, offset: int, size: int, file_size: int, what: str) -> bytes:
@@ -110,111 +126,229 @@ def _read_exact(fh, offset: int, size: int, file_size: int, what: str) -> bytes:
     return data
 
 
+def _unpack(fmt: str, blob: bytes, what: str):
+    try:
+        return struct.unpack_from(fmt, blob, 0)
+    except struct.error as exc:
+        raise VhdxError(f"{what}: truncated structure ({exc})") from exc
+
+
+def _parse_header(raw: bytes, file_size: int, off: int):
+    """Return (sequence_number) for a valid header block, else None."""
+    if len(raw) != 4096 or raw[:4] != b"head":
+        return None
+    declared = struct.unpack_from("<I", raw, 4)[0]
+    body = bytearray(raw)
+    body[4:8] = b"\x00\x00\x00\x00"
+    if crc32c(bytes(body)) != declared:
+        return None
+    (seq,) = struct.unpack_from("<Q", raw, 8)
+    return seq
+
+
+def _parse_region_table(raw: bytes, file_size: int, off: int):
+    """Validate a 64 KiB region-table copy; return its entries or None."""
+    if len(raw) != 64 * 1024 or raw[:4] != b"regi":
+        return None
+    declared = struct.unpack_from("<I", raw, 4)[0]
+    body = bytearray(raw)
+    body[4:8] = b"\x00\x00\x00\x00"
+    if crc32c(bytes(body)) != declared:
+        return None
+    (entry_count,) = struct.unpack_from("<I", raw, 8)
+    if not 1 <= entry_count <= 2047:
+        raise VhdxError(f"implausible region entry count {entry_count}")
+    entries = []
+    for i in range(entry_count):
+        base = 16 + i * 32
+        guid = bytes(raw[base:base + 16])
+        (file_offset, length, required) = struct.unpack_from("<QII", raw, base + 16)
+        if length == 0:
+            continue
+        if file_offset % MB != 0 or length % MB != 0:
+            raise VhdxError(f"region {i}: offset/length not 1 MiB aligned")
+        if file_offset + length > file_size:
+            raise VhdxError(f"region {i}: exceeds file size")
+        entries.append({"guid": guid, "offset": file_offset, "length": length,
+                        "required": bool(required & REQUIRED_FLAG), "index": i})
+    return entries
+
+
+def _check_regions(entries, file_size: int):
+    seen = set()
+    for e in entries:
+        if e["guid"] in seen:
+            raise VhdxError(f"duplicate region GUID at index {e['index']}")
+        seen.add(e["guid"])
+        if e["required"] and e["guid"] not in GUID_KNOWN:
+            raise VhdxError(f"unknown REQUIRED region at index {e['index']}")
+    # overlaps between declared regions
+    ordered = sorted(entries, key=lambda e: e["offset"])
+    for a, b in zip(ordered, ordered[1:]):
+        if a["offset"] + a["length"] > b["offset"]:
+            raise VhdxError(f"regions overlap: {a['index']} and {b['index']}")
+
+
+def _structural_ranges(entries, log_offset: int, log_length: int):
+    ranges = [(0, HEADER_SECTION_END), (HEADER_SECTION_END, REGION_TABLE_END)]
+    for e in entries:
+        ranges.append((e["offset"], e["offset"] + e["length"]))
+    if log_length:
+        ranges.append((log_offset, log_offset + log_length))
+    return ranges
+
+
 def inspect_vhdx(path: Path) -> VhdxInfo:
-    """Parse the minimum container metadata and compute the payload offset."""
+    """Validate the container structure and compute the payload block location."""
     path = Path(path)
     file_size = path.stat().st_size
-    if file_size < REGION_TABLE_OFFSET + 64 * 1024:
+    if file_size < REGION_TABLE_END:
         raise VhdxError(f"file too small to be a VHDX: {file_size}")
 
     with path.open("rb") as fh:
-        ident = _read_exact(fh, 0, 8, file_size, "file identifier")
-        if ident != b"vhdxfile":
+        if _read_exact(fh, 0, 8, file_size, "file identifier") != b"vhdxfile":
             raise VhdxError("bad file identifier (expected 'vhdxfile')")
 
-        # --- Header (validate the first usable header: signature + CRC32C) ---
-        header = None
+        # --- Headers: validate both copies, select the current one by sequence ---
+        valid = []
         for off in HEADER_OFFSETS:
-            raw = bytearray(_read_exact(fh, off, 4096, file_size, f"header@{off}"))
-            if raw[:4] != b"head":
-                continue
-            declared = struct.unpack_from("<I", raw, 4)[0]
-            raw[4:8] = b"\x00\x00\x00\x00"
-            if crc32c(bytes(raw)) != declared:
-                continue
-            header = off
-            break
-        if header is None:
+            seq = _parse_header(_read_exact(fh, off, 4096, file_size, f"header@{off}"), file_size, off)
+            if seq is not None:
+                valid.append((seq, off))
+        if not valid:
             raise VhdxError("no valid VHDX header found (signature/checksum)")
+        seq, header_offset = max(valid, key=lambda t: (t[0], -t[1]))
+        header = _read_exact(fh, header_offset, 4096, file_size, "current header")
+        (log_version,) = struct.unpack_from("<H", header, 64)
+        (log_length,) = struct.unpack_from("<I", header, 68)
+        (log_offset,) = struct.unpack_from("<Q", header, 72)
+        if log_length:
+            if log_length % MB != 0 or log_offset + log_length > file_size:
+                raise VhdxError("invalid log region in header")
 
-        # --- Region table ---
-        regi = _read_exact(fh, REGION_TABLE_OFFSET, 64, file_size, "region table header")
-        if regi[:4] != b"regi":
-            raise VhdxError("bad region table signature")
-        entry_count = struct.unpack_from("<I", regi, 8)[0]
-        if not 1 <= entry_count <= 2047:
-            raise VhdxError(f"implausible region entry count {entry_count}")
-        entries = _read_exact(fh, REGION_TABLE_OFFSET + 16, entry_count * 32, file_size, "region entries")
-        bat_offset = metadata_offset = None
-        for i in range(entry_count):
-            guid = entries[i * 32 : i * 32 + 16]
-            file_offset, length, _required = struct.unpack_from("<QII", entries, i * 32 + 16)
-            if length == 0:
-                continue
-            if file_offset + length > file_size:
-                raise VhdxError(f"region {i} exceeds file size")
-            if guid == GUID_BAT:
-                bat_offset = file_offset
-            elif guid == GUID_METADATA:
-                metadata_offset = file_offset
-        if bat_offset is None or metadata_offset is None:
+        # --- Region table: two fixed copies; use the valid one ---
+        entries = None
+        region_table_offset = None
+        for off in REGION_TABLE_OFFSETS:
+            candidate = _parse_region_table(
+                _read_exact(fh, off, 64 * 1024, file_size, f"region table@{off}"), file_size, off
+            )
+            if candidate is not None:
+                entries, region_table_offset = candidate, off
+                break
+        if entries is None:
+            raise VhdxError("no valid region table found (signature/checksum)")
+        _check_regions(entries, file_size)
+
+        bat = next((e for e in entries if e["guid"] == GUID_BAT), None)
+        metadata = next((e for e in entries if e["guid"] == GUID_METADATA), None)
+        if bat is None or metadata is None:
             raise VhdxError("BAT or metadata region missing")
+        if not bat["required"] or not metadata["required"]:
+            raise VhdxError("BAT/metadata region not marked required")
 
         # --- Metadata region ---
-        meta_hdr = _read_exact(fh, metadata_offset, 32, file_size, "metadata header")
+        meta_hdr = _read_exact(fh, metadata["offset"], 32, file_size, "metadata header")
         if meta_hdr[:8] != b"metadata":
             raise VhdxError("bad metadata signature")
-        meta_count = struct.unpack_from("<H", meta_hdr, 10)[0]
+        (meta_count,) = _unpack("<H", meta_hdr[10:12], "metadata entry count")
         if not 1 <= meta_count <= 2047:
             raise VhdxError(f"implausible metadata entry count {meta_count}")
-        meta_entries = _read_exact(fh, metadata_offset + 32, meta_count * 32, file_size, "metadata entries")
-        fields: dict[str, bytes] = {}
+        if 32 + meta_count * 32 > metadata["length"]:
+            raise VhdxError("metadata table does not fit in the metadata region")
+        meta_entries = _read_exact(fh, metadata["offset"] + 32, meta_count * 32, file_size, "metadata entries")
+        fields: dict[bytes, bytes] = {}
+        spans = []
         for i in range(meta_count):
-            guid = meta_entries[i * 32 : i * 32 + 16]
-            item_offset, item_length = struct.unpack_from("<II", meta_entries, i * 32 + 16)
-            if item_length == 0 or item_length > 1 * MB:
-                raise VhdxError(f"implausible metadata item length {item_length}")
-            blob = _read_exact(fh, metadata_offset + item_offset, item_length, file_size, "metadata item")
-            for name, kg in (
-                ("file_parameters", GUID_FILE_PARAMETERS),
-                ("virtual_disk_size", GUID_VIRTUAL_DISK_SIZE),
-                ("logical_sector", GUID_LOGICAL_SECTOR),
-                ("physical_sector", GUID_PHYSICAL_SECTOR),
-            ):
-                if guid == kg:
-                    fields[name] = blob
+            base = i * 32
+            guid = bytes(meta_entries[base:base + 16])
+            (item_offset, item_length) = struct.unpack_from("<II", meta_entries, base + 16)
+            if item_length == 0:
+                continue
+            if item_length > 1 * MB:
+                raise VhdxError(f"metadata item {i} length {item_length} too large")
+            if item_offset < 32 + meta_count * 32:
+                raise VhdxError(f"metadata item {i} overlaps the table")
+            if item_offset + item_length > metadata["length"]:
+                raise VhdxError(f"metadata item {i} extends past the metadata region")
+            spans.append((item_offset, item_offset + item_length, i))
+            if guid in fields:
+                raise VhdxError(f"duplicate metadata item id at index {i}")
+            fields[guid] = _read_exact(
+                fh, metadata["offset"] + item_offset, item_length, file_size, f"metadata item {i}"
+            )
+        spans.sort()
+        for a, b in zip(spans, spans[1:]):
+            if a[1] > b[0]:
+                raise VhdxError(f"metadata items overlap: {a[2]} and {b[2]}")
 
-        if "file_parameters" not in fields:
-            raise VhdxError("File Parameters metadata entry missing")
-        block_size, flags = struct.unpack_from("<II", fields["file_parameters"], 0)
+        # --- File Parameters / geometry ---
+        if GUID_FILE_PARAMETERS not in fields or len(fields[GUID_FILE_PARAMETERS]) != 8:
+            raise VhdxError("File Parameters missing or wrong length (expected 8 bytes)")
+        block_size, flags = struct.unpack_from("<II", fields[GUID_FILE_PARAMETERS], 0)
+        if flags & ~0b11:
+            raise VhdxError(f"File Parameters reserved bits set: {flags:#x}")
         leave_blocks_allocated = bool(flags & 0b1)
         has_parent = bool(flags & 0b10)
         if has_parent:
             raise VhdxError("differencing VHDX (HasParent) is not supported")
         if not leave_blocks_allocated:
             raise VhdxError("dynamic VHDX (LeaveBlocksAllocated=0) is not supported")
-        if block_size is None or block_size & (block_size - 1) != 0 or not (1 * MB <= block_size <= 256 * MB):
-            raise VhdxError(f"invalid block size {block_size} (must be a power of two in [1MiB, 256MiB])")
-        virtual_disk_size = struct.unpack_from("<Q", fields["virtual_disk_size"], 0)[0] if "virtual_disk_size" in fields else 0
-        logical_sector = struct.unpack_from("<I", fields["logical_sector"], 0)[0] if "logical_sector" in fields else 0
-        physical_sector = struct.unpack_from("<I", fields["physical_sector"], 0)[0] if "physical_sector" in fields else 0
+        if block_size & (block_size - 1) != 0 or not (1 * MB <= block_size <= 256 * MB):
+            raise VhdxError(f"invalid block size {block_size}")
 
-        # --- BAT entry 0 -> payload block 0 file offset ([MS-VHDX] 2.5.1) ---
-        #   bits 0-2   : State (3 bits); PAYLOAD_BLOCK_FULLY_PRESENT == 6
-        #   bits 3-19  : Reserved, MUST be 0
-        #   bits 20-63 : FileOffsetMB (44 bits), offset in units of 1 MiB
-        bat0_raw = _read_exact(fh, bat_offset, 8, file_size, "BAT entry 0")
-        bat0 = struct.unpack("<Q", bat0_raw)[0]
-        state = bat0 & 0x7
-        if (bat0 >> 3) & 0x1FFFF:
-            raise VhdxError("BAT entry 0 has non-zero reserved bits")
-        if state != PAYLOAD_BLOCK_FULLY_PRESENT:
-            raise VhdxError(f"BAT entry 0 state {state} is not PAYLOAD_BLOCK_FULLY_PRESENT (6)")
-        payload_offset = (bat0 >> 20) * MB
-        if payload_offset < REGION_TABLE_OFFSET + 64 * 1024:
-            raise VhdxError(f"implausible payload offset {payload_offset}")
-        if payload_offset + HEADER_SIZE > file_size:
-            raise VhdxError("payload offset beyond end of file")
+        if GUID_VIRTUAL_DISK_SIZE not in fields or len(fields[GUID_VIRTUAL_DISK_SIZE]) != 8:
+            raise VhdxError("Virtual Disk Size missing or wrong length")
+        (virtual_disk_size,) = struct.unpack_from("<Q", fields[GUID_VIRTUAL_DISK_SIZE], 0)
+        if virtual_disk_size <= 0 or virtual_disk_size % MB != 0:
+            raise VhdxError(f"invalid virtual disk size {virtual_disk_size}")
+
+        def _sector(guid, name):
+            if guid not in fields or len(fields[guid]) != 4:
+                raise VhdxError(f"{name} missing or wrong length")
+            (v,) = struct.unpack_from("<I", fields[guid], 0)
+            if v not in (512, 4096):
+                raise VhdxError(f"unsupported {name} {v}")
+            return v
+
+        logical_sector = _sector(GUID_LOGICAL_SECTOR, "logical sector size")
+        physical_sector = _sector(GUID_PHYSICAL_SECTOR, "physical sector size")
+        if logical_sector > physical_sector:
+            raise VhdxError("logical sector size exceeds physical sector size")
+
+        # --- BAT sizing against the required block count ---
+        block_count = virtual_disk_size // block_size
+        if not 1 <= block_count <= MAX_BLOCKS:
+            raise VhdxError(f"implausible block count {block_count}")
+        required_bat_bytes = block_count * 8
+        if bat["length"] < required_bat_bytes:
+            raise VhdxError(f"BAT region too small ({bat['length']} < {required_bat_bytes})")
+        bat_entries = _read_exact(fh, bat["offset"], required_bat_bytes, file_size, "BAT entries")
+
+        structural = _structural_ranges(entries, log_offset, log_length)
+        payload_offset = None
+        bat0 = 0
+        for i in range(block_count):
+            (entry,) = struct.unpack_from("<Q", bat_entries, i * 8)
+            state = entry & 0x7
+            if (entry >> 3) & 0x1FFFF:
+                raise VhdxError(f"BAT entry {i} has non-zero reserved bits")
+            if state != PAYLOAD_BLOCK_FULLY_PRESENT:
+                raise VhdxError(f"BAT entry {i} state {state} is not FULLY_PRESENT (fixed disk must allocate all blocks)")
+            block_off = (entry >> 20) * MB
+            if block_off + block_size > file_size:
+                raise VhdxError(f"BAT entry {i} block extends beyond the file")
+            if block_off < REGION_TABLE_END:
+                raise VhdxError(f"BAT entry {i} block overlaps the header/region-table section")
+            for r0, r1 in structural:
+                if block_off < r1 and r0 < block_off + block_size:
+                    raise VhdxError(f"BAT entry {i} block overlaps a structural region [{r0},{r1})")
+            if i == 0:
+                bat0, payload_offset = entry, block_off
+
+        # virtual disk size must be addressable by the located blocks
+        if payload_offset + block_size > file_size:
+            raise VhdxError("payload block extends beyond the file")
 
     return VhdxInfo(
         block_size=block_size,
@@ -223,19 +357,20 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
         virtual_disk_size=virtual_disk_size,
         logical_sector_size=logical_sector,
         physical_sector_size=physical_sector,
-        bat_offset=bat_offset,
+        bat_offset=bat["offset"],
+        bat_length=bat["length"],
         bat_entry0=bat0,
         payload_offset=payload_offset,
+        payload_block_size=block_size,
         file_size=file_size,
+        header_offset=header_offset,
+        sequence_number=seq,
+        region_table_offset=region_table_offset,
     )
 
 
 def read_record_from_vhdx(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Validate the container, read one bounded record, and return ``(payload, observed)``.
-
-    ``observed`` includes the container fields used and the exact byte range read,
-    so the caller can record precisely what was accessed.
-    """
+    """Validate the container, read one bounded record, and return ``(payload, observed)``."""
     info = inspect_vhdx(path)
     file_size = info.file_size
     with Path(path).open("rb") as fh:
@@ -246,8 +381,8 @@ def read_record_from_vhdx(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         if payload_len > MAX_PAYLOAD:
             raise VhdxError(f"record declares oversized payload {payload_len}")
         total = HEADER_SIZE + payload_len
-        if total > info.block_size:
-            raise VhdxError(f"record ({total} bytes) does not fit in one {info.block_size}-byte block")
+        if total > info.payload_block_size:
+            raise VhdxError(f"record ({total} bytes) does not fit in one {info.payload_block_size}-byte block")
         if info.payload_offset + total > file_size:
             raise VhdxError("record extends beyond end of file")
         blob = _read_exact(fh, info.payload_offset, total, file_size, "record")
