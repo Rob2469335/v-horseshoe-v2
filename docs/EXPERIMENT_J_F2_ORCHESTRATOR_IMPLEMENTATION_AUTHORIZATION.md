@@ -2129,8 +2129,9 @@ Data (gitignored): `data/f2_population/upstream_swe_bench_live_b51a8642/`
 (`acquired.jsonl`, `PROVENANCE.json`, `raw/*.parquet`, `census.json`,
 `rejections.json`).
 
-**Verification.** `pytest tests/ -k f2` (**1570 passed, 4 skipped** after this
-entry's fixes). The three recovery-critical files pass with
+**Verification.** `pytest tests/ -k f2` (**1572 passed, 4 skipped** measured at this
+commit; corrects the previously recorded "1570". See F2-IMPL-AUTH-030 for the
+reconciliation.) The three recovery-critical files pass with
 `pytest tests/test_f2_population.py tests/test_f2_readiness.py tests/test_f2_population_recovery.py`
 (136). Independent re-derivation: the census is reproducible from
 `acquired.jsonl` alone via
@@ -2142,3 +2143,71 @@ or read `SWARM_RECEIPT_KEY`, change the served model identity, admit any task pa
 S8, lower or raise the 300 threshold, or alter F0/F1/`k`/`n`/alpha/delta/pi_d/the
 endpoint. `admitted = 0` and `swarm_receipt_key` remains unprovisioned; F2 is NOT
 ready.
+
+### F2-IMPL-AUTH-030 - Bind the population readiness item to a verified manifest artifact
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-09
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-09
+(population-readiness evidence-binding task), entered by the agent. Records no new
+science and changes no frozen element.
+
+**Defect (`PROVEN`).** `qwen_train/f2_readiness._check_population` accepted a
+caller-supplied **mapping** and satisfied the prerequisite from two declared values
+alone -- an integer `admitted` and a `contamination_policy` declaring a cutoff.
+There was **no binding to any population artifact and no integrity check**, so
+`{"population": {"admitted": 300, "contamination_policy": {"declared": true,
+"cutoff": "2024-01-01"}}}` passed the gate for a population that was never screened.
+The two sibling items in the same module already refuse this shape: `_check_manifest`
+verifies a real artifact via `runtime_v2.services.f2_freeze.verify_manifest`, and
+`_check_clean_room` refuses a caller-asserted boolean; `_check_population` was the
+outlier.
+
+**Decision.** `_check_population` now consumes the strongest existing population
+artifact and refuses the number:
+
+* The supplied `population` MUST be a `qwen_train.f2_population.PopulationManifest`.
+  Any other type (including a mapping that merely declares a count) fails closed
+  with "a declared count is not evidence".
+* The manifest is re-verified (`PopulationManifest.verify()`) before use.
+* The contamination policy is read from the **manifest** (`manifest.contamination_policy`),
+  not from the caller, and must declare a cutoff.
+* The admitted count is **derived** (`len(manifest.admitted)`), never supplied, and
+  compared against the unchanged `FROZEN_MIN_PAIRS = 300`.
+
+**Named limit (honest scope).** `PopulationManifest.verify()` detects an empty
+manifest, a blank identity, and a **duplicate identity**; it does not, by itself,
+detect a fabricated entry. The binding strength comes from the two mechanisms that
+already exist and are unchanged: `PopulationEntry` can only be constructed through
+`screen_entry` (`_ENTRY_PROOF`), and ``admitted`` additionally requires S8 evidence
+that `f2_evidence.verify_task_evidence` accepts against a **real artifact store**
+and a set of **authorized evaluators**. No new trust authority, digest scheme, or
+signed record was invented; no caller-supplied number is trusted.
+
+**Regression tests (`tests/test_f2_readiness.py::TestPopulationCountedQuantity`).**
+A: a bare `{"admitted": 300}` fails. B: `admitted = 300` plus a declared cutoff but
+no manifest fails. C: a declared policy with `contamination_classes = {"UNKNOWN": 300}`
+fails, and a genuine manifest with no cutoff derives 0 admitted. D: a caller-supplied
+"census" claiming 300 CLEAN tasks with no manifest fails. E: a genuine manifest with
+2 admitted tasks fails as a shortfall. F: a genuine, verified 300-admitted manifest
+passes, and its count is derived (no number is supplied). The production path
+(`evaluate_f2_readiness` -> `protected_population`) is exercised directly in
+`test_full_readiness_population_item_uses_the_manifest`.
+
+**Test-count reconciliation.** F2-IMPL-AUTH-029 recorded `pytest tests/ -k f2` as
+**1570 passed**; the measured total at that commit was **1572 passed, 4 skipped**,
+and the stale figure is corrected above. After this entry the same command reports
+**1578 passed, 4 skipped** (1572 + 6 new readiness tests). No test was weakened or
+deleted.
+
+**File boundary.** `qwen_train/f2_readiness.py`, `tests/test_f2_readiness.py`, and
+this document. No other file.
+
+**Explicit non-authorization.** Does NOT change `FROZEN_MIN_PAIRS`, F0/F1, `k`,
+`n`, alpha, delta, pi_d, the endpoint, or any population/statistical rule; does NOT
+execute any task, patch, benchmark test, model, Docker/VM/service, or Q9/Q10/Q12/Q13;
+does NOT provision or read `SWARM_RECEIPT_KEY`; does NOT reclassify any task or claim
+a model training cutoff. S8 remains blocked until task execution is separately
+authorized and an isolated execution environment exists; `admitted` stays 0.

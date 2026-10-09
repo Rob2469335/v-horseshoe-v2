@@ -7,8 +7,11 @@ are supplied. Uses explicit test-scoped fixtures; no real evidence.
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import pathlib
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -129,7 +132,10 @@ def _clean_attestation():
     ).to_dict()
 
 
-def _verified_evidence(state: str, result: str, store: Path | None = None):
+def _verified_evidence(
+    state: str, result: str, store: Path | None = None,
+    instance_id: str = "inst-1", base_commit: str = "c0ffee",
+):
     """A real, VERIFIED execution evidence record built by f2_evidence itself.
 
     Readiness validates base/gold with the same validator the independent
@@ -160,7 +166,7 @@ def _verified_evidence(state: str, result: str, store: Path | None = None):
         (store / log.name).write_bytes(log_body)
 
     ident = build_execution_identity(
-        instance_id="inst-1", repository="o/r", base_commit="c0ffee",
+        instance_id=instance_id, repository="o/r", base_commit=base_commit,
         execution_state_identity=state,
         execution_state_digest="d" * 64,
         evaluator=_test_authorization(),
@@ -168,7 +174,7 @@ def _verified_evidence(state: str, result: str, store: Path | None = None):
         test_output=ref, run_log=log,
     )
     rec = build_evidence_record(
-        instance_id="inst-1", repository="o/r", base_commit="c0ffee",
+        instance_id=instance_id, repository="o/r", base_commit=base_commit,
         execution_state_identity=state, execution_state_digest=ident.digest(),
         test_command="pytest -q", environment_identity="test-env",
         evaluator_identity=_test_authorization().evaluator_id,
@@ -203,12 +209,63 @@ def _clean_mutation():
     }
 
 
+_POP_STORE = pathlib.Path(tempfile.mkdtemp(prefix="f2pop_store_"))
+atexit.register(shutil.rmtree, _POP_STORE, ignore_errors=True)
+_ADMITTED_CACHE: dict[int, object] = {}
+
+
+def _authorized_evaluators():
+    f = _test_authorization()
+    return {f.evaluator_id: (f.version,)}
+
+
+def _admitted_manifest(
+    n: int, *, cutoff: str = "2024-01-01", created_at: str = "2025-06-01",
+    store: Path | None = None,
+):
+    """A GENUINE population manifest with ``n`` admitted tasks.
+
+    Each admitted entry requires verified S8 base/gold evidence, so this builds
+    real evidence records against a real store -- it cannot be fabricated by
+    declaring a number.
+    """
+    from qwen_train.f2_population import contamination_policy_record, screen_pool_rows
+
+    store = _POP_STORE if store is None else store
+    base = "c0ffee" * 6 + "beef"  # 40-hex, S2 requires len >= 7
+    rows, recs, sets = [], {}, {}
+    for i in range(n):
+        iid = f"o__r-{i}"
+        rows.append({
+            "instance_id": iid, "repo": "o/r", "base_commit": base,
+            "test_cmd": "pytest -q",
+            "fail_to_pass": ["tests/t.py::a"], "pass_to_pass": ["tests/t.py::b"],
+            "created_at": created_at, "usable": True,
+        })
+        recs[iid] = (
+            _verified_evidence("base", "fail", store, instance_id=iid, base_commit=base),
+            _verified_evidence("gold", "pass", store, instance_id=iid, base_commit=base),
+        )
+        sets[iid] = ["pkg/mod.py"]
+    manifest = screen_pool_rows(
+        rows, relevant_file_sets=sets, evidence_records=recs,
+        artifact_root=store, authorized_evaluators=_authorized_evaluators(),
+        model_cutoff=cutoff,
+        contamination_policy=contamination_policy_record(cutoff),
+    )
+    manifest.verify()
+    return manifest
+
+
+def _population_manifest(n: int = FROZEN_MIN_PAIRS):
+    if n not in _ADMITTED_CACHE:
+        _ADMITTED_CACHE[n] = _admitted_manifest(n)
+    return _ADMITTED_CACHE[n]
+
+
 def _all_supplied(store: Path | None = None):
     return {
-        "population": {
-            "admitted": FROZEN_MIN_PAIRS,
-            "contamination_policy": {"declared": True, "cutoff": "2024-01-01", "is_proxy": True},
-        },
+        "population": _population_manifest(),
         "base_artifacts": _verified_evidence("base", "fail", store),
         "base_evidence": _verified_evidence("base", "fail", store),
         "gold_artifacts": _verified_evidence("gold", "pass", store),
@@ -283,7 +340,7 @@ class TestValidation:
 
     def test_population_shortfall_blocks(self):
         s = _all_supplied()
-        s["population"] = {"admitted": FROZEN_MIN_PAIRS - 1}
+        s["population"] = _population_manifest(1)  # a GENUINE but undersized manifest
         by = {c.item: c for c in evaluate_f2_readiness(env=_all_env(), supplied=s).checks}
         assert by["protected_population"].satisfied is False
 
@@ -734,14 +791,13 @@ class TestCleanRoomIsVerifiedNotAsserted:
 
 
 class TestPopulationCountedQuantity:
-    """F2-CLARIFICATION-007: this gate counts ADMITTED tasks.
+    """The population prerequisite must be backed by a VERIFIED manifest artifact.
 
-    AUTH-020 named the item ``protected_population`` and AUTH-028 (operator,
-    2026-10-07) set the target as "at least 300 admitted task pairs ... consistent
-    with the frozen n = 300". The confirmatory design's ``n`` counts ANALYZABLE
-    complete pairs after Q5/Q6 exclusions, which is a different quantity. These
-    tests pin which one the readiness item measures, so a later refactor cannot
-    silently swap them, and pin that no threshold moved.
+    F2-CLARIFICATION-007: this gate counts ADMITTED tasks (AUTH-028), while the
+    frozen design's ``n = 300`` counts ANALYZABLE complete pairs -- a different
+    quantity. F2-IMPL-AUTH-030: the count is now DERIVED from a verified
+    ``PopulationManifest``; a caller-supplied number or a mapping that merely
+    declares one is not evidence and is refused.
     """
 
     def test_the_minimum_is_still_exactly_300(self):
@@ -749,48 +805,34 @@ class TestPopulationCountedQuantity:
 
         assert FROZEN_MIN_PAIRS == 300
 
-    def test_a_full_admitted_population_passes_even_with_nothing_analyzable(self):
+    # -- Case A: a bare count is not evidence ------------------------------
+
+    def test_bare_admitted_count_fails(self):
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+
+        ok, detail, _ = _check_population({"population": {"admitted": FROZEN_MIN_PAIRS}})
+        assert ok is False
+        assert "not a verifiable PopulationManifest" in detail
+
+    # -- Case B: count + declared cutoff, still no population evidence -----
+
+    def test_count_plus_declared_cutoff_without_a_manifest_fails(self):
         from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
 
         ok, detail, _ = _check_population(
             {
                 "population": {
                     "admitted": FROZEN_MIN_PAIRS,
-                    "analyzable": 0,
-                    "contamination_policy": {"declared": True, "cutoff": "2024-01-01"},
-                }
-            }
-        )
-        assert ok is True, detail
-
-    def test_an_analyzable_count_cannot_stand_in_for_admitted(self):
-        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
-
-        ok, detail, action = _check_population(
-            {
-                "population": {
-                    "admitted": 0,
-                    "analyzable": FROZEN_MIN_PAIRS,
                     "contamination_policy": {"declared": True, "cutoff": "2024-01-01"},
                 }
             }
         )
         assert ok is False
-        assert "admitted=0" in detail
-        # The remedy must name oversampling, because reaching n = 300 analyzable
-        # from 300 admitted is not guaranteed once Q5/Q6 exclusions apply.
-        assert "oversampled" in action and "ANALYZABLE" in action
+        assert "not a verifiable PopulationManifest" in detail
 
-    def test_admitted_without_a_declared_cutoff_is_not_ready(self):
-        """F2-IMPL-AUTH-029 D3: a bare integer must not establish readiness."""
-        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+    # -- Case C: UNKNOWN contamination cannot be reported clean ------------
 
-        ok, detail, action = _check_population({"population": {"admitted": FROZEN_MIN_PAIRS}})
-        assert ok is False
-        assert "contamination cutoff" in detail
-
-    def test_unknown_contamination_population_is_not_ready(self):
-        """300 records with UNKNOWN contamination cannot pass the gate."""
+    def test_declared_policy_with_unknown_contamination_fails(self):
         from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
 
         ok, _, _ = _check_population(
@@ -798,8 +840,96 @@ class TestPopulationCountedQuantity:
                 "population": {
                     "admitted": FROZEN_MIN_PAIRS,
                     "contamination_classes": {"UNKNOWN": FROZEN_MIN_PAIRS},
-                    "contamination_policy": {"declared": False, "cutoff": ""},
+                    "contamination_policy": {"declared": True, "cutoff": "2024-01-01"},
                 }
             }
         )
         assert ok is False
+
+    def test_unknown_contamination_manifest_derives_zero_admitted(self):
+        """A real manifest with NO cutoff has 0 CLEAN entries -> 0 admitted."""
+        from qwen_train.f2_readiness import _check_population
+
+        man = _admitted_manifest(3, cutoff="")          # declared cutoff empty
+        assert len(man.admitted) == 0
+        assert all(e.contamination_class == "UNKNOWN" for e in man.entries)
+        ok, _, _ = _check_population({"population": man})
+        assert ok is False
+
+    # -- Case D: caller CLEAN count conflicting with the artifact ----------
+
+    def test_caller_clean_claim_conflicting_with_manifest_is_refused(self):
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+
+        # A hand-written "census" claiming 300 CLEAN admitted tasks, with no
+        # manifest behind it, is refused outright (it cannot be integrity-checked).
+        ok, detail, _ = _check_population(
+            {
+                "population": {
+                    "admitted": FROZEN_MIN_PAIRS,
+                    "contamination_classes": {"CLEAN": FROZEN_MIN_PAIRS},
+                    "admitted_clean": FROZEN_MIN_PAIRS,
+                    "contamination_policy": {"declared": True, "cutoff": "2024-01-01"},
+                }
+            }
+        )
+        assert ok is False
+        assert "declared count is not evidence" in detail
+
+    # -- Case E: a genuine but undersized manifest fails -------------------
+
+    def test_genuine_manifest_below_minimum_fails(self):
+        from qwen_train.f2_readiness import _check_population
+
+        man = _admitted_manifest(2)
+        assert len(man.admitted) == 2
+        ok, detail, action = _check_population({"population": man})
+        assert ok is False
+        assert "admitted=2" in detail and "oversampled" in action
+
+    # -- Case F: a genuine manifest meeting the contract passes ------------
+
+    def test_verified_manifest_meeting_contract_passes(self):
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+
+        man = _population_manifest()
+        assert len(man.admitted) >= FROZEN_MIN_PAIRS
+        ok, detail, _ = _check_population({"population": man})
+        assert ok is True, detail
+        assert "verified manifest" in detail
+
+    def test_derived_count_is_not_taken_from_the_caller(self):
+        """The same manifest passes even though no number is supplied anywhere."""
+        from qwen_train.f2_readiness import _check_population
+
+        man = _population_manifest()
+        assert not hasattr(man, "admitted_count")
+        ok, _, _ = _check_population({"population": man})
+        assert ok is True
+
+    def test_full_readiness_population_item_uses_the_manifest(self):
+        """The production path (evaluate_f2_readiness) derives the item from the artifact."""
+        man = _population_manifest(1)
+        s = _all_supplied()
+        s["population"] = man
+        by = {c.item: c for c in evaluate_f2_readiness(env=_all_env(), supplied=s).checks}
+        item = by["protected_population"]
+        assert item.satisfied is False
+        assert "admitted=1" in item.detail
+
+    def test_duplicate_identity_manifest_fails_verification(self):
+        """A manifest carrying a duplicate identity fails closed (nothing derived)."""
+        from dataclasses import replace
+
+        from qwen_train.f2_population import PopulationManifest
+        from qwen_train.f2_readiness import _check_population
+
+        base = _population_manifest(1)
+        dup = replace(base.entries[0])
+        try:
+            bad = PopulationManifest(entries=(base.entries[0], dup))
+        except Exception:  # pragma: no cover - construction is proof-token gated
+            return
+        ok, detail, _ = _check_population({"population": bad})
+        assert ok is False
+        assert "verification" in detail

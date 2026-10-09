@@ -280,31 +280,55 @@ def _check_receipt_key(env: Mapping[str, str]):
 
 
 def _check_population(supplied: Mapping[str, Any]):
+    """The population prerequisite must be backed by a VERIFIED manifest artifact.
+
+    A caller-supplied integer, or a mapping that merely *declares* a count and a
+    contamination policy, is NOT evidence: it cannot be shown to come from
+    screening, its contamination classification cannot be checked, and it bypasses
+    the integrity anchor. This gate therefore consumes the strongest existing
+    population artifact -- a ``qwen_train.f2_population.PopulationManifest`` --
+    re-verifies it, and DERIVES the admitted count from the artifact instead of
+    trusting a number. A plain mapping (of any shape) is refused.
+    """
     rep = supplied.get("population")
     if rep is None:
-        return False, "no population report supplied", (
-            "Supply the screened population report (admitted count + provenance)"
+        return False, "no population evidence supplied", (
+            "Supply the screened PopulationManifest (verified admitted count + "
+            "provenance)"
         )
-    # F2-IMPL-AUTH-029 D3: a bare integer must not establish readiness. The report
-    # must also carry the declared contamination policy, verified below.
-    policy = rep.get("contamination_policy") if isinstance(rep, Mapping) else None
+    try:
+        from qwen_train.f2_population import PopulationManifest
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return False, f"population artifact module unavailable: {exc}", (
+            "Restore qwen_train/f2_population.py"
+        )
+    if not isinstance(rep, PopulationManifest):
+        return False, (
+            "population evidence is not a verifiable PopulationManifest artifact "
+            f"(got {type(rep).__name__}); a declared count is not evidence"
+        ), (
+            "Supply the PopulationManifest produced by screen_pool_rows() or "
+            "f2_population_build. This gate derives the admitted count from the "
+            "verified artifact and will not accept a caller-supplied number."
+        )
+    try:
+        rep.verify()
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return False, f"population manifest failed verification: {type(exc).__name__}", (
+            "Supply a manifest whose identities are unique and whose entries hash "
+            "to their recorded identity_hash"
+        )
+    policy = rep.contamination_policy
     if not isinstance(policy, Mapping) or not policy.get("declared") or not str(
         policy.get("cutoff") or ""
     ).strip():
-        return False, (
-            "population report declares no contamination cutoff"
-        ), (
-            "Supply a population report whose contamination_policy declares a "
-            "cutoff; an UNKNOWN-contamination population is never READY (AUTH-028). "
-            "A temporal cutoff is a PROXY, not proof."
+        return False, "population manifest declares no contamination cutoff", (
+            "Supply a manifest whose contamination_policy declares a cutoff; an "
+            "UNKNOWN-contamination population is never READY (AUTH-028). A temporal "
+            "cutoff is a PROXY, not proof."
         )
-    admitted = rep.get("admitted") if isinstance(rep, Mapping) else getattr(rep, "admitted", None)
-    try:
-        admitted = int(admitted)
-    except (TypeError, ValueError):
-        return False, "population report has no integer 'admitted' count", (
-            "Supply a screened population report"
-        )
+    # Derived from the artifact, never supplied.
+    admitted = len(rep.admitted)
     if admitted < FROZEN_MIN_PAIRS:
         return False, (
             f"admitted={admitted} < frozen minimum {FROZEN_MIN_PAIRS}"
@@ -314,7 +338,7 @@ def _check_population(supplied: Mapping[str, Any]):
             "the confirmatory design's n = 300 counts ANALYZABLE pairs after Q5/Q6 "
             "exclusions, so acquire more than 300 if any attrition is expected"
         )
-    return True, f"admitted={admitted} >= {FROZEN_MIN_PAIRS}", ""
+    return True, f"admitted={admitted} >= {FROZEN_MIN_PAIRS} (verified manifest)", ""
 
 
 def _check_artifacts(
@@ -663,8 +687,8 @@ def evaluate_f2_readiness(
             "no signed receipt; fail closed",
         ),
         "protected_population": (
-            f">= {FROZEN_MIN_PAIRS} admitted post-cutoff tasks",
-            "screened population report",
+            f">= {FROZEN_MIN_PAIRS} admitted post-cutoff tasks in a verified manifest",
+            "a verified qwen_train.f2_population.PopulationManifest",
             "underpowered/invalid population; forbid execution",
         ),
         "base_artifacts": (
