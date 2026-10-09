@@ -1249,3 +1249,35 @@ header/region/metadata/BAT/payload/unsupported tests retained. **82 passed**;
 **Limitations.** Live guest-written-disk evidence remains NOT ESTABLISHED; synthetic
 fixtures only. Page83 metadata is not required. No VM started; no disk attached or
 mounted; no production integration or F2/S8 readiness.
+
+---
+
+## 2026-10-09 - F2 S8 VHDX reader: separate region and metadata GUID allowlists (Stage 1)
+
+**State on entry.** HEAD `4f7adf3b`, worktree clean except the pre-existing
+`tests/conftest.py` and 38 untracked user files.
+
+**Confirmed defect (PROVEN).** `_check_regions` decided whether a `Required` **region**
+was understood using `GUID_KNOWN`, a single set that unioned the supported *region*
+GUIDs with the *metadata-item* GUIDs. A Required region whose GUID happened to equal a
+metadata-item GUID (e.g. File Parameters `{CAA16737-...}`) was therefore accepted as
+"known" even though it is not a supported region. Basis: [MS-VHDX] 2.2.3.2 defines the
+`Required` field as "whether the region must be understood to open the file"; region
+identity and metadata-item identity are distinct namespaces.
+
+**Correction.** `qwen_train/f2_s8_vhdx.py` now defines `REGION_KNOWN = {GUID_BAT,
+GUID_METADATA}` (supported region GUIDs) and consults **only** that set in
+`_check_regions`; `KNOWN_METADATA_ITEMS` is unchanged and still governs metadata-item
+classification. The conflated `GUID_KNOWN` was removed rather than renamed.
+
+**Tests (tests/test_f2_s8_stage1.py).** `test_required_region_guid_colliding_with_metadata_item_rejected`
+(a Required region whose GUID equals `GUID_FILE_PARAMETERS` must be refused; under the
+old predicate the GUID was `in GUID_KNOWN` so the fixture was accepted - the test
+regresses the defect by inspection) and `test_unknown_optional_region_allowed` (an
+unknown non-required region is still permitted). **84 passed**; `ruff --select E9,F`
+clean; the real Hyper-V scratch VHDX still round-trips.
+
+**Limitations.** Live guest-written-disk evidence remains NOT ESTABLISHED; synthetic
+fixtures only. No VM started; no disk attached or mounted; no production integration
+or F2/S8 readiness. No metadata-region checksum was added (the specification defines
+none).

@@ -591,6 +591,21 @@ class TestHeaderLogAndRegionInvariants:
         with pytest.raises(VhdxError):
             inspect_vhdx(_write(tmp_path, build_vhdx(region_entries=entries)))
 
+    def test_required_region_guid_colliding_with_metadata_item_rejected(self, tmp_path):
+        # A Required REGION whose GUID equals a metadata-item GUID (File Parameters)
+        # must NOT be treated as a known region.
+        entries = [(GUID_BAT, BAT_OFF, BAT_LEN, 1), (GUID_METADATA, META_OFF, META_LEN, 1),
+                   (GUID_FILE_PARAMETERS, 1 * MB, MB, 1)]
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(region_entries=entries)))
+
+    def test_unknown_optional_region_allowed(self, tmp_path):
+        # An unknown region that is NOT required is permitted.
+        entries = [(GUID_BAT, BAT_OFF, BAT_LEN, 1), (GUID_METADATA, META_OFF, META_LEN, 1),
+                   (bytes.fromhex("22" * 16), 1 * MB, MB, 0)]
+        info = inspect_vhdx(_write(tmp_path, build_vhdx(region_entries=entries)))
+        assert info.layout == "fixed"
+
 
 class TestMetadataInvariants:
     def _items(self, extra=(), vdisk_id=b"\x01" * 16):

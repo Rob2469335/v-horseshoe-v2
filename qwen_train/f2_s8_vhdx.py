@@ -61,8 +61,11 @@ GUID_VIRTUAL_DISK_SIZE = bytes.fromhex("2442a52f1bcd7648b2115dbed83bf4b8")
 GUID_LOGICAL_SECTOR = bytes.fromhex("1dbf41816fa90947ba47f233a8faab5f")
 GUID_PHYSICAL_SECTOR = bytes.fromhex("c748a3cd5d4471449cc9e9885251c556")
 GUID_VIRTUAL_DISK_ID = bytes.fromhex("ab12cabee6b2234593efc309e000c746")  # {BECA12AB-B2E6-4523-93EF-C309E000C746}
-GUID_KNOWN = {GUID_BAT, GUID_METADATA, GUID_FILE_PARAMETERS, GUID_VIRTUAL_DISK_SIZE,
-              GUID_LOGICAL_SECTOR, GUID_PHYSICAL_SECTOR, GUID_VIRTUAL_DISK_ID}
+# Supported REGION GUIDs. This is deliberately DISTINCT from the metadata-item
+# GUIDs: a Required region is understood only if it is one of these. Conflating the
+# two sets would let a Required region whose GUID happens to equal a metadata-item
+# GUID (e.g. File Parameters) be accepted as "known".
+REGION_KNOWN = {GUID_BAT, GUID_METADATA}
 # Metadata entry flag bits ([MS-VHDX] 2.6.1).
 META_FLAG_ISUSER = 0b1
 META_FLAG_ISVIRTUALDISK = 0b10
@@ -226,7 +229,7 @@ def _check_regions(entries, file_size: int):
         if e["guid"] in seen:
             raise VhdxError(f"duplicate region GUID at index {e['index']}")
         seen.add(e["guid"])
-        if e["required"] and e["guid"] not in GUID_KNOWN:
+        if e["required"] and e["guid"] not in REGION_KNOWN:
             raise VhdxError(f"unknown REQUIRED region at index {e['index']}")
     # overlaps between declared regions
     ordered = sorted(entries, key=lambda e: e["offset"])
