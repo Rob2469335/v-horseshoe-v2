@@ -285,6 +285,19 @@ def _check_population(supplied: Mapping[str, Any]):
         return False, "no population report supplied", (
             "Supply the screened population report (admitted count + provenance)"
         )
+    # F2-IMPL-AUTH-029 D3: a bare integer must not establish readiness. The report
+    # must also carry the declared contamination policy, verified below.
+    policy = rep.get("contamination_policy") if isinstance(rep, Mapping) else None
+    if not isinstance(policy, Mapping) or not policy.get("declared") or not str(
+        policy.get("cutoff") or ""
+    ).strip():
+        return False, (
+            "population report declares no contamination cutoff"
+        ), (
+            "Supply a population report whose contamination_policy declares a "
+            "cutoff; an UNKNOWN-contamination population is never READY (AUTH-028). "
+            "A temporal cutoff is a PROXY, not proof."
+        )
     admitted = rep.get("admitted") if isinstance(rep, Mapping) else getattr(rep, "admitted", None)
     try:
         admitted = int(admitted)

@@ -620,6 +620,9 @@ def _entry(tmp_path, **over):
         gold_evidence_digest=gold.evidence_record_digest,
         base_evidence=base, gold_evidence=gold,
         artifact_root=tmp_path, authorized_evaluators=AUTHORIZED,
+        # F2-IMPL-AUTH-029 D2: admission also requires a CLEAN contamination
+        # verdict, so the default fixture declares a cutoff the task postdates.
+        model_cutoff="2025-01-01", created_at="2025-06-01",
     )
     kw.update(over)
     return screen_entry(**kw)

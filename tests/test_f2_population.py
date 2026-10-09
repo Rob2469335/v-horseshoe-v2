@@ -111,15 +111,34 @@ def _entry(**over):
     return screen_entry(**kw)
 
 
+def _admitted_entry(**over):
+    """An entry that clears admission: complete evidence AND a clean contamination
+    verdict. F2-IMPL-AUTH-029 D2 makes admission require contamination CLEAN, so a
+    task with no declared cutoff can never be admitted."""
+    kw = {"model_cutoff": "2025-01-01", "created_at": "2025-06-01", **over}
+    return _entry(**kw)
+
+
 def _rule(entry, name) -> bool:
     return next(s.passed for s in entry.screens if s.rule == name)
 
 
 class TestHappyPath:
     def test_a_complete_task_is_admitted(self):
-        e = _entry()
+        # F2-IMPL-AUTH-029 D2: admission now also requires a CLEAN contamination
+        # verdict, so the happy path declares a cutoff the task postdates. The
+        # previous version of this test asserted admission with NO cutoff, which
+        # encoded the defect (a task admittable while contamination was UNKNOWN).
+        e = _admitted_entry()
         assert e.admitted is True
         assert all(s.passed for s in e.screens)
+
+    def test_complete_task_without_a_cutoff_is_not_admitted(self):
+        """A complete record whose contamination is UNKNOWN is NOT admitted."""
+        e = _entry()  # no model_cutoff
+        assert e.contamination_class == "UNKNOWN"
+        assert e.admitted is False
+        assert e.metadata_eligible is True  # everything except S8 passes
 
     def test_identity_hash_is_stable(self):
         assert _entry().identity_hash == _entry().identity_hash
@@ -177,7 +196,7 @@ class TestR8IsEnforcedNotDefaulted:
         e = _entry(base_evidence_digest="", gold_evidence_digest="")
         assert e.to_dict()["evidence_identity_recorded"] is False
         assert e.evidence_verified is True
-        assert e.admitted is True
+        assert _admitted_entry(base_evidence_digest="", gold_evidence_digest="").admitted is True
 
     def test_test_file_in_relevant_set_is_rejected(self):
         """F1-OP-003 excluded the test file from the endpoint."""
@@ -223,12 +242,28 @@ class TestManifest:
         PopulationManifest(entries=(_entry(), second)).verify()
 
     def test_summary_counts_admitted_and_failures(self):
-        m = PopulationManifest(entries=(_entry(), _entry(relevant_file_set=None)))
+        m = PopulationManifest(entries=(_admitted_entry(), _entry(relevant_file_set=None)))
         s = m.summary()
         assert s["total"] == 2
         assert s["admitted"] == 1
         assert s["failing_rules"]["S6_relevant_file_set"] == 1
         assert s["schema"] == MANIFEST_SCHEMA_VERSION
+
+    def test_summary_reports_contamination(self):
+        """F2-IMPL-AUTH-029 D1: the census must carry contamination evidence."""
+        m = PopulationManifest(entries=(_admitted_entry(), _entry()))
+        s = m.summary()
+        assert s["contamination_classes"] == {"CLEAN": 1, "UNKNOWN": 1}
+        assert s["metadata_eligible"] == 2
+        assert s["admitted"] == 1
+
+    def test_to_dict_preserves_created_at_and_contamination(self):
+        """F2-IMPL-AUTH-029 D1: serialization must not drop evidence."""
+        d = _admitted_entry().to_dict()
+        assert d["created_at"] == "2025-06-01"
+        assert d["contamination_state"] == "POST_CUTOFF"
+        assert d["contamination_class"] == "CLEAN"
+        assert d["contamination_basis"] == "temporal_proxy:2025-01-01T00:00:00"
 
     def test_summary_reports_distinct_repositories(self):
         m = PopulationManifest(
@@ -282,7 +317,7 @@ class TestRealPoolScreening:
         That is a genuine gap in the corpus, not a screening bug, and this test
         pins it so it cannot be silently admitted later.
         """
-        rows = load_pool_rows(self.POOL)
+        rows = [{**r, "created_at": "2025-06-01"} for r in load_pool_rows(self.POOL)]
         sets = {r["instance_id"]: ["pkg/mod.py"] for r in rows}
         digs = {r["instance_id"]: ("a" * 64, "b" * 64) for r in rows}
         recs = {
@@ -298,6 +333,7 @@ class TestRealPoolScreening:
             evidence_records=recs,
             artifact_root=_EVIDENCE_ROOT,
             authorized_evaluators=AUTHORIZED,
+            model_cutoff="2025-01-01",
         )
         manifest.verify()
         summary = manifest.summary()
@@ -318,6 +354,7 @@ class TestRealPoolScreening:
                 "pass_to_pass": "['tests/t.py::b']",
                 "relevant_file_set": ["y/mod.py"],
                 "usable": True,
+                "created_at": "2025-06-01",
             }
         ]
         manifest = screen_pool_rows(
@@ -327,6 +364,7 @@ class TestRealPoolScreening:
             evidence_records={"x__y-1": _evidence_pair("x__y-1", "x/y", "abcdef1234")},
             artifact_root=_EVIDENCE_ROOT,
             authorized_evaluators=AUTHORIZED,
+            model_cutoff="2025-01-01",
         )
         entry = manifest.entries[0]
         assert entry.fail_to_pass == ("tests/t.py::a",)

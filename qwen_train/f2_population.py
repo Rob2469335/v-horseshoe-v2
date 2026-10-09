@@ -49,7 +49,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -66,7 +68,16 @@ __all__ = [
     "PopulationEntry",
     "PopulationManifest",
     "screen_entry",
+    "screen_pool_rows",
+    "deduplicate_rows",
+    "contamination_policy_record",
     "load_pool_rows",
+    "parse_timestamp",
+    "normalise_timestamp",
+    "TimestampError",
+    "CONTAMINATION_CLEAN",
+    "CONTAMINATION_POTENTIALLY",
+    "CONTAMINATION_UNKNOWN",
     "MANIFEST_SCHEMA_VERSION",
 ]
 
@@ -112,7 +123,62 @@ _CONTAMINATION_CLASS = {
     "PRE_CUTOFF": CONTAMINATION_POTENTIALLY,
     "NO_DATE": CONTAMINATION_UNKNOWN,
     "NOT_DECLARED": CONTAMINATION_UNKNOWN,
+    # F2-IMPL-AUTH-029: an unparseable date, or an unparseable cutoff, is
+    # UNKNOWN - never CLEAN. Fail-closed: malformed evidence is not a pass.
+    "MALFORMED_DATE": CONTAMINATION_UNKNOWN,
+    "CUTOFF_INVALID": CONTAMINATION_UNKNOWN,
 }
+
+
+class TimestampError(ValueError):
+    """A timestamp (task ``created_at`` or the declared ``model_cutoff``) is unusable."""
+
+
+#: Extended-format ISO-8601 only. The basic form ``YYYYMMDD`` is refused because it
+#: is ambiguous and is not what any population source produces.
+_ISO_EXTENDED = re.compile(
+    r"^\d{4}-\d{2}-\d{2}"
+    r"(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?"
+    r"(?:Z|z|[+-]\d{2}:\d{2})?$"
+)
+
+
+def parse_timestamp(value: Any) -> datetime:
+    """Parse a date or ISO-8601 timestamp to a timezone-aware UTC datetime.
+
+    Accepted (F2-IMPL-AUTH-029 D4): ``YYYY-MM-DD`` and ISO-8601 date-times with an
+    optional ``Z``/offset. A date-only value is midnight UTC. Everything else is
+    rejected -- a malformed or ambiguous date is NEVER silently reinterpreted, and
+    a missing value is NEVER converted into a passing result.
+
+    The comparison is type-safe: two parsed datetimes are compared, not two
+    strings, so a date-only cutoff and a full timestamp compare correctly.
+    """
+    if value is None:
+        raise TimestampError("empty timestamp")
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, date):
+        dt = datetime(value.year, value.month, value.day)
+    else:
+        text = str(value).strip()
+        if not text:
+            raise TimestampError("empty timestamp")
+        if not _ISO_EXTENDED.match(text):
+            raise TimestampError(f"malformed timestamp {value!r}")
+        candidate = text.replace("Z", "+00:00") if text.endswith("Z") else text
+        try:
+            dt = datetime.fromisoformat(candidate)
+        except ValueError as exc:
+            raise TimestampError(f"malformed timestamp {value!r}") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def normalise_timestamp(value: Any) -> str:
+    """Return the canonical ``YYYY-MM-DDTHH:MM:SS`` UTC form, or raise TimestampError."""
+    return parse_timestamp(value).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 @dataclass(frozen=True)
@@ -141,6 +207,10 @@ class PopulationEntry:
     # S10: task publication timestamp and the contamination-provenance verdict.
     created_at: str = ""
     contamination_state: str = ""
+    #: The provenance of the contamination verdict. A temporal cutoff is a PROXY
+    #: (F2-IMPL-AUTH-029): this records what the classification is based on so a
+    #: ``CLEAN`` label is never read as evidence of zero contamination.
+    contamination_basis: str = ""
     screens: tuple[ScreenResult, ...] = field(default_factory=tuple)
     _proof: object = field(default=None, repr=False, compare=False)
 
@@ -165,7 +235,26 @@ class PopulationEntry:
 
     @property
     def admitted(self) -> bool:
-        return all(s.passed for s in self.screens)
+        """Admission = every screen passed AND contamination is CLEAN.
+
+        F2-IMPL-AUTH-029 D2. Previously admission depended only on the screens,
+        and S10 passes vacuously when no cutoff is declared (``NOT_DECLARED``).
+        That let a task be ADMITTED while ``contamination_class == UNKNOWN``,
+        contradicting AUTH-028 ("UNKNOWN contamination status is NOT CLEAN").
+        An undeclared cutoff therefore admits nothing.
+        """
+        return all(s.passed for s in self.screens) and (
+            self.contamination_class == CONTAMINATION_CLEAN
+        )
+
+    @property
+    def metadata_eligible(self) -> bool:
+        """Passes every screen EXCEPT the base/gold execution gate (S8).
+
+        Reported separately so the operator can see the metadata-level ceiling
+        without it being confused with admission. This is NOT admission.
+        """
+        return all(s.passed for s in self.screens if s.rule != "S8_evidence_provenance")
 
     def identity_payload(self) -> dict[str, Any]:
         """The hash-bound payload.
@@ -195,6 +284,11 @@ class PopulationEntry:
             "evidence_scientifically_sufficient": (
                 self.evidence_scientifically_sufficient
             ),
+            # F2-IMPL-AUTH-029 D1/H2: contamination now gates admission, so the
+            # timestamp, verdict and its basis are part of the integrity identity.
+            "created_at": self.created_at,
+            "contamination_state": self.contamination_state,
+            "contamination_basis": self.contamination_basis,
         }
 
     @property
@@ -221,6 +315,15 @@ class PopulationEntry:
                 "evidence_scientifically_sufficient": (
                     self.evidence_scientifically_sufficient
                 ),
+                # F2-IMPL-AUTH-029 D1: the contamination evidence must survive
+                # serialization. Before this, to_dict() dropped created_at and the
+                # contamination verdict, so no census could be re-screened or
+                # audited for contamination.
+                "created_at": self.created_at,
+                "contamination_state": self.contamination_state,
+                "contamination_class": self.contamination_class,
+                "contamination_basis": self.contamination_basis,
+                "metadata_eligible": self.metadata_eligible,
                 "screens": [s.to_dict() for s in self.screens],
             }
         )
@@ -374,49 +477,76 @@ def screen_entry(
         ScreenResult("S9_probe_usable", bool(usable), f"usable={usable}")
     )
 
-    # S10: contamination provenance. A declared model cutoff makes the temporal
-    # rule binding and fail-closed; an undeclared cutoff leaves the existing
-    # disclosed-limitation behaviour unchanged.
+    # S10: contamination provenance. A declared cutoff makes the temporal rule
+    # binding and fail-closed; an undeclared cutoff leaves the disclosed-limitation
+    # behaviour unchanged. F2-IMPL-AUTH-029 D4: the comparison is on PARSED
+    # datetimes, and a malformed date/cutoff is UNKNOWN (never CLEAN).
     _created = str(created_at or "").strip()
     _cutoff = str(model_cutoff or "").strip()
+    contamination_basis = ""
     if not _cutoff:
         contamination_state = "NOT_DECLARED"
         screens.append(
             ScreenResult(
                 "S10_contamination_provenance",
                 True,
-                "no model cutoff declared; contamination provenance remains a "
-                "DISCLOSED limitation (a temporal cutoff is a proxy, not proof)",
-            )
-        )
-    elif not _created:
-        contamination_state = "NO_DATE"
-        screens.append(
-            ScreenResult(
-                "S10_contamination_provenance",
-                False,
-                f"a model cutoff {_cutoff!r} is in force but the task declares no "
-                "created_at, so freshness cannot be established",
-            )
-        )
-    elif _created < _cutoff:
-        contamination_state = "PRE_CUTOFF"
-        screens.append(
-            ScreenResult(
-                "S10_contamination_provenance",
-                False,
-                f"created_at {_created!r} precedes the model cutoff {_cutoff!r}",
+                "no contamination cutoff declared; provenance remains a DISCLOSED "
+                "limitation and the classification is UNKNOWN (never CLEAN)",
             )
         )
     else:
-        contamination_state = "POST_CUTOFF"
-        screens.append(
-            ScreenResult(
-                "S10_contamination_provenance",
-                True,
-                f"created_at {_created!r} is at or after the model cutoff {_cutoff!r}",
+        try:
+            cutoff_dt = parse_timestamp(_cutoff)
+        except TimestampError as exc:
+            contamination_state = "CUTOFF_INVALID"
+            screens.append(
+                ScreenResult("S10_contamination_provenance", False, f"cutoff unusable: {exc}")
             )
-        )
+            cutoff_dt = None
+        if cutoff_dt is not None:
+            contamination_basis = f"temporal_proxy:{normalise_timestamp(cutoff_dt)}"
+            if not _created:
+                contamination_state = "NO_DATE"
+                screens.append(
+                    ScreenResult(
+                        "S10_contamination_provenance",
+                        False,
+                        f"a cutoff {_cutoff!r} is in force but the task declares no "
+                        "created_at, so freshness cannot be established",
+                    )
+                )
+            else:
+                try:
+                    created_dt = parse_timestamp(_created)
+                except TimestampError as exc:
+                    contamination_state = "MALFORMED_DATE"
+                    screens.append(
+                        ScreenResult(
+                            "S10_contamination_provenance", False, f"created_at unusable: {exc}"
+                        )
+                    )
+                else:
+                    if created_dt < cutoff_dt:
+                        contamination_state = "PRE_CUTOFF"
+                        screens.append(
+                            ScreenResult(
+                                "S10_contamination_provenance",
+                                False,
+                                f"created_at {normalise_timestamp(created_dt)!r} precedes "
+                                f"the cutoff {normalise_timestamp(cutoff_dt)!r}",
+                            )
+                        )
+                    else:
+                        contamination_state = "POST_CUTOFF"
+                        screens.append(
+                            ScreenResult(
+                                "S10_contamination_provenance",
+                                True,
+                                f"created_at {normalise_timestamp(created_dt)!r} is at or "
+                                f"after the cutoff {normalise_timestamp(cutoff_dt)!r} "
+                                "(temporal PROXY, not proof of non-contamination)",
+                            )
+                        )
 
     if endpoint is None:
         # Keep the dataclass total: an inadmissible entry still needs an
@@ -449,6 +579,7 @@ def screen_entry(
         usable=bool(usable),
         created_at=_created,
         contamination_state=contamination_state,
+        contamination_basis=contamination_basis,
         screens=tuple(screens),
         _proof=_ENTRY_PROOF,
     )
@@ -460,10 +591,21 @@ class PopulationManifest:
 
     entries: tuple[PopulationEntry, ...]
     schema: str = MANIFEST_SCHEMA_VERSION
+    #: Records every candidate excluded BEFORE screening (F2-IMPL-AUTH-029 D5),
+    #: so a duplicate is never silently dropped. Each item is a mapping with
+    #: ``instance_id``/``reason``/``detail``. Excluded rows never enter ``entries``.
+    rejections: tuple[Mapping[str, Any], ...] = ()
+    #: The contamination policy in force, recorded on the manifest so a census can
+    #: never be read without it (F2-IMPL-AUTH-029 D1/D3). Empty when none declared.
+    contamination_policy: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def admitted(self) -> tuple[PopulationEntry, ...]:
         return tuple(e for e in self.entries if e.admitted)
+
+    @property
+    def metadata_eligible(self) -> tuple[PopulationEntry, ...]:
+        return tuple(e for e in self.entries if e.metadata_eligible)
 
     def verify(self) -> None:
         """Fail closed on a duplicated identity or a drifted identity hash."""
@@ -515,6 +657,28 @@ class PopulationManifest:
                     }.items()
                 )
             ),
+            # F2-IMPL-AUTH-029 D1/D2/D3: contamination must be visible in the
+            # summary, and the metadata ceiling is reported WITHOUT being confused
+            # with admission.
+            "metadata_eligible": len(self.metadata_eligible),
+            "contamination_states": dict(
+                sorted(
+                    {
+                        st: sum(1 for e in self.entries if e.contamination_state == st)
+                        for st in {e.contamination_state for e in self.entries}
+                    }.items()
+                )
+            ),
+            "contamination_classes": dict(
+                sorted(
+                    {
+                        c: sum(1 for e in self.entries if e.contamination_class == c)
+                        for c in {e.contamination_class for e in self.entries}
+                    }.items()
+                )
+            ),
+            "contamination_policy": dict(self.contamination_policy),
+            "rejections": [dict(r) for r in self.rejections],
             "entries": [e.to_dict() for e in self.entries],
         }
 
@@ -553,6 +717,108 @@ def _as_list(value: Any) -> list[str]:
     return []
 
 
+def deduplicate_rows(
+    rows: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Deterministically de-duplicate candidate rows by ``instance_id`` (D5).
+
+    Policy (F2-IMPL-AUTH-029 D5), evidence-preserving and never arbitrary:
+
+    * No ``instance_id`` -> kept (S1 rejects it later; that is a screening result,
+      not a pre-screening exclusion).
+    * Byte-identical duplicates -> keep the FIRST occurrence; record the exclusion.
+    * CONFLICTING duplicates (same id, different payload) -> exclude EVERY copy and
+      record the conflict. The manifest could not be verified otherwise, and
+      guessing which record is the real task would be an unrecorded decision.
+
+    Returns ``(kept_rows, rejections)`` where each rejection names the excluded
+    identity, its source index, and the reason.
+    """
+    seen: dict[str, int] = {}
+    first_payload: dict[str, str] = {}
+    kept: list[dict[str, Any]] = []
+    rejections: list[dict[str, Any]] = []
+    conflicted: set[str] = set()
+    pending: list[tuple[int, dict[str, Any], str]] = []
+    for index, raw in enumerate(rows):
+        row = dict(raw)
+        iid = str(row.get("instance_id") or "").strip()
+        if not iid:
+            kept.append(row)
+            continue
+        payload = _canon(row)
+        if iid not in seen:
+            seen[iid] = index
+            first_payload[iid] = payload
+            pending.append((index, row, payload))
+        elif first_payload[iid] == payload:
+            rejections.append(
+                {
+                    "instance_id": iid,
+                    "source_index": index,
+                    "kept_index": seen[iid],
+                    "reason": "duplicate_instance_id_identical",
+                    "detail": "byte-identical duplicate; first occurrence kept",
+                }
+            )
+        else:
+            conflicted.add(iid)
+            rejections.append(
+                {
+                    "instance_id": iid,
+                    "source_index": index,
+                    "kept_index": seen[iid],
+                    "reason": "duplicate_instance_id_conflicting",
+                    "detail": "same instance_id, different payload; all copies excluded",
+                }
+            )
+    for index, row, _payload in pending:
+        iid = str(row.get("instance_id") or "").strip()
+        if iid in conflicted:
+            rejections.append(
+                {
+                    "instance_id": iid,
+                    "source_index": index,
+                    "kept_index": None,
+                    "reason": "duplicate_instance_id_conflicted_removed",
+                    "detail": "first occurrence withdrawn because the id conflicted",
+                }
+            )
+        else:
+            kept.append(row)
+    rejections.sort(key=lambda r: (r["instance_id"], r["source_index"]))
+    return kept, rejections
+
+
+def contamination_policy_record(
+    model_cutoff: str, *, basis: str = "operator-declared temporal proxy"
+) -> dict[str, Any]:
+    """The contamination policy to record on a manifest/census (D1/D3).
+
+    A temporal cutoff is a PROXY, never proof of non-contamination. This record
+    makes that explicit wherever the population is written, so a ``CLEAN`` label
+    is never read as evidence the gold patch was absent from pre-training.
+    """
+    cutoff = str(model_cutoff or "").strip()
+    record: dict[str, Any] = {
+        "is_proxy": True,
+        "declared": bool(cutoff),
+        "cutoff": cutoff,
+        "basis": basis,
+        "limitation": (
+            "Temporal screening is a PROXY for freshness, not proof of zero "
+            "contamination; the served model's training cutoff is NOT ESTABLISHED."
+        ),
+    }
+    if cutoff:
+        try:
+            record["cutoff_normalised"] = normalise_timestamp(cutoff)
+        except TimestampError as exc:
+            record["cutoff_normalised"] = None
+            record["cutoff_error"] = str(exc)
+    return record
+
+
 def screen_pool_rows(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -563,6 +829,8 @@ def screen_pool_rows(
     authorized_evaluators: Mapping[str, tuple[str, ...]] | None = None,
     expected_gold_state_digests: Mapping[str, str] | None = None,
     model_cutoff: str = "",
+    rejections: Sequence[Mapping[str, Any]] = (),
+    contamination_policy: Mapping[str, Any] | None = None,
 ) -> PopulationManifest:
     """Screen raw pool rows into a manifest.
 
@@ -608,4 +876,8 @@ def screen_pool_rows(
                 model_cutoff=model_cutoff,
             )
         )
-    return PopulationManifest(entries=tuple(entries))
+    return PopulationManifest(
+        entries=tuple(entries),
+        rejections=tuple(dict(r) for r in rejections),
+        contamination_policy=dict(contamination_policy or {}),
+    )

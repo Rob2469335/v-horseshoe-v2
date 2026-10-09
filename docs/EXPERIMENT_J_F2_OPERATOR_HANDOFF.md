@@ -199,6 +199,17 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 - **Fail-closed if:** no such entry. **Admitted population stays 0.** No task may be admitted. Screening of the source is authorized; admission remains blocked by S6/S7/S8, by the undeclared model cutoff, and by a duplicate `instance_id`. Reported shortfall: **0 admitted of ≥ 300 required** — target not lowered.
 - **Next:** C
 
+> **Update 2026-10-09 (`F2-IMPL-AUTH-029`).** The original source (a reduced
+> projection lacking `problem_statement` and the gold `patch`) was replaced by a
+> pinned acquisition of `SWE-bench-Live/SWE-bench-Live` `full` at
+> `b51a86422e10cfd403beb4773e5a2947953e36ec`, under
+> `data/f2_population/upstream_swe_bench_live_b51a8642/`. R8 is derived from each
+> reference fix and a **declared temporal proxy** cutoff `2024-01-01` is recorded on
+> every census (`is_proxy: true`). Current funnel: 1888 raw → 2 pre-screen
+> exclusions → **1845 metadata-eligible** → **0 ADMITTED** (S8 base/gold execution
+> evidence is still missing; task execution was not authorized/performed). The ≥ 300
+> target is unchanged and **not** met at the admitted tier.
+
 ---
 
 ### C. Task snapshot and contamination / executability validation — **READY**

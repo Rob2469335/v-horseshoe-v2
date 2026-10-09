@@ -205,7 +205,10 @@ def _clean_mutation():
 
 def _all_supplied(store: Path | None = None):
     return {
-        "population": {"admitted": FROZEN_MIN_PAIRS},
+        "population": {
+            "admitted": FROZEN_MIN_PAIRS,
+            "contamination_policy": {"declared": True, "cutoff": "2024-01-01", "is_proxy": True},
+        },
         "base_artifacts": _verified_evidence("base", "fail", store),
         "base_evidence": _verified_evidence("base", "fail", store),
         "gold_artifacts": _verified_evidence("gold", "pass", store),
@@ -750,7 +753,13 @@ class TestPopulationCountedQuantity:
         from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
 
         ok, detail, _ = _check_population(
-            {"population": {"admitted": FROZEN_MIN_PAIRS, "analyzable": 0}}
+            {
+                "population": {
+                    "admitted": FROZEN_MIN_PAIRS,
+                    "analyzable": 0,
+                    "contamination_policy": {"declared": True, "cutoff": "2024-01-01"},
+                }
+            }
         )
         assert ok is True, detail
 
@@ -758,10 +767,39 @@ class TestPopulationCountedQuantity:
         from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
 
         ok, detail, action = _check_population(
-            {"population": {"admitted": 0, "analyzable": FROZEN_MIN_PAIRS}}
+            {
+                "population": {
+                    "admitted": 0,
+                    "analyzable": FROZEN_MIN_PAIRS,
+                    "contamination_policy": {"declared": True, "cutoff": "2024-01-01"},
+                }
+            }
         )
         assert ok is False
         assert "admitted=0" in detail
         # The remedy must name oversampling, because reaching n = 300 analyzable
         # from 300 admitted is not guaranteed once Q5/Q6 exclusions apply.
         assert "oversampled" in action and "ANALYZABLE" in action
+
+    def test_admitted_without_a_declared_cutoff_is_not_ready(self):
+        """F2-IMPL-AUTH-029 D3: a bare integer must not establish readiness."""
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+
+        ok, detail, action = _check_population({"population": {"admitted": FROZEN_MIN_PAIRS}})
+        assert ok is False
+        assert "contamination cutoff" in detail
+
+    def test_unknown_contamination_population_is_not_ready(self):
+        """300 records with UNKNOWN contamination cannot pass the gate."""
+        from qwen_train.f2_readiness import FROZEN_MIN_PAIRS, _check_population
+
+        ok, _, _ = _check_population(
+            {
+                "population": {
+                    "admitted": FROZEN_MIN_PAIRS,
+                    "contamination_classes": {"UNKNOWN": FROZEN_MIN_PAIRS},
+                    "contamination_policy": {"declared": False, "cutoff": ""},
+                }
+            }
+        )
+        assert ok is False

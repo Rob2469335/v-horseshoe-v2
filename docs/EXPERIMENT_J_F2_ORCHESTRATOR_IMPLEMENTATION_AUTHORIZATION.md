@@ -2029,3 +2029,116 @@ no code, no test, no experiment run.
 **Verification.** The endpoint detector itself is pinned by
 `tests/test_f1_atif_wiring.py` and `tests/test_f1_evidence.py`; both pass
 unchanged, since no code moved.
+
+### F2-IMPL-AUTH-029 - Population source re-acquisition, contamination proxy, and admission/readiness fidelity
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-09
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-09
+(the F2 population-recovery execution authorization), entered by the agent. The
+operator explicitly delegated the technical decisions required to select,
+acquire, screen and validate a suitable task population, subject to the scientific
+integrity requirements stated in that instruction. This entry records decisions
+the operator authorised the agent to make; it selects no frozen statistical
+parameter and modifies no F0/F1 element.
+
+**Defects this entry fixes (`PROVEN`).**
+
+* **D1 (serialization).** `PopulationEntry.to_dict()` and `PopulationManifest.summary()`
+  dropped `created_at` and the contamination verdict, so no census could be
+  re-screened or audited for contamination.
+* **D2 (admission).** `admitted = all(s.passed)` and S10 passes vacuously when no
+  cutoff is declared, so a task could be **admitted while
+  `contamination_class == UNKNOWN`**, contradicting AUTH-028 ("UNKNOWN contamination
+  status is NOT CLEAN"). The old happy-path test encoded the defect.
+* **D3 (readiness).** `f2_readiness._check_population` consumed only an integer
+  `admitted`; the module never referenced contamination, so `{"admitted": 300}`
+  passed with no contamination evidence.
+* **D4 (timestamps).** S10 compared `created_at` and the cutoff **lexically**
+  (`elif _created < _cutoff`), with no validation.
+* **D5 (duplicates).** The source contains one duplicated `instance_id`
+  (`conan-io__conan-18153`, two **differing** payloads); the census carried it and
+  `PopulationManifest.verify()` refused the whole manifest.
+
+**Decision - population source.** Acquire the **`SWE-bench-Live/SWE-bench-Live`**
+dataset, configuration `default`, split `full`, at the immutable full-length commit
+
+    revision = b51a86422e10cfd403beb4773e5a2947953e36ec
+
+The previous local file `data/f2_population/raw/swe_bench_live_full.jsonl` is
+retained, untouched, as historical evidence. It was a reduced projection that
+carried **no `problem_statement` and no gold `patch`**, so the F2 harness could not
+present the task (`swarm_os/services/prompt_repairer.py:808`) and R8 could not be
+derived. The new acquisition preserves every upstream field. Source: MIT
+(dataset card), tasks drawn only from OSS-licensed repositories. Acquisition tool
+`huggingface_hub.snapshot_download`; two shards (~98 MB) preserved byte-for-byte
+under `data/f2_population/upstream_swe_bench_live_b51a8642/raw/` with SHA-256s
+recorded in `PROVENANCE.json`. `SWE-rebench-V2` (`nebius/SWE-rebench-V2`, CC-BY-4.0)
+was evaluated and not selected: it discloses no issue-creation window and no update
+cadence, and replaces `test_cmds` with its own `install_config` shape.
+
+**Decision - R8 (relevant_file_set).** Derived deterministically from each task's
+reference fix (`patch`) by `qwen_train/f2_relevant_files.py`: the **non-test
+SOURCE** paths touched by the fix. This is an oracle-style proxy for edit scope
+(the Q8 concession), needs no clone, and matches S7's requirement that the endpoint
+be a source edit. Non-source paths (docs/config/lockfiles) and unknown extensions
+are excluded fail-closed.
+
+**Decision - contamination policy (PROXY, not proof).** No authoritative training
+cutoff can be established for the served model: Qwen discloses none for
+Qwen3/Qwen3.5, and the served GGUF's base/conversion lineage is
+**NOT ESTABLISHED** (see AUTH-022 and the base-identity contradiction). The most
+defensible proxy supported by this population is the **dataset's own declared
+freshness-window start, `2024-01-01`** - the only documented temporal boundary
+associated with SWE-bench-Live ("we restrict the dataset to issues created between
+January 1, 2024 and April 20, 2025"). This is explicitly a **temporal PROXY for
+freshness, NOT proof of zero contamination**, recorded in every census as
+`contamination_policy = {is_proxy: true, cutoff: "2024-01-01", basis: ...,
+limitation: ...}`. Consequence: 4 rows created before 2024-01-01 are
+`PRE_CUTOFF -> POTENTIALLY CONTAMINATED`; the remaining 1882 are
+`POST_CUTOFF -> CLEAN` under AUTH-014's vocabulary, and a `CLEAN` label must never
+be read as evidence the gold patch was absent from pre-training. Alternative
+(cutoff = the base revision's date) would place all rows `PRE_CUTOFF` and admit
+nothing; it is recorded but not selected.
+
+**Population funnel (`PROVEN`, reproducible via the commands below).**
+
+| Stage | Count |
+|---|---|
+| Raw upstream records | 1888 |
+| Pre-screen exclusions (conflicting duplicate `conan-io__conan-18153`, all copies) | 2 |
+| Unique candidates screened | 1886 |
+| S6/S7 fail (reference fix touches no source-code file) | 37 |
+| S10 fail (PRE_CUTOFF before 2024-01-01) | 4 |
+| **Metadata-eligible (all screens except the S8 execution gate)** | **1845** |
+| S8 fail (no base/gold execution evidence) | 1886 |
+| **ADMITTED (all screens, per AUTH-028)** | **0** |
+
+`admitted` remains 0: S8 requires real base-fails/gold-passes executions with
+retained evidence, which were **not performed** (no container execution
+environment available; task execution is not authorised by this entry).
+
+**File boundary.** New: `qwen_train/f2_population_acquire.py`,
+`qwen_train/f2_relevant_files.py`, `qwen_train/f2_population_build.py`,
+`tests/test_f2_population_recovery.py`. Modified: `qwen_train/f2_population.py`,
+`qwen_train/f2_readiness.py`, `tests/test_f2_population.py`,
+`tests/test_f2_readiness.py`, `tests/test_f2_evidence.py`, and this document.
+Data (gitignored): `data/f2_population/upstream_swe_bench_live_b51a8642/`
+(`acquired.jsonl`, `PROVENANCE.json`, `raw/*.parquet`, `census.json`,
+`rejections.json`).
+
+**Verification.** `pytest tests/ -k f2` (**1570 passed, 4 skipped** after this
+entry's fixes). The three recovery-critical files pass with
+`pytest tests/test_f2_population.py tests/test_f2_readiness.py tests/test_f2_population_recovery.py`
+(136). Independent re-derivation: the census is reproducible from
+`acquired.jsonl` alone via
+`python -m qwen_train.f2_population_build --acquired <jsonl> --out <census> --cutoff 2024-01-01`.
+
+**Explicit non-authorization.** Does NOT execute any SWE task, apply any patch, run
+any benchmark test or model, start Docker/VM/service, run Q9/Q10/Q12/Q13, provision
+or read `SWARM_RECEIPT_KEY`, change the served model identity, admit any task past
+S8, lower or raise the 300 threshold, or alter F0/F1/`k`/`n`/alpha/delta/pi_d/the
+endpoint. `admitted = 0` and `swarm_receipt_key` remains unprovisioned; F2 is NOT
+ready.
