@@ -1355,8 +1355,12 @@ entries), `+` (138), space (105), `[`/`]` (17), `(`/`)` (16), `{`/`}` (7), `$`
 (`Release Notes/511.md`, `packages/node_modules/@node-red/...`,
 ``src/Moq/Mock`1.cs``, `docs/Euler's Totient/index.md`,
 `kedro/templates/project/{{ cookiecutter.repo_name }}/pyproject.toml`). Because
-S6 failed, S7 also failed with "no endpoint", so the same defect produced 241 of
-the 253 S7 refusals.
+S6 fails whenever `freeze_endpoint` refuses the set, S7 then fails with "no
+endpoint" too: measured on the same report, S6 and S7 fail together on all
+**239** S6 rows (253 S7 refusals = 239 + 14 S7-only), so the character defect
+accounts for **236** of the S7 refusals as well as 236 of the S6 refusals.
+(An earlier wording of this entry and of the `3a925685` commit body said 241;
+236 is the measured value: `S6 recovered 236, S7 recovered 236`.)
 
 ### Repair
 
