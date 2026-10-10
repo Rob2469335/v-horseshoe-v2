@@ -126,8 +126,15 @@ class TestNonMutatingByDefault:
         text = _text()
         dry = text.index("if (-not $Apply)")
         dry_exit = text.index("exit 0", dry)
-        first_add = text.index("Add-VMNetworkAdapterExtendedAcl @(Get-RuleParams $r)")
+        first_add = text.index("Add-VMNetworkAdapterExtendedAcl @params")
         assert dry_exit < first_add
+
+    def test_apply_uses_splatting_not_an_array_subexpression(self):
+        """`@(Get-RuleParams $r)` passes a hashtable positionally and fails."""
+        text = _text()
+        assert "@(Get-RuleParams" not in text
+        assert "$params = Get-RuleParams $r" in text
+        assert "Add-VMNetworkAdapterExtendedAcl @params" in text
 
     @pytest.mark.parametrize("forbidden", [
         "Remove-VMNetworkAdapterExtendedAcl", "Remove-VM", "New-VMSwitch", "New-NetNat",

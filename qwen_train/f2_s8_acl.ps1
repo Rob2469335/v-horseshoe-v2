@@ -103,7 +103,8 @@ if ($existing.Count -gt 0) {
 }
 
 foreach ($r in $Rules) {
-    Add-VMNetworkAdapterExtendedAcl @(Get-RuleParams $r)
+    $params = Get-RuleParams $r
+    Add-VMNetworkAdapterExtendedAcl @params
 }
 Write-Output 'Applied. Reading back twice for comparison...'
 
