@@ -1332,3 +1332,139 @@ onto overlapping file bytes.
 fixtures only. Fixed VHDX only; no active-log replay, dynamic, or differencing
 support. No VM started; no disk attached or mounted; no production integration or
 F2/S8 readiness.
+
+---
+
+## 2026-10-10 — F2 population: S6 path-validator over-rejection repaired; funnel re-derived from the artifacts
+
+**Authority.** Operator execution mandate of 2026-10-10 (population recovery,
+defect repair, evidence preparation, validation). Records no new science and
+changes no frozen element. No task was executed, no model run, no VM/Windows
+Sandbox touched, no Q9/Q10/Q12/Q13, no `SWARM_RECEIPT_KEY`, no `.env`, no
+dependency, requirements, workflow or security-gate change.
+
+### Defect (`PROVEN`) — eligible tasks discarded for their file names
+
+`runtime_v2/services/task_readiness.py` validated a `relevant_file_set` member
+with the ASCII **allowlist** `_SAFE_PATH_RE = [A-Za-z0-9_./\-]+`, whose own
+comment claimed to reject "characters that are not path characters". It rejects
+characters that ARE path characters. Measured on the two-source union census:
+**236 of the 239 S6 refusals** were caused solely by `@` (177 offending
+entries), `+` (138), space (105), `[`/`]` (17), `(`/`)` (16), `{`/`}` (7), `$`
+(2), backtick (1), `'` (1) — every one a real upstream repository path
+(`Release Notes/511.md`, `packages/node_modules/@node-red/...`,
+``src/Moq/Mock`1.cs``, `docs/Euler's Totient/index.md`,
+`kedro/templates/project/{{ cookiecutter.repo_name }}/pyproject.toml`). Because
+S6 failed, S7 also failed with "no endpoint", so the same defect produced 241 of
+the 253 S7 refusals.
+
+### Repair
+
+The allowlist became a **denylist** in the same function: Windows-forbidden
+filename characters `<>:"|?*`, the shell separators `;` and `&`, and the Unicode
+categories `Cc/Cf/Cs/Co/Zl/Zp` (which covers the bidi-override filename-spoofing
+characters). The structural rules are untouched — absolute path, `:` (drive /
+NTFS ADS) and `..` traversal are still refused before the character check, and
+backslashes still normalise to `/`. Security-relevant refusals are therefore
+unchanged; only path characters became legal.
+
+**Regression tests.** `tests/test_task_readiness.py` gains
+`test_accepts_real_repository_paths_with_ordinary_punctuation` (10 real census
+paths) and `test_colon_in_a_path_stays_refused`; `tests/test_f2_population.py`
+gains `test_real_world_file_names_pass_s6` and
+`test_drive_separator_path_still_fails_s6`. **Proven regression:** with the
+fixed module reverted to `HEAD` bytes and the new tests unchanged, the run is
+`2 failed, 1 passed`; restored, all pass. `["a b.py"]` moved out of the
+`test_rejects_unsafe_or_empty` parameter list; `["a;rm -rf.py"]`, `["a&b.py"]`,
+`["a|b.py"]`, `["a<b>.py"]`, a tab and a U+202E override are still refused.
+
+### Population rebuilt from the pinned acquisitions (`PROVEN`)
+
+```powershell
+python -m qwen_train.f2_population_build `
+  --source swe-bench-live=data\f2_population\upstream_swe_bench_live_b51a8642\acquired.jsonl `
+  --source swe-rebench-v2=data\f2_population\upstream_swe_rebench_v2_10483de0\acquired.jsonl `
+  --out data\f2_population\union\census_union.json `
+  --rejections-out data\f2_population\union\union_report.json --cutoff 2024-01-01
+```
+
+The pre-repair report is preserved as
+`data/f2_population/union/union_report_pre_s6_fix.json` for the comparison.
+
+| Measure | before | after |
+|---|---|---|
+| raw rows / pre-screen exclusions / accepted | 33,967 / 197 / 33,770 | unchanged |
+| S6 refusals | 239 | **3** |
+| S7 refusals | 253 | **17** (14 S7-only unchanged) |
+| S10 / S4 refusals | 22,784 / 6,102 | unchanged |
+| **metadata-eligible (all gates but S8)** | **9,198** | **9,268** (+70, −0) |
+| S8 verified / admitted / analyzable | 0 / 0 / 0 | 0 / 0 / 0 |
+
+The delta is +70 and not +71 because the third surviving S6 refusal —
+`avaje__avaje-inject-859`, whose reference fix touches no non-test file — was
+one of the 71 rows that failed only S6+S7+S8.
+
+**The three remaining S6 refusals are correct:** `ash-project__ash_graphql-166`
+and `-138` contain `:` in `documentation/dsls/DSL:-AshGraphql.Resource.md`
+(drive/ADS separator; both also fail S4), and `avaje__avaje-inject-859` has an
+empty `relevant_file_set` (R8 genuinely unmet).
+
+### Reproducible counting (`PROVEN`)
+
+New `qwen_train/f2_population_report.py` re-derives the full 12-stage funnel from
+the build artifacts alone — per-source `PROVENANCE.json` plus the union report —
+with fail-closed checks (raw − exclusions == accepted, PROVENANCE row counts ==
+report row count, no accepted row that is neither admitted nor carries a failing
+rule) and a task-level `--against` diff. Stages 7–11 report **0** with
+`NOT ESTABLISHED`, because no paired-observation ledger artifact exists; nothing
+is inferred from that absence. Tests: `tests/test_f2_population_report.py` (19).
+
+```powershell
+python -m qwen_train.f2_population_report --against data\f2_population\union\union_report_pre_s6_fix.json
+```
+
+### Source provenance independently re-verified (`PROVEN IN CURRENT REVISION`)
+
+All six SHA-256 values recorded in the two `PROVENANCE.json` files were
+recomputed from disk and matched: live shards `9371afa…`/`12e4956…`, live
+`acquired.jsonl` `9f22aa0…` (542,614,787 B); rebench shard `0e0bf93…`
+(428,839,266 B), rebench `acquired.jsonl` `577b56f…` (2,616,627,580 B). Row and
+identity counts re-derived by streaming: live 1,888 rows / 1,887 unique ids;
+rebench 32,079 rows / 32,079 unique ids.
+
+**Overlap (exact `instance_id`):** intersection **195**; live-only 1,692;
+rebench-only 31,884. The 195 shared ids are exactly the
+`conflicting_cross_source_priority_selected` exclusions (live kept, rebench copy
+recorded).
+
+**Duplicate `conan-io__conan-18153` — a genuine repeated identity, NOT an
+identity-normalization collision.** Both rows are `swe-bench-live`; 16 of 18
+fields are byte-identical including `patch`, `base_commit`, `FAIL_TO_PASS`,
+`PASS_TO_PASS`, `test_patch` and `problem_statement`. Only `all_hints_text`
+(2,394 vs 7,065 bytes — one is a truncation of the other) and `test_cmds`
+(`['pytest -rA']` vs `['python -m pytest -rA .']`) differ. Both source rows are
+preserved unmodified in `acquired.jsonl` and the two exclusions are recorded in
+`pre_screen_exclusions`. Under the F2-IMPL-AUTH-031 within-source conflict rule
+both copies are excluded, so **1 identity is lost**; recovering it needs a
+pre-specified tie-break and is `REQUIRES AUTHORIZATION`.
+
+**S4 and S10 verified genuine, not mapping defects.** `PASS_TO_PASS` is a real
+JSON list in `acquired.jsonl` (32,079 lists, 6,110 of them empty — S4 rejects
+6,102 after union exclusions), so the value is not lost by normalisation. The
+S10 refusals are exactly the pre-2024 rows: rebench 22,780 (2014:3 … 2023:5,227;
+2024:5,991; 2025:3,308) plus live 4.
+
+### Verification
+
+`pytest tests/ -k f2` → **1706 passed, 5 skipped, 3091 deselected**. Focused
+runs: `test_task_readiness`, `test_f2_population`, `test_f2_population_report`,
+`test_f2_population_union`, `test_f2_population_recovery`, `test_f2_endpoint`,
+`test_f2_endpoint_derivation`, `test_f2_readiness`, `test_f2_readiness_gate`,
+`test_task_environment_contract`, `test_f2_execution_boundary`,
+`test_f2_integration`, `test_f2_evidence_chain`, `test_f2_orchestrator` all
+green. `ruff check --select E9,F` clean on every changed file and on the CI
+scope (`swarm_os runtime_v2 organism_console`).
+
+**Unchanged:** F0/F1, `FROZEN_MIN_PAIRS = 300`, the S1–S10 rules, the 2024-01-01
+contamination proxy, `admitted = 0`, and every execution boundary. **F2 is NOT
+ready; no S8 evidence exists.**
