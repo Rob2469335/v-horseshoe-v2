@@ -328,10 +328,26 @@ def test_tracked_qdrant_config_agrees_with_the_canonical_root():
     # contract exists to reject.
     expected = os.path.normcase(os.path.normpath(str(ROOT / CANONICAL_STORAGE_DIR)))
     for raw in paths:
-        got = os.path.normcase(os.path.normpath(raw.strip().strip("'\"")))
-        assert got == expected, (
-            f"tracked Qdrant config contradicts the canonical root: {raw!r} "
-            f"(must be {expected}; see AGENTS.md section 4)"
+        value = raw.strip().strip("'\"")
+        got = os.path.normcase(os.path.normpath(value))
+        if got == expected:
+            continue
+        # On a non-canonical host (the Linux CI runner) the tracked config holds
+        # the operator's ABSOLUTE canonical root (documented above and in
+        # AGENTS.md section 4), which cannot equal this checkout's root. Accept
+        # the operator's absolute path while still rejecting the proven-bad
+        # shapes: a relative value, `qdrant_local`, or the inactive .qdrant/storage.
+        p = Path(value)
+        is_abs = p.is_absolute() or (len(value) >= 2 and value[0].isalpha() and value[1] == ":")
+        assert is_abs, f"tracked Qdrant config storage_path must be absolute: {raw!r}"
+        assert p.name == CANONICAL_STORAGE_DIR, (
+            f"tracked Qdrant config storage_path must end with {CANONICAL_STORAGE_DIR}: {raw!r}"
+        )
+        assert p.parent.name != ".qdrant", (
+            f"tracked Qdrant config must not point at .qdrant/storage: {raw!r}"
+        )
+        assert "qdrant_local" not in p.parts, (
+            f"tracked Qdrant config must not point at qdrant_local: {raw!r}"
         )
     # A 0.0.0.0 bind would re-expose the unauthenticated store to the LAN.
     hosts = re.findall(r"host:\s*([0-9.]+)", cfg)

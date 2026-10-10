@@ -176,8 +176,19 @@ $proxyJob = Start-Job -ScriptBlock {
     powershell.exe -ExecutionPolicy Bypass -File .\start-proxy.ps1
 } -ArgumentList $root, $env:SWARM_LOCAL_MODEL, $env:SWARM_SPEC_DECODE, $env:SWARM_SPEC_TYPE, $env:SWARM_DRAFT_MODEL
 
-Start-Sleep -Seconds 8
-Write-Host "llama.cpp microservices ✔" -ForegroundColor Green
+# Readiness is EVIDENCE-BASED: poll the proxy's OWN existing endpoint
+# (GET /v1/models on :8080) instead of trusting a fixed sleep. The success
+# message is printed only when readiness was actually observed.
+$proxyReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+    try { Invoke-RestMethod "http://127.0.0.1:8080/v1/models" | Out-Null; $proxyReady = $true; break }
+    catch { Start-Sleep 1 }
+}
+if ($proxyReady) {
+    Write-Host "Proxy ✔  http://127.0.0.1:8080/v1 (llama.cpp microservices)" -ForegroundColor Green
+} else {
+    Write-Host "Proxy FAILED  (:8080 did not answer GET /v1/models)" -ForegroundColor Red
+}
 
 # STEP 3 - Qdrant (wait until actually ready)
 Write-Host "`n[STEP 3] Starting Qdrant..." -ForegroundColor Yellow
@@ -209,10 +220,12 @@ $env:QDRANT__SERVICE__HOST = "127.0.0.1"
 # Canonical root: <repo>\storage — see AGENTS.md §4.
 $env:QDRANT__STORAGE__STORAGE_PATH = Join-Path $root "storage"
 Start-Process $qdrantPath -WindowStyle Hidden
+$qdrantOk = $false
 for ($i = 0; $i -lt 30; $i++) {
-    try { Invoke-RestMethod "http://127.0.0.1:6333" | Out-Null; Write-Host "Qdrant ✔" -ForegroundColor Green; break }
+    try { Invoke-RestMethod "http://127.0.0.1:6333" | Out-Null; $qdrantOk = $true; Write-Host "Qdrant ✔" -ForegroundColor Green; break }
     catch { Write-Host "  waiting for Qdrant... ($i)" -ForegroundColor DarkGray; Start-Sleep 1 }
 }
+if (-not $qdrantOk) { Write-Host "Qdrant FAILED  (:6333 did not respond after 30s)" -ForegroundColor Red }
 
 # STEP 4 - Backend (background job)
 Write-Host "`n[STEP 4] Starting Backend..." -ForegroundColor Yellow
@@ -273,15 +286,24 @@ Write-Host "DEBUG PYTHONPATH=$env:PYTHONPATH"
     $logFile = Join-Path $logDir "backend.log"
     if (Test-Path $logFile) {
       $logBytes = (Get-Item $logFile).Length
-      if ($logBytes -gt 10MB) { Move-Item -Path $logFile -Destination "$logFile.old" -Force }
+      if ($logBytes -gt 10MB) { Move-Item -Path $logFile -Destination (Join-Path $logDir "backend.log.old") -Force }
     }
+    # Import probe runs BEFORE uvicorn: an ImportError here is exactly the boot
+    # failure the log exists to capture, so it tees to backend.log too (console
+    # output still flows via Tee-Object -> Receive-Job).
+    & $pythonPath -c "import os,sys,importlib,importlib.util; importlib.util.find_spec('swarm_os.app.main')" 2>&1 | Tee-Object -FilePath $logFile -Append
     & $pythonPath -m uvicorn --app-dir $r swarm_os.app.main:app --host 127.0.0.1 --port 8000 2>&1 | Tee-Object -FilePath $logFile -Append
 } -ArgumentList $root, $backendEnv
 
+$backendOk = $false
 for ($i = 0; $i -lt 20; $i++) {
-    try { Invoke-RestMethod "http://127.0.0.1:8000/health" | Out-Null; break } catch { Start-Sleep 1 }
+    try { Invoke-RestMethod "http://127.0.0.1:8000/health" | Out-Null; $backendOk = $true; break } catch { Start-Sleep 1 }
 }
-Write-Host "Backend ✔  http://127.0.0.1:8000" -ForegroundColor Green
+if ($backendOk) {
+    Write-Host "Backend ✔  http://127.0.0.1:8000" -ForegroundColor Green
+} else {
+    Write-Host "Backend FAILED  (:8000/health did not respond after 20s)" -ForegroundColor Red
+}
 
 # STEP 4.5 - MCP Servers
 Write-Host "`n[STEP 4.5] Starting MCP Servers..." -ForegroundColor Yellow
@@ -317,17 +339,32 @@ $frontendJob = Start-Job -ScriptBlock {
     & npm run dev -- --host 127.0.0.1 2>&1
 } -ArgumentList "$root\organism-console"
 
+$frontendOk = $false
 for ($i = 0; $i -lt 20; $i++) {
-    try { Invoke-RestMethod "http://127.0.0.1:5173" | Out-Null; break } catch { Start-Sleep 1 }
+    try { Invoke-RestMethod "http://127.0.0.1:5173" | Out-Null; $frontendOk = $true; break } catch { Start-Sleep 1 }
 }
-Write-Host "Frontend ✔  http://127.0.0.1:5173" -ForegroundColor Green
+if ($frontendOk) {
+    Write-Host "Frontend ✔  http://127.0.0.1:5173" -ForegroundColor Green
+} else {
+    Write-Host "Frontend FAILED  (:5173 did not respond after 20s)" -ForegroundColor Red
+}
 
-Write-Host "`n=== All services up — streaming logs (Ctrl+C to stop) ===" -ForegroundColor Cyan
-Write-Host "Backend:   http://127.0.0.1:8000" -ForegroundColor Gray
-Write-Host "Qdrant:    http://127.0.0.1:6333" -ForegroundColor Gray
-Write-Host "llama.cpp: http://127.0.0.1:8080" -ForegroundColor Gray
-Write-Host "Frontend:  http://127.0.0.1:5173" -ForegroundColor Gray
-Write-Host ""
+$allOk = $proxyReady -and $qdrantOk -and $backendOk -and $frontendOk
+if ($allOk) {
+    Write-Host "`n=== All services up — streaming logs (Ctrl+C to stop) ===" -ForegroundColor Cyan
+    Write-Host "Backend:   http://127.0.0.1:8000" -ForegroundColor Gray
+    Write-Host "Qdrant:    http://127.0.0.1:6333" -ForegroundColor Gray
+    Write-Host "llama.cpp: http://127.0.0.1:8080" -ForegroundColor Gray
+    Write-Host "Frontend:  http://127.0.0.1:5173" -ForegroundColor Gray
+    Write-Host ""
+} else {
+    Write-Host "`n=== FAILURES — one or more services did not become ready ===" -ForegroundColor Red
+    if (-not $proxyReady)  { Write-Host "  proxy:    FAILED" -ForegroundColor Red }
+    if (-not $qdrantOk)    { Write-Host "  qdrant:   FAILED" -ForegroundColor Red }
+    if (-not $backendOk)   { Write-Host "  backend:  FAILED" -ForegroundColor Red }
+    if (-not $frontendOk)  { Write-Host "  frontend: FAILED" -ForegroundColor Red }
+    Write-Host ""
+}
 
 try {
     while ($true) {

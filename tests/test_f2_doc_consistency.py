@@ -287,7 +287,18 @@ class TestFrozenAndHistoricalAreNotRewritten:
     def test_legacy_agent_file_is_untouched_by_this_pass(self):
         import hashlib
 
-        digest = hashlib.sha256((REPO / "AGENTS_LEGACY.md").read_bytes()).hexdigest().upper()
+        # Hash with line endings normalized to CRLF. The immutable digest
+        # recorded in AGENTS.md is the CRLF form, but `.gitattributes`
+        # (`*.md text eol=lf`) checks the file out as LF on the Linux CI runner,
+        # so a raw byte hash is platform-dependent. Content changes still alter
+        # the digest; only the checkout's newline representation is ignored.
+        raw = (
+            (REPO / "AGENTS_LEGACY.md")
+            .read_bytes()
+            .replace(b"\r\n", b"\n")
+            .replace(b"\n", b"\r\n")
+        )
+        digest = hashlib.sha256(raw).hexdigest().upper()
         assert digest == (
             "F0DDF84CC876EDD8574AB63568F92045F2798F2AA3F40FF306939E42A1E1731E"
         ), "AGENTS_LEGACY.md is immutable and must not change"
