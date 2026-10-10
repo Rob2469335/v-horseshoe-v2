@@ -22,16 +22,33 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
+import unicodedata
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
 SCHEMA_VERSION = "ej-task-readiness/1"
 
-#: A safe, relative, forward-slash repo path. Rejects absolute paths, drive
-#: letters, ``..`` traversal, and characters that are not path characters.
-_SAFE_PATH_RE = re.compile(r"[A-Za-z0-9_./\-]+")
+#: Characters refused inside a repo-relative path: the characters Windows forbids
+#: in a file name (``<>:"|?*`` — ``:`` is additionally caught by the structural
+#: rule below, ``\`` is normalised to ``/`` first) plus the shell separator and
+#: redirection characters ``;`` and ``&``.  This is a DENYLIST on purpose.
+#:
+#: It replaces an allowlist, ``[A-Za-z0-9_./\\-]+``, whose own comment claimed to
+#: reject "characters that are not path characters" while rejecting characters
+#: that ARE path characters: space, ``@``, ``+``, ``[``/``]``, ``(``/``)``,
+#: ``{``/``}``, ``$``, the backtick and ``'``.  Every one of those occurs in real
+#: upstream repository paths (``Release Notes/511.md``,
+#: ``packages/@node-red/...``, ``src/Moq/Mock`1.cs``,
+#: ``docs/Euler's Totient/index.md``, ``{{ cookiecutter.repo_name }}/...``), so
+#: the allowlist silently refused 236 eligible tasks at screen S6 (measured on
+#: the two-source F2 union census) purely because of their file names.
+_UNSAFE_PATH_CHARS = frozenset('<>:"|?*;&')
+
+#: Unicode categories that can never be part of a usable path: control (Cc),
+#: format (Cf — includes the RTL-override characters used to spoof file names),
+#: surrogate (Cs), private use (Co) and the line/paragraph separators (Zl, Zp).
+_UNSAFE_PATH_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
 
 
 class TaskReadinessError(ValueError):
@@ -47,6 +64,14 @@ class ReadinessGateError(TaskReadinessError):
     """
 
 
+def _has_unsafe_character(text: str) -> bool:
+    return any(
+        ch in _UNSAFE_PATH_CHARS
+        or unicodedata.category(ch) in _UNSAFE_PATH_CATEGORIES
+        for ch in text
+    )
+
+
 def _normalize_path(p: object) -> str:
     if not isinstance(p, str):
         raise TaskReadinessError(f"relevant_file_set entry is not a string: {p!r}")
@@ -55,7 +80,7 @@ def _normalize_path(p: object) -> str:
         raise TaskReadinessError("relevant_file_set entry is empty")
     if norm.startswith("/") or ":" in norm or ".." in PurePosixPath(norm).parts:
         raise TaskReadinessError(f"unsafe relevant_file_set entry: {p!r}")
-    if not _SAFE_PATH_RE.fullmatch(norm):
+    if _has_unsafe_character(norm):
         raise TaskReadinessError(f"unsafe relevant_file_set entry: {p!r}")
     return norm
 

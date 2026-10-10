@@ -44,12 +44,51 @@ class TestRelevantFileSet:
         ["C:/Windows/system32"],
         ["../secret.py"],
         ["a/../../b.py"],
-        ["a b.py"],
-        ["a;rm -rf.py"],
+        ["a;rm -rf.py"],   # shell separator
+        ["a&b.py"],        # shell separator
+        ["a|b.py"],        # Windows-forbidden, shell pipe
+        ["a<b>.py"],       # Windows-forbidden
+        ["a\tb.py"],       # control character
+        ["a\u202eb.py"],   # format character (RTL override, Cf)
     ])
     def test_rejects_unsafe_or_empty(self, bad):
         with pytest.raises(TaskReadinessError):
             canonical_relevant_file_set(bad)
+
+    def test_accepts_real_repository_paths_with_ordinary_punctuation(self):
+        """Regression for the S6 over-rejection.
+
+        An ASCII allowlist used to refuse any path containing space, ``@``,
+        ``+``, ``[``, ``]``, ``(``, ``)``, ``{``, ``}``, ``$``, a backtick or
+        ``'`` — characters that are path characters and that occur in real
+        upstream repositories.  Measured on the two-source F2 union census,
+        that alone discarded 236 eligible tasks at screen S6.  Every entry
+        below is a path taken from that census; all must be accepted.
+        """
+        paths = [
+            "Release Notes/511.md",
+            "docs/Configuration Files.md",
+            "packages/node_modules/@node-red/nodes/core/function.js",
+            "etc/config/c++.amazon.properties",
+            "src/routes/knowledge/[id]/+page.svelte",
+            "Sources/ArgumentParser/Parsable Properties/Flag.swift",
+            "kedro/templates/project/{{ cookiecutter.repo_name }}/pyproject.toml",
+            "packages/kit/scripts/special-types/$env+dynamic+private.md",
+            "src/Moq/Mock`1.cs",
+            "docs/Euler's Totient/index.md",
+        ]
+        assert tuple(canonical_relevant_file_set(paths)) == tuple(sorted(paths))
+
+    def test_colon_in_a_path_stays_refused(self):
+        """The structural rules are unchanged: ``:`` is a drive/ADS separator.
+
+        The two census rows whose refusal this character causes are still
+        refused — the repair widens nothing structural.
+        """
+        with pytest.raises(TaskReadinessError):
+            canonical_relevant_file_set(
+                ["documentation/dsls/DSL:-AshGraphql.Resource.md"]
+            )
 
 
 class TestTaskReadiness:

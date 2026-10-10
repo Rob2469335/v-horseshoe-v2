@@ -208,6 +208,37 @@ class TestR8IsEnforcedNotDefaulted:
         e = _entry(relevant_file_set_hash="0" * 64)
         assert _rule(e, "S6_relevant_file_set") is False
 
+    def test_real_world_file_names_pass_s6(self):
+        """Regression for the S6 over-rejection.
+
+        The canonical path validator used to refuse any relevant_file_set
+        member containing space, ``@``, ``+``, ``[``, ``]``, ``(``, ``)``,
+        ``{``, ``}``, ``$``, a backtick or ``'``.  Measured on the two-source
+        F2 union census, that alone discarded 236 eligible tasks at S6 (of 239
+        total S6 refusals) purely because of their file names.  Every path
+        below is taken from that census.
+        """
+        e = _entry(
+            relevant_file_set=[
+                "Release Notes/511.md",
+                "packages/node_modules/@node-red/nodes/core/function.js",
+                "src/Moq/Mock`1.cs",
+                "kedro/templates/project/{{ cookiecutter.repo_name }}/pyproject.toml",
+                "docs/Euler's Totient/index.md",
+            ]
+        )
+        assert _rule(e, "S6_relevant_file_set") is True
+        assert _rule(e, "S7_source_not_test") is True
+        assert e.metadata_eligible is True
+
+    def test_drive_separator_path_still_fails_s6(self):
+        """The structural half of the validator is unchanged: ``:`` is refused."""
+        e = _entry(
+            relevant_file_set=["documentation/dsls/DSL:-AshGraphql.Resource.md"]
+        )
+        assert _rule(e, "S6_relevant_file_set") is False
+        assert e.admitted is False
+
 
 class TestOtherRules:
     @pytest.mark.parametrize(
