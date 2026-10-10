@@ -1500,3 +1500,77 @@ exactly — 1,886 entries, 1,882 metadata-eligible, 4 S10 refusals, 0 S6 refusal
 **Verification after both repairs:** `pytest tests/ -k f2` → **1713 passed, 5
 skipped, 3091 deselected**; `ruff check --select E9,F` clean on the CI scope and
 on every changed file.
+
+---
+
+## 2026-10-10 (later) — Evaluator-compatibility census, registration integrity, S8 channel outcome guard, pilot package
+
+**Authority.** Implementation and verification only. No task executed, no F2 arm,
+no model inference, no VM or disk attached or reconfigured, no network/firewall/
+ACL/account change, no secret or `.env` access, no frozen protocol or authority
+record modified. Baseline `b84faae3`.
+
+### Evaluator contract, read from source (`PROVEN`)
+
+`qwen_train/f2_evaluator.py` is **pytest-only**: `augment_test_command` appends
+`--junitxml=<path>` and refuses a command that already carries one;
+`nodeid_to_junit_identity` **raises** unless the id is `<path>::[<Class>::]<test>`
+with non-empty segments — for **both** FAIL_TO_PASS and PASS_TO_PASS; the verdict
+is `pass` only when every declared FAIL_TO_PASS node appears as `passed`, and a
+node absent from the JUnit is `missing` (so an unrun test cannot pass).
+Identity is bound to the module bytes by `implementation_digest()`.
+
+### Population census over the pinned inputs (`PROVEN`, `data/…/union` sha `fd523a9b…`)
+
+| Stage | Count |
+|---|---|
+| raw source rows | 33,967 |
+| accepted | 33,770 |
+| metadata-eligible | 9,268 |
+| **evaluator-compatible** (pytest cmd + pytest node ids) | **3,870** |
+| Python-confirmed compatible (node path ends `.py`) | 3,828 |
+| in the **current** registered order's first 30 / first 300 | **0 / 192** |
+| S8-complete / admitted / analyzable | 0 / 0 / 0 |
+
+Component counts among the 9,268 metadata-eligible: pytest-compatible command
+3,886 · FAIL_TO_PASS all pytest node ids 4,500 · PASS_TO_PASS all pytest node ids
+4,356 · all three 3,870. By source (compatible): swe-bench-live 1,800 ·
+swe-rebench-v2 2,070. The current registered order's head is dominated by recent
+SWE-rebench-V2 rows whose declared outcomes are log-parser identifiers, so it
+contains **zero** evaluator-compatible tasks in its first 30.
+
+**PROPOSED registration** (evaluator-compatible subset, same rule/ordering,
+`content_sha256 = c0e754a578a84946b60a4d5d60d2f0ac8c0a0aef5763e2957123a9a4e3ffe1b4`,
+3,870 ordered, 0 excluded) written to `data/f2_population/proposed/` and labelled
+**PROPOSED — REQUIRES ROB'S AUTHORIZATION**. The operative registration is
+unchanged.
+
+### Registration digest integrity (`PROVEN`, no code change needed)
+
+New `tests/test_f2_task_plan_digest_binding.py` (12 cases) proves `content_sha256`
+changes for `created_at`, `repo`, `language`, `test_cmd` (via
+`test_cmd_sha256`), ordering rule, `top_n`, pinned input digest and exclusions —
+each with `instance_id` held constant — and that identical inputs reproduce every
+artifact digest while `generated_at` is excluded. **The implementation already
+satisfied the contract; no code was changed for this workstream.**
+
+### S8 channel defect and repair (`PROVEN`, regression-proven)
+
+Reproduced: a `f2_s8_channel_v1` payload with `status: "completed"` (or
+`"failed"`) and no execution block validated as OK — a transport record asserting
+a finished execution with zero execution evidence. Fixed in
+`qwen_train/f2_s8_channel.py`: outcome statuses are now refused with
+`OUTCOME_STATUS_NOT_TRANSPORTABLE`; lifecycle states (`planned`/`attempted`/
+`rejected`/`not_established`) remain transportable. Regression proof: with the
+guard removed the two new tests fail (`assert 'OK' ==
+'OUTCOME_STATUS_NOT_TRANSPORTABLE'`); restored, all pass. The `f2_s8_record`
+wire format is unchanged.
+
+### Pilot package
+
+`docs/F2_S8_EXECUTION_AND_PILOT_PACKAGE.md` — two-boundary design, measured
+capacity (171.77 GB free disk, 31.43 GB RAM, one-sequential-VM recommendation),
+resource limits, wheelhouse limits, evidence transport, and the five-task
+Python-only pilot (`openai__openai-agents-python-1636`, `…-1633`,
+`HypothesisWorks__hypothesis-4532`, `python__mypy-19767`,
+`stanfordnlp__dspy-8739`). **PROPOSED — NOT EXECUTED — REQUIRES AUTHORIZATION.**
