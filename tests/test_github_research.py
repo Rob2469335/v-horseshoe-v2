@@ -15,23 +15,6 @@ import pytest
 from swarm_os.lib.mcp.mcp_client import _merge_env
 
 
-@pytest.fixture
-def _real_subprocess():
-    """Give the requesting test the genuine subprocess.Popen.
-
-    The conftest's autouse global mock patches subprocess.Popen, which on POSIX
-    breaks asyncio.create_subprocess_exec (the selector transport wraps
-    subprocess.Popen there; Windows uses CreateProcess and is unaffected), so the
-    native `gh` path (_run_gh) cannot spawn on the Linux runner.
-    """
-    from unittest.mock import patch
-
-    from tests.conftest import _REAL_POPEN
-
-    with patch("subprocess.Popen", _REAL_POPEN):
-        yield
-
-
 class _FakeProc:
     def __init__(self, out: bytes, rc: int = 0, err: bytes = b""):
         self._out = out
@@ -148,7 +131,7 @@ def test_merge_env_none_cfg_returns_base_copy():
     assert base == {"A": "1"}
 
 
-def test_readonly_github_modes_are_allow_not_confirm(_real_subprocess):
+def test_readonly_github_modes_are_allow_not_confirm(monkeypatch):
     """Read-only github_research (discover/verify) must classify as ALLOW so a
     research chain runs without a human approval; install stays gated.
 
@@ -157,16 +140,26 @@ def test_readonly_github_modes_are_allow_not_confirm(_real_subprocess):
     policy's github_research branch (which ALLOWs discover/verify) never fired
     and every read-only call was over-gated to CONFIRM.
     """
-    from runtime_v2.services.tool_executor import run
+    from runtime_v2.services import tool_executor as te
     from swarm_os.services.approval_registry import ALLOW, agent_tool_policy
 
     assert agent_tool_policy("github_research", "discover") == ALLOW
     assert agent_tool_policy("github_research", "verify") == ALLOW
     assert agent_tool_policy("github_research", "install") != ALLOW
 
+    # End-to-end dispatch with a DETERMINISTIC gh result: the live `gh` CLI
+    # refuses to run inside a GitHub Actions workflow without GH_TOKEN, so the
+    # subprocess is stubbed. This still exercises run()'s 'mode' extraction ->
+    # github_research policy ALLOW -> handler path (the C1 regression) without a
+    # network/credential dependency.
+    async def _fake_gh(args, timeout=60.0):
+        return {"ok": True, "out": [{"fullName": "ollama/ollama"}], "rc": 0}
+
+    monkeypatch.setattr(te, "_run_gh", _fake_gh)
+
     # End-to-end: discover (read-only) must NOT request confirmation.
     first = asyncio.run(
-        run("github_research", {"mode": "discover", "query": "ollama"}, auth=None)
+        te.run("github_research", {"mode": "discover", "query": "ollama"}, auth=None)
     )
     assert first.get("status") != "confirmation_required", first
     assert first.get("ok") is True
