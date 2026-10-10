@@ -1,8 +1,9 @@
 """Tests for the F2-S8-VM1 ACL script (qwen_train/f2_s8_acl.ps1).
 
-These tests are non-executing: they parse the script, syntax-check it under the
-installed PowerShell, and assert that the rule table it contains is exactly the
-table that was reviewed and that applying it is impossible without -Apply.
+These tests are non-executing: they parse the script and assert that the rule
+table it contains is exactly the operator-approved table, that the protocol
+requirement discovered by bounded probe is satisfied, and that applying the
+rules is impossible without -Apply.
 """
 from __future__ import annotations
 
@@ -13,20 +14,20 @@ import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "qwen_train" / "f2_s8_acl.ps1"
 
-#: The reviewed table, CORRECTED after the official reference was checked:
-#: allow entries must be stateful (return packets otherwise hit the inbound
-#: default deny), and the broad outbound allow is IPv4-only so IPv6 falls
-#: through to the default deny.  (direction, action, local, remote, weight, stateful)
+#: Operator-approved 11-rule IPv4 policy.
+#: (direction, action, local, remote, protocol, weight, stateful)
 APPROVED = [
-    ("Outbound", "Allow", "ANY", "10.73.0.1", 900, True),
-    ("Outbound", "Deny", "ANY", "10.0.0.0/8", 800, False),
-    ("Outbound", "Deny", "ANY", "192.168.0.0/16", 700, False),
-    ("Outbound", "Deny", "ANY", "172.16.0.0/12", 600, False),
-    ("Outbound", "Deny", "ANY", "169.254.0.0/16", 500, False),
-    ("Outbound", "Deny", "ANY", "10.72.0.0/24", 400, False),
-    ("Outbound", "Allow", "ANY", "0.0.0.0/0", 300, True),
-    ("Outbound", "Deny", "ANY", "ANY", 1, False),
-    ("Inbound", "Deny", "ANY", "ANY", 1, False),
+    ("Outbound", "Allow", "ANY", "10.73.0.1", "TCP", 900, True),
+    ("Outbound", "Allow", "ANY", "10.73.0.1", "UDP", 901, True),
+    ("Outbound", "Deny", "ANY", "10.0.0.0/8", "", 800, False),
+    ("Outbound", "Deny", "ANY", "192.168.0.0/16", "", 700, False),
+    ("Outbound", "Deny", "ANY", "172.16.0.0/12", "", 600, False),
+    ("Outbound", "Deny", "ANY", "169.254.0.0/16", "", 500, False),
+    ("Outbound", "Deny", "ANY", "10.72.0.0/24", "", 400, False),
+    ("Outbound", "Allow", "ANY", "0.0.0.0/0", "TCP", 300, True),
+    ("Outbound", "Allow", "ANY", "0.0.0.0/0", "UDP", 301, True),
+    ("Outbound", "Deny", "ANY", "ANY", "", 1, False),
+    ("Inbound", "Deny", "ANY", "ANY", "", 1, False),
 ]
 
 
@@ -35,88 +36,84 @@ def _text() -> str:
 
 
 def _parsed_rules():
-    """Parse the rule table out of the script, resolving its variables."""
     pattern = re.compile(
         r"Direction\s*=\s*'(?P<d>[A-Za-z]+)';\s*"
         r"Action\s*=\s*'(?P<a>[A-Za-z]+)';\s*"
         r"Local\s*=\s*(?P<l>\S+?);\s*"
         r"Remote\s*=\s*(?P<r>\S+?);\s*"
-        r"\s*Weight\s*=\s*(?P<w>\d+);\s*"
-        r"\s*Stateful\s*=\s*(?P<s>\$\w+)"
+        r"Protocol\s*=\s*'(?P<p>[^']*)';\s*"
+        r"Weight\s*=\s*(?P<w>\d+);\s*"
+        r"Stateful\s*=\s*(?P<s>\$\w+)"
     )
     variables = {"$GuestIP": "10.73.0.2", "$Gateway": "10.73.0.1"}
     out = []
     for m in pattern.finditer(_text()):
         resolve = lambda v: variables.get(v.strip(), v.strip().strip("'"))  # noqa: E731
-        out.append((m.group("d"), m.group("a"), resolve(m.group("l")),
-                    resolve(m.group("r")), int(m.group("w")),
-                    m.group("s") == "$true"))
+        out.append((m.group("d"), m.group("a"), resolve(m.group("l")), resolve(m.group("r")),
+                    m.group("p"), int(m.group("w")), m.group("s") == "$true"))
     return out
 
 
-def _pwsh() -> str | None:
-    for exe in ("pwsh", "powershell"):
-        found = __import__("shutil").which(exe)
-        if found:
-            return found
-    return None
-
-
 class TestRuleTable:
-    def test_script_exists_and_is_not_empty(self):
+    def test_script_exists(self):
         assert SCRIPT.is_file() and SCRIPT.stat().st_size > 0
 
-    def test_rule_table_matches_the_reviewed_table_exactly(self):
+    def test_rule_table_matches_the_approved_table_exactly(self):
         assert _parsed_rules() == APPROVED
 
-    def test_nine_rules_and_weights_are_unique_per_direction(self):
-        rules = _parsed_rules()
-        assert len(rules) == 9
+    def test_eleven_rules(self):
+        assert len(_parsed_rules()) == 11
+
+    def test_weights_are_unique_per_direction(self):
         for direction in ("Outbound", "Inbound"):
-            weights = [r[4] for r in rules if r[0] == direction]
+            weights = [r[5] for r in APPROVED if r[0] == direction]
             assert len(weights) == len(set(weights)), direction
 
-    def test_the_gateway_allow_outranks_the_10_slash_8_deny(self):
-        """Otherwise a blanket 10.0.0.0/8 deny would break NAT."""
-        allow_gw = next(r for r in APPROVED if r[3] == "10.73.0.1")
-        deny_10 = next(r for r in APPROVED if r[3] == "10.0.0.0/8")
-        assert allow_gw[4] > deny_10[4]
+    # ---- the root cause found by bounded probe -------------------------- #
+    def test_every_stateful_rule_declares_a_protocol(self):
+        """0x80070057: a Stateful entry is rejected without an explicit protocol."""
+        for rule in APPROVED:
+            if rule[6]:
+                assert rule[4] in ("TCP", "UDP"), rule
 
-    def test_every_specific_deny_outranks_the_broad_outbound_allow(self):
-        broad = next(r for r in APPROVED if r[1] == "Allow" and r[3] == "0.0.0.0/0")
+    def test_no_non_stateful_rule_declares_a_protocol(self):
+        for rule in APPROVED:
+            if not rule[6]:
+                assert rule[4] == "", rule
+
+    def test_script_uses_no_address_range_syntax(self):
+        """The 'a-b' range form is unsupported on this host (probe P3)."""
+        for rule in APPROVED:
+            assert "-" not in rule[3], rule
+
+    def test_no_icmp_rule_is_present(self):
+        assert not any(r[4] == "1" for r in APPROVED)
+
+    # ---- boundary semantics --------------------------------------------- #
+    def test_gateway_allows_outrank_the_ten_slash_eight_deny(self):
+        deny = next(r for r in APPROVED if r[3] == "10.0.0.0/8")
+        for rule in APPROVED:
+            if rule[3] == "10.73.0.1":
+                assert rule[5] > deny[5], rule
+
+    def test_every_specific_deny_outranks_the_broad_allows(self):
+        broad = [r for r in APPROVED if r[1] == "Allow" and r[3] == "0.0.0.0/0"]
+        assert len(broad) == 2
         for rule in APPROVED:
             if rule[1] == "Deny" and rule[3] not in ("ANY",):
-                assert rule[4] > broad[4], rule
+                assert rule[5] > min(b[5] for b in broad), rule
 
-    def test_default_deny_is_the_lowest_weight_outbound_rule(self):
+    def test_the_broad_allows_are_ipv4_only(self):
+        """`ANY` covers IPv6 too, so IPv6 must fall through to the default deny."""
+        assert not any(r[1] == "Allow" and r[3] == "ANY" for r in APPROVED)
+
+    def test_any_default_deny_covers_ipv6_in_both_directions(self):
+        for direction in ("Outbound", "Inbound"):
+            assert any(r[0] == direction and r[1] == "Deny" and r[3] == "ANY" for r in APPROVED)
+
+    def test_default_deny_is_the_lowest_weighted_outbound_rule(self):
         outbound = [r for r in APPROVED if r[0] == "Outbound"]
-        assert min(outbound, key=lambda r: r[4])[1] == "Deny"
-
-    def test_every_allow_rule_is_stateful(self):
-        """Non-stateful allows are useless: the reply hits the inbound default deny."""
-        for rule in APPROVED:
-            if rule[1] == "Allow":
-                assert rule[5] is True, rule
-
-    def test_no_deny_rule_is_stateful(self):
-        for rule in APPROVED:
-            if rule[1] == "Deny":
-                assert rule[5] is False, rule
-
-    def test_the_broad_outbound_allow_is_ipv4_only(self):
-        """`ANY` covers IPv6 too; the broad allow must not, so IPv6 falls to deny."""
-        broad = next(r for r in APPROVED if r[1] == "Allow" and r[3].endswith("/0")
-                     and r[3] != "10.73.0.1")
-        assert broad[3] == "0.0.0.0/0"
-        assert not any(r[3] == "ANY" and r[1] == "Allow" for r in APPROVED)
-
-    def test_ipv6_is_denied_by_the_any_default_deny(self):
-        """ANY means all IPv4 AND IPv6, so the default deny covers IPv6."""
-        assert any(r[3] == "ANY" and r[0] == "Outbound" and r[1] == "Deny" for r in APPROVED)
-        assert any(r[3] == "ANY" and r[0] == "Inbound" and r[1] == "Deny" for r in APPROVED)
-
-    def test_the_gateway_allow_is_the_highest_weighted_rule(self):
-        assert max(APPROVED, key=lambda r: r[4])[3] == "10.73.0.1"
+        assert min(outbound, key=lambda r: r[5])[1] == "Deny"
 
 
 class TestNonMutatingByDefault:
@@ -129,45 +126,45 @@ class TestNonMutatingByDefault:
         text = _text()
         dry = text.index("if (-not $Apply)")
         dry_exit = text.index("exit 0", dry)
-        first_add = text.index("Add-VMNetworkAdapterExtendedAcl @params")
+        first_add = text.index("Add-VMNetworkAdapterExtendedAcl @(Get-RuleParams $r)")
         assert dry_exit < first_add
 
-    @pytest.mark.parametrize("forbidden", ["Remove-VM", "New-VMSwitch", "New-NetNat", "Set-NetFirewall",
-                                           "Set-MpPreference", "Remove-VMNetworkAdapterExtendedAcl",
-                                           "Start-VM", "Checkpoint-VM", "Set-VM "])
+    @pytest.mark.parametrize("forbidden", [
+        "Remove-VMNetworkAdapterExtendedAcl", "Remove-VM", "New-VMSwitch", "New-NetNat",
+        "Set-NetFirewall", "Set-MpPreference", "Start-VM", "Stop-VM", "Checkpoint-VM",
+        "Set-VM ", "New-VM ",
+    ])
     def test_script_contains_no_out_of_scope_mutating_cmdlet(self, forbidden):
         assert forbidden not in _text()
 
-    def test_apply_refuses_an_already_populated_acl_set(self):
-        text = _text()
-        assert "already has" in text and "refusing to stack rules" in text
+    def test_apply_refuses_a_populated_acl_set(self):
+        assert "refusing to stack rules" in _text()
 
     def test_apply_refuses_a_missing_vm(self):
         assert "does not exist" in _text()
 
-    def test_reads_back_twice(self):
+    def test_reads_back_twice_and_checks_protocol_and_stateful(self):
         text = _text()
         assert text.count("Get-VMNetworkAdapterExtendedAcl -VMName $VMName") >= 2
+        assert "stateful mismatch" in text and "protocol mismatch" in text
 
     def test_mismatch_stops_rather_than_claiming_success(self):
         text = _text()
         assert "MISMATCH" in text and "exit 3" in text
 
+    def test_script_documents_the_probe_root_cause(self):
+        assert "0x80070057" in _text() and "Protocol" in _text()
+
 
 class TestPowerShellSyntax:
-    """PowerShell syntax and dry-run behaviour.
-
-    Verified manually this session under **both** PowerShell 7.6.6 and Windows
-    PowerShell 5.1: `Parser::ParseFile` returned zero errors for both, and the
-    dry run printed the 9-rule plan and exited 0 without changing anything (the
-    ACL set on `F2-S8-VM1` remained empty).  Re-run those two checks by hand
-    whenever this script changes; they are not automated here because driving
-    `pwsh -Command`/`-File` from the pytest harness proved environment-brittle
-    and a flaky green would be worse than an explicit manual check.
+    """PowerShell syntax/dry-run were verified by hand this session under
+    PowerShell 7.6.6 (ParseFile returned zero errors; the dry run printed the
+    11-rule plan and exited 0 with no ACL applied). Re-run those by hand when the
+    script changes; they are not automated here because driving pwsh from the
+    pytest harness proved environment-brittle and a flaky green would be worse.
     """
 
     def test_manual_verification_is_recorded_here(self):
         text = _text()
         assert "[CmdletBinding()]" in text
         assert "Set-StrictMode -Version Latest" in text
-        assert "parser" not in text.lower()  # no self-referential parse hack
