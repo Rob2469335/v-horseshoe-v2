@@ -136,10 +136,10 @@ def filesystem_handler(
         # root-relative heuristic when it is outside the sandbox.
         if requested_path_str in ("/", "\\"):
             requested_path_str = "."
+        original = Path(requested_path_str or ".")
         try:
-            req_path = Path(requested_path_str or ".")
-            if req_path.is_absolute():
-                target_path = req_path.resolve()
+            if original.is_absolute():
+                target_path = original.resolve()
                 target_path.relative_to(root)
                 return target_path
         except ValueError:
@@ -153,9 +153,19 @@ def filesystem_handler(
             else:
                 target_path = (root / req_path).resolve()
             target_path.relative_to(root)
-            return target_path
         except ValueError as e:
             raise ValueError(f"Path is outside sandbox: {requested_path_str}") from e
+
+        # The root-relative form is an LLM convenience ("/foo.py" meaning
+        # "foo.py" in the sandbox). It must not become a containment bypass: a
+        # genuine absolute path OUTSIDE the sandbox (e.g. "/etc/passwd", or a
+        # POSIX "/home/runner/.../pytest.ini") that does not exist under root is
+        # refused instead of silently rebased under root — the previous code
+        # stripped the leading "/" on POSIX only, turning a containment refusal
+        # into a misleading "File not found".
+        if original.is_absolute() and not target_path.exists():
+            raise ValueError(f"Path is outside sandbox: {requested_path_str}")
+        return target_path
 
     def _within_write_root(path: Path) -> bool:
         """When SWARM_WRITE_ROOT is set, writes/patches must resolve UNDER it.

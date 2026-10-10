@@ -297,16 +297,17 @@ def test_distill_openrouter_attempt_leads_with_deepseek_flash_0731(monkeypatch):
     assert model.startswith("openrouter/")
 
 
-def test_distill_nvidia_attempt_uses_surviving_v4_flash_0731(monkeypatch):
-    """The NVIDIA distiller attempt must use the -0731 build: the plain
-    deepseek-ai/deepseek-v4-flash reached end-of-life on NIM (HTTP 410 Gone,
-    2026-08-07) and only -0731 is still served (verified live 2026-08-23).
+def test_distill_nvidia_attempt_uses_the_live_nim_lead(monkeypatch):
+    """The NVIDIA distiller attempt must use the live NIM lead. The 2026-09-22
+    fleet migration replaced the EOL `deepseek-ai/deepseek-v4-flash-0731` (NIM
+    HTTP 410 Gone) with `nvidia/nemotron-3-ultra-550b-a55b` (verified live,
+    WORK_LOG.md 2026-09-22), matching the analysis-cloud default.
     Also pins the litellm auth contract: nvidia_nim reads NVIDIA_NIM_API_KEY,
     so _distill must mirror it from NVIDIA_API_KEY or the call 401s even with
     a valid key (verified live 2026-08-23)."""
     monkeypatch.delenv("NVIDIA_NIM_API_KEY", raising=False)
     model = _distill_capture_first_model(monkeypatch, ("NVIDIA_API_KEY", "nvapi-test"))
-    assert model == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+    assert model == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
     import os
 
     assert os.environ["NVIDIA_NIM_API_KEY"] == "nvapi-test"

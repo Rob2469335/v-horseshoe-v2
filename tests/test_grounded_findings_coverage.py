@@ -21,11 +21,14 @@ from runtime_v2.api._agent_helpers import (
     _collect_read_material,
     _anchor_exists,
     _extract_grounded_findings,
+    _norm_rel_path,
 )
 
 
-def _norm(s):
-    return str(s).replace("\\", "/").lstrip("./")
+# Mirror the source's path normalizer so the ledger keys asserted here match
+# exactly what the report emits. Imported rather than re-implemented so the
+# ``lstrip("./")`` cross-platform defect cannot reappear only in the test.
+_norm = _norm_rel_path
 
 
 def _read_messages(paths):

@@ -445,7 +445,17 @@ def _resolve_artifact_path(root: Path, name: str) -> tuple[Path | None, str]:
     if not raw:
         return None, "artifact reference has no name"
     candidate = Path(raw)
-    if candidate.is_absolute() or candidate.drive or raw[0] in ("/", "\\"):
+    # A Windows drive path ("C:\\...", "C:/...") is absolute on the F2 host but
+    # Path().is_absolute()/.drive are False on POSIX (where the whole string is a
+    # legal relative filename), so it slipped past the absolute-path guard there.
+    # Detect the drive prefix lexically so the rejection is host-independent.
+    is_windows_drive = len(raw) >= 2 and raw[0].isalpha() and raw[1] == ":"
+    if (
+        candidate.is_absolute()
+        or candidate.drive
+        or is_windows_drive
+        or raw[0] in ("/", "\\")
+    ):
         return None, f"artifact name {raw!r} is an absolute path"
     if any(part == ".." for part in candidate.parts):
         return None, f"artifact name {raw!r} contains a parent-directory component"

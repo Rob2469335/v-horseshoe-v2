@@ -293,6 +293,13 @@ class TestW2ProductionModelPath:
 class TestW4TaskWorkspaceBinding:
     """W4: bind to the EXISTING task machinery, never a second task system."""
 
+    # W4 binding probes the task interpreter via the Windows `py` launcher, which
+    # does not exist on Linux CI (the env-dependent-test convention from 68656133).
+    pytestmark = pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="W4 binding probes the Windows `py -3.10` task interpreter",
+    )
+
     @staticmethod
     def _bind(ws=None, **kw):
         return ADAPTER.bind_task_environment(

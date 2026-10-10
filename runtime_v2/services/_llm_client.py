@@ -118,9 +118,12 @@ _ANALYSIS_CLOUD_AGENTS = (
 
 
 def _analysis_cloud_model() -> str:
-    # Lead with the same free NVIDIA NIM DeepSeek-v4-flash that heads the live
-    # fallback chain (2026-09 fleet decision: NVIDIA -> OpenCode Zen/Go ->
-    # OpenRouter; Gemini/Groq/Ling removed). Overridable via ANALYSIS_CLOUD_MODEL
+    # Lead with the same free NVIDIA NIM model that heads the live fallback
+    # chain (2026-09 fleet decision: NVIDIA -> OpenCode Zen/Go -> OpenRouter;
+    # Gemini/Groq/Ling removed). 2026-09-22 migrated the NIM lead from
+    # `nvidia_nim/deepseek-ai/deepseek-v4-flash-0731` (EOL on NIM, HTTP 410) to
+    # `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, verified live and recorded
+    # in WORK_LOG.md under 2026-09-22. Overridable via ANALYSIS_CLOUD_MODEL
     # (your .env currently sets it to the NVIDIA NIM alias).
     return os.getenv(
         "ANALYSIS_CLOUD_MODEL", "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"

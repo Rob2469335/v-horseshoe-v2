@@ -8,10 +8,14 @@ ZENITH_PROJECT_ROOT override and an AGENTS.md existence check.
 """
 
 import os
+import pathlib
 
 from swarm_os.lib.paths import project_root
 
-PROJECT_ROOT = r"C:\Users\rober\Projects\v-horseshoe-v2"
+# Derive the repo root from this file instead of a hardcoded machine path; the
+# hardcoded ``C:\Users\rober\...`` value never exists on the Linux CI runner, so
+# the override test failed there.
+PROJECT_ROOT = str(pathlib.Path(__file__).resolve().parents[1])
 
 
 def _reset(monkeypatch):

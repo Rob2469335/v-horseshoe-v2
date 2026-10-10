@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import logging
@@ -90,10 +89,21 @@ class EventLogRepository:
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
-    """Write text atomically: write to a temp sibling, then os.replace.
+    """Serialize + atomically write text via the repo's canonical helpers.
 
-    Prevents a concurrent crash from leaving a truncated watermark/state file
-    that would silently zero the memory-bridge resume offset."""
-    tmp = path.with_name(f"{path.name}.tmp")
-    tmp.write_text(content, encoding="utf-8")
-    os.replace(tmp, path)
+    A per-target ``FileLock`` (the established ``path + ".lock"``, 5.0s timeout
+    pattern used by watch_loop/canary_registry/agents_md) serializes concurrent
+    writers so their ``os.replace`` promotions never contend on Windows (a
+    sharing violation that lost the offset / crashed the ingest loop), and the
+    canonical ``atomic_io.atomic_write_text`` stages into a UNIQUE
+    ``*.tmp.<uuid>`` sibling + ``os.replace``. The previous local version used a
+    FIXED temp name (``{path.name}.tmp``) and no lock, so two concurrent
+    ``save_offset`` / ``save_state`` writers shared one temp.
+    """
+    from filelock import FileLock
+
+    from swarm_os.lib.atomic_io import atomic_write_text
+
+    lock = FileLock(str(path) + ".lock", timeout=5.0)
+    with lock:
+        atomic_write_text(path, content)

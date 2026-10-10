@@ -1,5 +1,6 @@
-"""Tests for routing analysis agents to a cloud model (DeepSeek V4 flash via
-the funded OpenCode Go account)."""
+"""Tests for routing analysis agents to a cloud model (the free NVIDIA NIM
+lead, migrated 2026-09-22 from DeepSeek V4 Flash to Nemotron 3 Ultra 550B; see
+WORK_LOG.md)."""
 
 import os
 from contextlib import contextmanager
@@ -36,7 +37,7 @@ def test_analysis_agent_routes_to_cloud_when_key_present():
         for agent in ("code_analyzer", "researcher", "reviewer"):
             assert (
                 get_litellm_model(agent, "qwen3.5-4b")
-                == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+                == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
             )
 
 
@@ -54,7 +55,7 @@ def test_edit_agents_route_to_cloud_when_key_present():
         for agent in ("coder", "debugger"):
             assert (
                 get_litellm_model(agent, "qwen3.5-4b")
-                == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+                == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
             )
 
 
@@ -71,7 +72,7 @@ def test_executor_routes_to_cloud_when_key_present():
     ):
         assert (
             get_litellm_model("executor", "qwen3.5-4b")
-            == "nvidia_nim/deepseek-ai/deepseek-v4-flash-0731"
+            == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
         )
 
 
@@ -137,6 +138,7 @@ def test_cloud_model_env_override():
     with _patch_env(
         NVIDIA_API_KEY="sk-test",
         ANALYSIS_CLOUD_MODEL="openrouter/deepseek/deepseek-r1:free",
+        SWARM_ANALYSIS_CLOUD="auto",
         SWARM_ROUTING_MODE="auto",
     ):
         assert (

@@ -701,8 +701,10 @@ async def _distill(distiller_content: str, fix_class: str | None = None) -> str:
     )
 
     attempts = []
-    # 1. NVIDIA NIM DeepSeek-v4-Flash-0731 first — matches the live fallback
-    # chain lead (NVIDIA free NIM, then OpenCode Zen, then OpenRouter).
+    # 1. NVIDIA NIM lead first — matches the live fallback chain lead (NVIDIA
+    # free NIM, then OpenCode Zen, then OpenRouter). Migrated 2026-09-22 from
+    # the EOL deepseek-ai/deepseek-v4-flash-0731 to nvidia/nemotron-3-ultra-550b-a55b
+    # (NIM HTTP 410 Gone; WORK_LOG.md 2026-09-22).
     # Gemini / Groq / Ling were removed from this fleet per the 2026-09 chain
     # decision.
     if os.environ.get("NVIDIA_API_KEY") or os.environ.get("NVIDIA_NIM_API_KEY"):

@@ -12,16 +12,38 @@ The properties under test are honesty properties:
 from __future__ import annotations
 
 import json
+import pathlib
 
 import pytest
 
 from qwen_train import f2_model_provenance as mp
 
-REPO = r"C:\Users\rober\Projects\v-horseshoe-v2"
-RUNS = rf"{REPO}\qwen_train\training_runs.jsonl"
-ADAPTERS = [rf"{REPO}\qwen_train\robs4b_final_adapter"]
+# Derive the repo root from this file, not a hardcoded machine path. The real
+# adapter / run-ledger / served GGUF are HOST-LOCAL, protected artifacts that are
+# NOT tracked in the repository (AGENTS.md §4 protected paths, §3.5 untracked
+# rule), so the tests that assert on THIS host's real chain cannot run on a bare
+# CI checkout. They skip there — the same env-dependent-test convention already
+# used for Windows-only tests (commit 68656133) — and run fully on the host that
+# holds the artifacts.
+_REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = str(_REPO)
+RUNS = str(_REPO / "qwen_train" / "training_runs.jsonl")
+ADAPTERS = [str(_REPO / "qwen_train" / "robs4b_final_adapter")]
 CORPUS_ROOTS = [r"C:\Users\rober\Projects\qwen_train_data"]
-GGUF = rf"{REPO}\qwen_train\robs4b_q4km.gguf"
+GGUF_PATH = _REPO / "qwen_train" / "robs4b_q4km.gguf"
+GGUF = str(GGUF_PATH)
+
+_HOST_ARTIFACTS_PRESENT = (
+    GGUF_PATH.is_file()
+    and (_REPO / "qwen_train" / "training_runs.jsonl").is_file()
+    and (_REPO / "qwen_train" / "robs4b_final_adapter" / "adapter_config.json").is_file()
+    and pathlib.Path(CORPUS_ROOTS[0]).is_dir()
+)
+requires_host_artifacts = pytest.mark.skipif(
+    not _HOST_ARTIFACTS_PRESENT,
+    reason="requires host-local robs4b artifacts (adapter, training_runs, served GGUF, corpus)",
+)
+
 
 
 def build(**over):
@@ -73,18 +95,21 @@ class TestChainConstruction:
         chain = build()
         assert {l.name for l in chain.links} == set(mp.ALL_LINKS)
 
+    @requires_host_artifacts
     def test_base_link_reads_the_adapter_config(self):
         link = build().link(mp.LINK_BASE)
         assert link.state == "PROVEN"
         assert link.identity
         assert "base_model_name_or_path" in link.detail
 
+    @requires_host_artifacts
     def test_base_snapshot_is_captured(self):
         chain = build()
         facts = dict(chain.observations)
         assert "base_snapshot" in facts
         assert len(facts["base_snapshot"]) >= 7
 
+    @requires_host_artifacts
     def test_adapter_link_records_config_digest_rank_alpha(self):
         chain = build()
         link = chain.link(mp.LINK_ADAPTER)
@@ -94,6 +119,7 @@ class TestChainConstruction:
         assert facts.get("adapter_r")
         assert facts.get("adapter_alpha")
 
+    @requires_host_artifacts
     def test_corpus_link_uses_the_run_ledger_declaration(self):
         link = build().link(mp.LINK_CORPUS)
         assert link.state == "PROVEN"
@@ -105,15 +131,18 @@ class TestChainConstruction:
         assert link.state == "UNRECORDED"
         assert "NOT conversion evidence" in link.detail
 
+    @requires_host_artifacts
     def test_served_link_verifies_the_real_digest(self):
         link = build().link(mp.LINK_SERVED)
         assert link.state == "PROVEN"
         assert link.digest.startswith("65202f37")
 
+    @requires_host_artifacts
     def test_served_digest_mismatch_is_detected(self):
         link = build(served_gguf_sha256="0" * 64).link(mp.LINK_SERVED)
         assert link.state == "MISMATCH"
 
+    @requires_host_artifacts
     def test_corpus_content_is_never_hashed(self):
         """A corpus hash would require reading it. We record size and mtime only."""
         facts = dict(build().observations)
@@ -124,18 +153,21 @@ class TestChainConstruction:
 
 
 class TestVerdict:
+    @requires_host_artifacts
     def test_incomplete_chain_is_not_satisfied(self):
         v = mp.verify_conversion_chain(build())
         assert not v.satisfied
         assert mp.LINK_CONVERSION in v.unrecorded_links
         assert mp.LINK_SERVED not in v.unrecorded_links
 
+    @requires_host_artifacts
     def test_served_artifact_alone_does_not_satisfy(self):
         """The exact gap this module exists to expose."""
         v = mp.verify_conversion_chain(build())
         assert mp.LINK_SERVED in v.proven_links
         assert not v.satisfied
 
+    @requires_host_artifacts
     def test_complete_conversion_record_closes_the_link(self):
         rec = full_record()
         chain = build(conversion_record=rec)
@@ -187,6 +219,7 @@ class TestVerdict:
         chain = build(conversion_record=rec)
         assert chain.link(mp.LINK_CONVERSION).state == "UNRECORDED"
 
+    @requires_host_artifacts
     def test_record_naming_a_different_adapter_is_a_mismatch(self):
         """A complete-looking record must bind to the artifact the chain proves."""
         rec = full_record()
@@ -204,6 +237,7 @@ class TestVerdict:
         for field, text in mp.CONVERSION_FIELD_REMEDY.items():
             assert isinstance(text, str) and text.strip(), field
 
+    @requires_host_artifacts
     def test_blank_and_empty_collection_values_count_as_absent(self):
         rec = full_record()
         rec["conversion_tool"] = "   "
@@ -230,7 +264,7 @@ class TestVerdict:
             adapter_dirs=[],
             corpus_search_roots=[],
             served_gguf=None,
-            training_runs_path=rf"{REPO}\qwen_train\__absent_runs__.jsonl",
+            training_runs_path=str(_REPO / "qwen_train" / "__absent_runs__.jsonl"),
         )
         v = mp.verify_conversion_chain(chain)
         assert not v.satisfied
@@ -239,11 +273,13 @@ class TestVerdict:
         for r in v.remedies:
             assert isinstance(r, str) and r
 
+    @requires_host_artifacts
     def test_mismatch_blocks_and_is_reported_separately(self):
         v = mp.verify_conversion_chain(build(served_gguf_sha256="0" * 64))
         assert not v.satisfied
         assert mp.LINK_SERVED in v.mismatched_links
 
+    @requires_host_artifacts
     def test_timestamps_never_close_the_conversion_link(self):
         """Ordering alone must not be accepted as provenance."""
         chain = build()

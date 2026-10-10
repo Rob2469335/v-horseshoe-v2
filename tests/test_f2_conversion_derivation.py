@@ -15,15 +15,39 @@ small fixture files and the repo's own adapter config.
 from __future__ import annotations
 
 import hashlib
+import pathlib
 
 import pytest
 
 from qwen_train import f2_model_provenance as mp
 
-REPO = r"C:\Users\rober\Projects\v-horseshoe-v2"
-ADAPTER = rf"{REPO}\qwen_train\robs4b_final_adapter"
-GGUF = rf"{REPO}\qwen_train\robs4b_q4km.gguf"
+# Derive the repo root from this file, not a hardcoded machine path. The real
+# adapter config / run-ledger / served GGUF are HOST-LOCAL, protected artifacts
+# that are NOT tracked (AGENTS.md §4, §3.5), so tests asserting on THIS host's
+# real chain skip on a bare CI checkout (the env-dependent-test convention from
+# commit 68656133) and run fully on the host that holds them.
+_REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = str(_REPO)
+ADAPTER = str(_REPO / "qwen_train" / "robs4b_final_adapter")
+GGUF = str(_REPO / "qwen_train" / "robs4b_q4km.gguf")
 GGUF_SHA = "65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41"
+
+_HAS_ADAPTER_CONFIG = (
+    _REPO / "qwen_train" / "robs4b_final_adapter" / "adapter_config.json"
+).is_file()
+_HAS_GGUF = (_REPO / "qwen_train" / "robs4b_q4km.gguf").is_file()
+_HAS_RUNS = (_REPO / "qwen_train" / "training_runs.jsonl").is_file()
+
+requires_adapter_config = pytest.mark.skipif(
+    not _HAS_ADAPTER_CONFIG, reason="requires the host-local robs4b adapter config"
+)
+requires_served_gguf = pytest.mark.skipif(
+    not _HAS_GGUF, reason="requires the host-local served robs4b GGUF"
+)
+requires_host_chain = pytest.mark.skipif(
+    not (_HAS_ADAPTER_CONFIG and _HAS_GGUF and _HAS_RUNS),
+    reason="requires host-local robs4b artifacts (adapter config, run ledger, served GGUF)",
+)
 
 
 def _sha(path) -> str:
@@ -31,31 +55,33 @@ def _sha(path) -> str:
 
 
 class TestDerivationIsEvidenceBound:
+    @requires_adapter_config
     def test_adapter_identity_comes_from_the_real_config(self):
         rec = mp.derive_conversion_record(source_adapter=ADAPTER)
         assert rec["source_adapter"] == "robs4b_final_adapter"
         assert rec["source_adapter_sha256"] == _sha(
-            rf"{ADAPTER}\adapter_config.json"
+            str(pathlib.Path(ADAPTER) / "adapter_config.json")
         )
 
     def test_absent_adapter_contributes_nothing(self):
-        rec = mp.derive_conversion_record(source_adapter=rf"{REPO}\__no_such_adapter__")
+        rec = mp.derive_conversion_record(source_adapter=str(_REPO / "__no_such_adapter__"))
         assert "source_adapter" not in rec
         assert "source_adapter_sha256" not in rec
 
+    @requires_served_gguf
     def test_served_artifact_digest_is_computed_from_bytes(self):
         rec = mp.derive_conversion_record(served_gguf=GGUF)
         assert rec["served_gguf_sha256"] == GGUF_SHA
 
     def test_missing_served_artifact_contributes_nothing(self):
-        rec = mp.derive_conversion_record(served_gguf=rf"{REPO}\__no_such__.gguf")
+        rec = mp.derive_conversion_record(served_gguf=str(_REPO / "__no_such__.gguf"))
         assert "served_gguf" not in rec
         assert "served_gguf_sha256" not in rec
 
     def test_merged_artifact_absent_is_omitted_not_invented(self):
         """The whole point: an absent merged artifact yields no identity."""
         rec = mp.derive_conversion_record(
-            merged_artifact=rf"{REPO}\__no_such__\Robs4B_Merged_Hf"
+            merged_artifact=str(_REPO / "__no_such__" / "Robs4B_Merged_Hf")
         )
         assert "merged_artifact" not in rec
         assert "merged_artifact_sha256" not in rec
@@ -126,7 +152,7 @@ class TestDerivationCannotLaunderProvenance:
         """Deriving everything derivable from THIS host must stay UNRECORDED."""
         rec = mp.derive_conversion_record(
             source_adapter=ADAPTER,
-            merged_artifact=rf"{REPO}\__absent__\Robs4B_Merged_Hf",
+            merged_artifact=str(_REPO / "__absent__" / "Robs4B_Merged_Hf"),
             served_gguf=GGUF,
             conversion_tool=r"C:\Users\rober\Projects\llama.cpp\convert_hf_to_gguf.py",
         )
@@ -142,7 +168,7 @@ class TestDerivationCannotLaunderProvenance:
 
         chain = mp.build_conversion_chain(
             model_alias="robs4b",
-            training_runs_path=rf"{REPO}\qwen_train\training_runs.jsonl",
+            training_runs_path=str(_REPO / "qwen_train" / "training_runs.jsonl"),
             adapter_dirs=[ADAPTER],
             corpus_search_roots=[r"C:\Users\rober\Projects\qwen_train_data"],
             served_gguf=GGUF,
@@ -152,6 +178,7 @@ class TestDerivationCannotLaunderProvenance:
         assert chain.link(mp.LINK_CONVERSION).state == "UNRECORDED"
         assert not mp.verify_conversion_chain(chain).satisfied
 
+    @requires_host_chain
     def test_a_fully_witnessed_reconversion_does_close_the_link(self, tmp_path):
         """The positive control: the legitimate route really does work.
 
@@ -164,7 +191,7 @@ class TestDerivationCannotLaunderProvenance:
         merged.write_bytes(b"merged" * 500)
         real_base_digest = mp.build_conversion_chain(
             model_alias="robs4b",
-            training_runs_path=rf"{REPO}\qwen_train\training_runs.jsonl",
+            training_runs_path=str(_REPO / "qwen_train" / "training_runs.jsonl"),
             adapter_dirs=[ADAPTER],
             corpus_search_roots=[],
             served_gguf=None,
@@ -184,7 +211,7 @@ class TestDerivationCannotLaunderProvenance:
         assert mp.validate_conversion_record(rec) == ()
         chain = mp.build_conversion_chain(
             model_alias="robs4b",
-            training_runs_path=rf"{REPO}\qwen_train\training_runs.jsonl",
+            training_runs_path=str(_REPO / "qwen_train" / "training_runs.jsonl"),
             adapter_dirs=[ADAPTER],
             corpus_search_roots=[r"C:\Users\rober\Projects\qwen_train_data"],
             served_gguf=GGUF,
@@ -193,6 +220,7 @@ class TestDerivationCannotLaunderProvenance:
         )
         assert chain.link(mp.LINK_CONVERSION).state == "PROVEN"
 
+    @requires_host_chain
     def test_a_derived_record_still_fails_the_binding_check(self, tmp_path):
         """Deriving does not exempt a record from chain-binding verification."""
         merged = tmp_path / "m.safetensors"
@@ -211,7 +239,7 @@ class TestDerivationCannotLaunderProvenance:
         rec["source_adapter_sha256"] = "b" * 64  # disagrees with the proven adapter
         chain = mp.build_conversion_chain(
             model_alias="robs4b",
-            training_runs_path=rf"{REPO}\qwen_train\training_runs.jsonl",
+            training_runs_path=str(_REPO / "qwen_train" / "training_runs.jsonl"),
             adapter_dirs=[ADAPTER],
             corpus_search_roots=[r"C:\Users\rober\Projects\qwen_train_data"],
             served_gguf=GGUF,

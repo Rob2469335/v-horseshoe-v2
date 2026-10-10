@@ -328,7 +328,7 @@ class SandboxReplHandler:
             project_root = agent_workspace_root()
             try:
                 _Path(raw).resolve().relative_to(project_root.resolve())
-            except ValueError, OSError:
+            except (ValueError, OSError):
                 return {
                     "ok": False,
                     "stdout": "",

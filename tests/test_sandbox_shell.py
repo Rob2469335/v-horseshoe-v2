@@ -14,10 +14,19 @@ keeps the stricter tools, so this is not a global loosening of the CLI.
 from __future__ import annotations
 
 import asyncio
+import sys
 
 import pytest
 
 from swarm_os.capabilities.sandbox_repl import SandboxReplHandler
+
+# The confined shell is PowerShell-backed (the tests run Get-ChildItem/Get-Content/
+# Select-Object), which exists only on Windows — the env-dependent-test convention
+# from commit 68656133.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="the SWE confined shell is PowerShell-backed (Windows-only)",
+)
 
 
 def _run(command: str) -> dict:

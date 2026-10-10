@@ -20,6 +20,15 @@ import run_repair_task as rrt  # noqa: E402
 
 _REAL_POPEN = subprocess.Popen
 
+# The task-environment contract pins the Windows `py` launcher (resolve_task_python
+# returns ["py", "-3.10"], and the probes shell out to `py -3.10 --version`). That
+# launcher does not exist on the Linux CI runner, so the module is Windows-only —
+# the env-dependent-test convention from commit 68656133.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="task-environment contract requires the Windows `py` launcher",
+)
+
 
 @pytest.fixture(autouse=True)
 def real_subprocess():

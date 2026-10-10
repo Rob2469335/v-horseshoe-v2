@@ -169,10 +169,17 @@ def _analysis_budget(goal: str) -> tuple[int, int, int]:
             int(os.getenv("SWARM_EDIT_FS_READS", "12")),
             int(os.getenv("SWARM_EDIT_MAX_TURNS", "24")),
         )
+    # ROUTINE goals keep the conservative 12-turn bound documented above. It is
+    # deliberately NOT `MAX_TURNS`: that global was raised to 24 for the
+    # warmup-heavy analysis/edit paths (which carry their own explicit 24), and
+    # coupling the routine bound to it silently widened every routine goal too
+    # (the ``(6, 12)`` contract in tests/test_agent_read_budget.py). Routine
+    # stays conservative so a non-deep goal cannot run away; deep and fix-intent
+    # goals above opt into 24 explicitly.
     return (
         int(os.getenv("SWARM_MIN_FS_READS", "3")),
         int(os.getenv("SWARM_MAX_FS_READS", "6")),
-        MAX_TURNS,
+        int(os.getenv("SWARM_ROUTINE_MAX_TURNS", "12")),
     )
 
 
@@ -2645,7 +2652,10 @@ class AgentServiceV2:
                 parent_id=parent_id,
                 delegated_by=delegated_by or "",
             ):
-                if chunk.get("type") == "f2_delivery_evidence":
+                # Only a mapping can be delivery evidence; a non-dict stream
+                # element (e.g. a sentinel) is forwarded unchanged, exactly as
+                # the wrapper behaved before the F2 delivery-evidence probe.
+                if isinstance(chunk, dict) and chunk.get("type") == "f2_delivery_evidence":
                     delivery_evidence = chunk
                     continue  # captured; not forwarded to client
                 _last_chunk = chunk

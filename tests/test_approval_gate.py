@@ -50,7 +50,16 @@ def _real_subprocess(request):
         "test_one_time_consumption",
         "test_git_tool_readonly_dispatch",
     ):
-        yield  # real subprocess.Popen (git + sandbox_repl must actually run)
+        # The conftest's autouse `global_subprocess_mock` is set up FIRST (it is
+        # a conftest-level fixture) and leaves `subprocess.Popen` mocked, so a
+        # bare `yield` here does NOT give these tests a real subprocess. Patch
+        # the captured real class back on for the duration of the test.
+        from unittest.mock import patch
+
+        from tests.conftest import _REAL_POPEN
+
+        with patch("subprocess.Popen", _REAL_POPEN):
+            yield  # real subprocess.Popen (git + sandbox_repl must actually run)
         return
     from unittest.mock import patch
 

@@ -200,12 +200,25 @@ class TestInvalidWorkspace:
 # ---------------------------------------------------------------------------
 
 class TestSymlinkContainment:
-    """A workspace resolving outside the allowed parent cannot bypass validation."""
+    """A workspace resolving outside the allowed parent cannot bypass validation.
+
+    ``_harness_workspace_root`` containment is against
+    ``project_root().parent / "swe_probe_work"`` and it imports ``project_root``
+    locally from ``swarm_os.lib.paths`` — so the patch target must be
+    ``swarm_os.lib.paths.project_root`` (there is no module-level
+    ``project_root`` on ``swarm_os.api.agents``; patching that raised
+    AttributeError).
+    """
 
     def test_symlink_outside_parent_rejected(self, monkeypatch, tmp_path):
         monkeypatch.setenv("SWARM_HARNESS_KEY", "key1")
-        # Create a symlink that resolves outside the allowed parents
-        allowed = tmp_path / "allowed"
+        proj = tmp_path / "project"
+        proj.mkdir()
+        # The allowed parent is sibling to the project root.
+        swe_parent = tmp_path / "swe_probe_work"
+        swe_parent.mkdir()
+        # Create a symlink that resolves outside the allowed parent
+        allowed = swe_parent / "allowed"
         allowed.mkdir()
         target = tmp_path / "forbidden"
         target.mkdir()
@@ -215,27 +228,29 @@ class TestSymlinkContainment:
         except OSError:
             pytest.skip("OS does not support symlinks")
         from swarm_os.api.agents import _harness_workspace_root
-        with patch("swarm_os.api.agents.project_root", return_value=tmp_path / "project"):
+        with patch("swarm_os.lib.paths.project_root", return_value=proj):
             result = _harness_workspace_root({
                 "x-swarm-harness-key": "key1",
                 "x-swarm-workspace-root": str(link),
             })
-        # The resolved canonical path is outside allowed parents → rejected
+        # The resolved canonical path is outside the allowed parent → rejected
         assert result is None
 
     def test_symlink_inside_parent_accepted(self, monkeypatch, tmp_path):
         monkeypatch.setenv("SWARM_HARNESS_KEY", "key1")
         proj = tmp_path / "project"
         proj.mkdir()
-        ws_real = proj / "workspaces" / "task1"
+        swe_parent = tmp_path / "swe_probe_work"
+        swe_parent.mkdir()
+        ws_real = swe_parent / "workspaces" / "task1"
         ws_real.mkdir(parents=True)
-        link = proj / "active_task"
+        link = swe_parent / "active_task"
         try:
             link.symlink_to(ws_real)
         except OSError:
             pytest.skip("OS does not support symlinks")
         from swarm_os.api.agents import _harness_workspace_root
-        with patch("swarm_os.api.agents.project_root", return_value=proj):
+        with patch("swarm_os.lib.paths.project_root", return_value=proj):
             result = _harness_workspace_root({
                 "x-swarm-harness-key": "key1",
                 "x-swarm-workspace-root": str(link),

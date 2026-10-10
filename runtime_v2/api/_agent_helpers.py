@@ -23,6 +23,25 @@ import re
 log = logging.getLogger(__name__)
 
 
+def _norm_rel_path(value) -> str:
+    """Normalize a path for ledger/finding identity.
+
+    Forward slashes, no leading ``./``. This replaces the ``str.lstrip("./")``
+    idiom used here before, which was a cross-platform defect: ``lstrip``
+    strips *any* leading ``.`` or ``/`` characters, so an absolute POSIX path
+    (``/tmp/x`` -> ``tmp/x``) was silently made relative and could no longer be
+    re-read (the grounded report emitted "could not be re-read; skipped"), while
+    a Windows path (``C:/x``) was unaffected because ``C`` is not in the strip
+    set. Strips only the literal ``./`` prefix, so absolute paths of either
+    platform survive intact.
+    """
+    text = str(value).replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return text
+
+
+
 # Internet-involving goal keywords (used to force web_search-first on analysis
 # agents, so the warmup's filesystem reads never starve the web portion).
 _INTERNET_GOAL_RE = re.compile(
@@ -582,7 +601,7 @@ def _build_grounded_report(
 
     root = root or os.getcwd()
     findings = findings or {}
-    norm = lambda s: str(s).replace("\\", "/").lstrip("./")  # noqa: E731
+    norm = _norm_rel_path
 
     def _findings_list(v) -> list:
         # Accept a single string (legacy callers) or a list (extraction output),
@@ -659,7 +678,7 @@ def _collect_read_material(messages: list, read_paths) -> dict:
     its following TOOL RESULT so synthesis can cover all of them. Returns
     {ledger_path: content}; {} when nothing pairs (caller falls back to prose).
     """
-    norm = lambda s: str(s).replace("\\", "/").lstrip("./")  # noqa: E731
+    norm = _norm_rel_path
     ledger = {norm(p) for p in (read_paths or [])}
     ledger_base = {p.rsplit("/", 1)[-1] for p in ledger}
     out: dict = {}
@@ -837,7 +856,7 @@ async def _extract_grounded_findings(
     """
     if not read_paths:
         return {}
-    read_norm = {str(p).replace("\\", "/").lstrip("./") for p in read_paths}
+    read_norm = {_norm_rel_path(p) for p in read_paths}
     if not read_norm:
         return {}
     read_basenames = {p.rsplit("/", 1)[-1] for p in read_norm}
@@ -846,7 +865,7 @@ async def _extract_grounded_findings(
     ref: dict = {}
     if isinstance(read_material, dict):
         for k, v in read_material.items():
-            kk = str(k).replace("\\", "/").lstrip("./")
+            kk = _norm_rel_path(k)
             if kk in read_norm:
                 ref[kk] = str(v)
     # Allocate the budget ACROSS every read file so no later file is starved —
@@ -964,7 +983,7 @@ async def _extract_grounded_findings(
     for it in items:
         if not isinstance(it, dict):
             continue
-        f = str(it.get("file", "")).replace("\\", "/").lstrip("./")
+        f = _norm_rel_path(it.get("file", ""))
         txt = str(it.get("finding", "")).strip()
         if not txt:
             continue

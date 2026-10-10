@@ -20,7 +20,10 @@ import re
 
 import pytest
 
-REPO = pathlib.Path(r"C:\Users\rober\Projects\v-horseshoe-v2")
+# Derive the repo root from this file's location instead of a hardcoded
+# machine path: the hardcoded ``C:\Users\rober\...`` root made every reader
+# here raise FileNotFoundError on the Linux CI runner (36 tests).
+REPO = pathlib.Path(__file__).resolve().parents[1]
 DOCS = REPO / "docs"
 
 READINESS = DOCS / "EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md"

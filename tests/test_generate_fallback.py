@@ -53,8 +53,15 @@ def _cloud_down_local_up(monkeypatch):
     import litellm
 
     monkeypatch.setattr(litellm, "acompletion", AsyncMock(side_effect=fake_acompletion))
-    # force the cloud-default branch deterministically
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    # Force the cloud-default branch deterministically. Since the free-provider-
+    # first change (b98609a0), only a free-provider key (NVIDIA/OpenRouter) arms
+    # the analysis-cloud hop; a paid-only OPENAI_API_KEY no longer does, so the
+    # NVIDIA key is what selects the cloud default here. Pin the routing mode/flag
+    # too so a developer's local `.env` (e.g. SWARM_ROUTING_MODE=local_only) cannot
+    # collapse the two-call fallback into one.
+    monkeypatch.setenv("SWARM_ROUTING_MODE", "auto")
+    monkeypatch.setenv("SWARM_ANALYSIS_CLOUD", "auto")
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key")
     return calls
 
 
