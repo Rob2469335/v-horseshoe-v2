@@ -1468,3 +1468,31 @@ scope (`swarm_os runtime_v2 organism_console`).
 **Unchanged:** F0/F1, `FROZEN_MIN_PAIRS = 300`, the S1–S10 rules, the 2024-01-01
 contamination proxy, `admitted = 0`, and every execution boundary. **F2 is NOT
 ready; no S8 evidence exists.**
+
+### Second defect repaired — the single-source rebuild used the wrong adapter (`PROVEN`)
+
+`qwen_train/f2_population_build.to_screen_row` hard-wired the SWE-bench-Live
+adapter, so the documented `--acquired` path on the **SWE-rebench-V2**
+acquisition mapped `test_cmd` from `test_cmds`/`test_cmd` — fields rebench rows
+do not have — instead of `install_config.test_cmd`. Demonstrated on a real
+rebench row **before** any change: `to_screen_row(row)["test_cmd"] == ""` while
+`source_to_screen_row("swe-rebench-v2", row)["test_cmd"] ==
+"npm run test:unit -- --verbose --no-color"`. Every one of the 32,079 rows would
+have been rejected at S5, silently and completely.
+
+`build()` now resolves the key from the `PROVENANCE.json` the acquisition
+already writes beside `acquired.jsonl`, **fails closed** on an unreadable or
+unknown declared key instead of falling back to the wrong adapter, keeps the
+previous default when no provenance exists (so the F2-IMPL-AUTH-029 reproduction
+command is unchanged), and records the resolved key in the rejection record.
+
+**Regression proof:** re-introducing the defect (hard-wired live adapter) makes
+`tests/test_f2_population_union.py::TestSingleSourceBuild` fail 1 of 6 with
+`assert '' == 'npm run test:unit'`; with the repair all 6 pass. An in-memory
+rebuild of the real SWE-bench-Live acquisition reproduces the union's live slice
+exactly — 1,886 entries, 1,882 metadata-eligible, 4 S10 refusals, 0 S6 refusals,
+0 admitted.
+
+**Verification after both repairs:** `pytest tests/ -k f2` → **1713 passed, 5
+skipped, 3091 deselected**; `ruff check --select E9,F` clean on the CI scope and
+on every changed file.
