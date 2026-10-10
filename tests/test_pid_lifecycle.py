@@ -156,6 +156,10 @@ def test_write_service_pid_skips_already_dead_process(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="lifecycle.ps1 tree-kill uses the Win32 Toolhelp32 kernel snapshot",
+)
 def test_stop_kills_recorded_process_tree(tmp_path):
     """Recorded root + its child both die via PID-scoped tree kill."""
     pid_dir = tmp_path / "pids"
@@ -234,6 +238,10 @@ def test_stop_tolerates_corrupt_record(tmp_path):
     assert not (pid_dir / "garbage.pid").exists()
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="lifecycle.ps1 tree-kill uses the Win32 Toolhelp32 kernel snapshot",
+)
 def test_repeated_stop_is_a_noop(tmp_path):
     """Stopping twice (and after all records are gone) must not error."""
     pid_dir = tmp_path / "pids"

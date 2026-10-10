@@ -2,6 +2,21 @@
 $ErrorActionPreference = "Continue"
 $root = "C:\Users\rober\Projects\v-horseshoe-v2"
 
+# PID-scoped process lifecycle (D1): record what we start so unified-stop.ps1 can
+# stop exactly those processes (never by name). <root>\data\pids\<role>.pid.
+. (Join-Path $root "lifecycle.ps1")
+$pidDir = Join-Path $root "data\pids"
+
+function Get-ListeningPid([int]$Port) {
+    # PID of the process listening on $Port (0 when none). Used to record a
+    # Start-Job service's real serving process so it can be PID-stop'd later.
+    try {
+        $c = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop | Select-Object -First 1
+        if ($c) { return [int]$c.OwningProcess }
+    } catch { }
+    return 0
+}
+
 Write-Host "=== Swarm OS Unified Startup ===" -ForegroundColor Cyan
 
 # Load .env into current session
@@ -189,6 +204,8 @@ if ($proxyReady) {
 } else {
     Write-Host "Proxy FAILED  (:8080 did not answer GET /v1/models)" -ForegroundColor Red
 }
+$proxyPid = Get-ListeningPid 8080
+if ($proxyPid -gt 0) { Write-ServicePid -PidDir $pidDir -Role "proxy" -ProcessId $proxyPid }
 
 # STEP 3 - Qdrant (wait until actually ready)
 Write-Host "`n[STEP 3] Starting Qdrant..." -ForegroundColor Yellow
@@ -219,12 +236,13 @@ $env:QDRANT__SERVICE__HOST = "127.0.0.1"
 # authoritative over `.qdrant\config\qdrant.yaml` and over docker-compose.
 # Canonical root: <repo>\storage — see AGENTS.md §4.
 $env:QDRANT__STORAGE__STORAGE_PATH = Join-Path $root "storage"
-Start-Process $qdrantPath -WindowStyle Hidden
+$qdrantProc = Start-Process $qdrantPath -WindowStyle Hidden -PassThru
 $qdrantOk = $false
 for ($i = 0; $i -lt 30; $i++) {
     try { Invoke-RestMethod "http://127.0.0.1:6333" | Out-Null; $qdrantOk = $true; Write-Host "Qdrant ✔" -ForegroundColor Green; break }
     catch { Write-Host "  waiting for Qdrant... ($i)" -ForegroundColor DarkGray; Start-Sleep 1 }
 }
+if ($qdrantProc) { Write-ServicePid -PidDir $pidDir -Role "qdrant" -ProcessId $qdrantProc.Id }
 if (-not $qdrantOk) { Write-Host "Qdrant FAILED  (:6333 did not respond after 30s)" -ForegroundColor Red }
 
 # STEP 4 - Backend (background job)
@@ -304,6 +322,8 @@ if ($backendOk) {
 } else {
     Write-Host "Backend FAILED  (:8000/health did not respond after 20s)" -ForegroundColor Red
 }
+$backendPid = Get-ListeningPid 8000
+if ($backendPid -gt 0) { Write-ServicePid -PidDir $pidDir -Role "backend" -ProcessId $backendPid }
 
 # STEP 4.5 - MCP Servers
 Write-Host "`n[STEP 4.5] Starting MCP Servers..." -ForegroundColor Yellow
@@ -348,6 +368,8 @@ if ($frontendOk) {
 } else {
     Write-Host "Frontend FAILED  (:5173 did not respond after 20s)" -ForegroundColor Red
 }
+$frontendPid = Get-ListeningPid 5173
+if ($frontendPid -gt 0) { Write-ServicePid -PidDir $pidDir -Role "frontend" -ProcessId $frontendPid }
 
 $allOk = $proxyReady -and $qdrantOk -and $backendOk -and $frontendOk
 if ($allOk) {
@@ -377,6 +399,8 @@ try {
     Write-Host "`nShutting down..." -ForegroundColor Red
     Stop-Job $proxyJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
     Remove-Job $proxyJob, $backendJob, $frontendJob -ErrorAction SilentlyContinue
+    # PID-scoped cleanup: stop exactly the processes we recorded (never by name).
+    Stop-RecordedServices -PidDir $pidDir
     foreach ($svc in @("llama","qdrant","node","python")) {
         # # Get-Process -Name $svc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     }
