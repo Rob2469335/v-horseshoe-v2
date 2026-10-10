@@ -22,6 +22,13 @@ uses a payload value as a command, import path, module name, or shell argument.
 A guest-supplied ``artifact.name`` is validated as a **bare file name** and is
 returned as data only — the reader does not open it.
 
+**Outcome claims are not transportable.**  A record may not assert
+``completed`` or ``failed``: this schema carries no independently verifiable
+execution evidence, so accepting such a status would turn transport integrity
+into a validity claim.  Outcome evidence travels only through
+:mod:`qwen_train.f2_evidence` with retained artifacts.  Rejected with
+``OUTCOME_STATUS_NOT_TRANSPORTABLE``.
+
 Trust boundary (read this before believing a record)
 ----------------------------------------------------
 SHA-256 in the envelope detects accidental or unauthorised modification of the
@@ -286,6 +293,19 @@ def validate_payload(
         return _reject("schema", "UNEXPECTED_FIELD", detail="bad phase")
     if obj["status"] not in JOB_STATUSES:
         return _reject("schema", "INVALID_STATUS")
+    # An OUTCOME claim ("completed" / "failed") is not transportable. This
+    # schema carries no independently verifiable execution evidence, so letting
+    # such a status through would convert a transport-integrity result into a
+    # scientific-validity claim — exactly the confusion this channel must not
+    # permit. Outcome evidence travels only through qwen_train.f2_evidence with
+    # retained artifacts; lifecycle-only states (planned/attempted/rejected/
+    # not_established) remain transportable.
+    if obj["status"] in ("completed", "failed"):
+        return _reject(
+            "schema",
+            "OUTCOME_STATUS_NOT_TRANSPORTABLE",
+            detail="outcome claims require f2_evidence with retained artifacts",
+        )
     for key in ("task_id", "job_id", "source", "created_at"):
         if not isinstance(obj[key], str) or not obj[key].strip():
             return _reject("schema", "MALFORMED_FIELD")

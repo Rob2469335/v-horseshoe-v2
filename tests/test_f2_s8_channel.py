@@ -244,6 +244,37 @@ class TestPayloadSchemaRejections:
         )
 
 
+class TestOutcomeClaimsAreNotTransportable:
+    """A transport record must not assert an execution outcome.
+
+    Reproduced defect: before this rule, a payload with status ``completed`` (or
+    ``failed``) and no execution block validated as OK, i.e. a transport record
+    could claim a finished execution with zero execution evidence.  This schema
+    has no field an independent verifier could check, so the only safe rule is
+    to refuse the claim; outcome evidence belongs to qwen_train.f2_evidence.
+    """
+
+    def _run(self, tmp_path, obj, **kw):
+        return _code(_write(tmp_path, encode_record(obj)), **kw)
+
+    @pytest.mark.parametrize("status", ["completed", "failed"])
+    def test_outcome_status_is_refused(self, tmp_path, status):
+        assert self._run(tmp_path, _payload(status=status)) == "OUTCOME_STATUS_NOT_TRANSPORTABLE"
+
+    @pytest.mark.parametrize("status", ["planned", "attempted", "rejected", "not_established"])
+    def test_lifecycle_statuses_remain_transportable(self, tmp_path, status):
+        assert read_channel_file(
+            _write(tmp_path, encode_record(_payload(status=status)))
+        ).ok is True
+
+    def test_a_clean_claim_is_still_impossible(self, tmp_path):
+        """There is no contamination field, so CLEAN cannot be smuggled in."""
+        assert self._run(tmp_path, _payload(contamination_class="CLEAN")) == "UNEXPECTED_FIELD"
+
+    def test_admission_claim_is_impossible(self, tmp_path):
+        assert self._run(tmp_path, _payload(admitted=True)) == "UNEXPECTED_FIELD"
+
+
 class TestGuestSuppliedValues:
     @pytest.mark.parametrize(
         "name",
