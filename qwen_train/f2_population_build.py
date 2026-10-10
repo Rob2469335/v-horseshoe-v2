@@ -6,6 +6,11 @@ upstream fields to the screening contract, derives R8 from the reference fix
 (:mod:`qwen_train.f2_relevant_files`), de-duplicates, screens, and writes a census
 plus a rejection record.
 
+The source adapter is selected from the sibling ``PROVENANCE.json`` the
+acquisition wrote next to the JSONL (:func:`resolve_source_key`), so a
+single-source rebuild is correct for **either** source instead of silently
+assuming SWE-bench-Live.
+
 Usage
 -----
     python -m qwen_train.f2_population_build \\
@@ -27,6 +32,7 @@ from qwen_train.f2_population import (
     deduplicate_rows,
     screen_pool_rows,
 )
+from qwen_train.f2_population_acquire import SOURCES
 from qwen_train.f2_relevant_files import relevant_file_set_from_patch
 
 #: Preference order when the SAME canonical identity is supplied by more than one
@@ -70,9 +76,56 @@ def _as_test_cmd(value: Any) -> str:
     return str(value)
 
 
-def to_screen_row(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Map an acquired SWE-bench-Live row to the screening contract's row shape."""
-    return source_to_screen_row("swe-bench-live", row)
+#: What a single-source build assumes when the acquisition recorded no
+#: provenance next to the JSONL.  Matches the source F2-IMPL-AUTH-029 built the
+#: original single-source census from (``swe-bench-live``).
+DEFAULT_SOURCE_KEY = "swe-bench-live"
+
+
+def resolve_source_key(acquired_path: Path) -> str:
+    """Read the source key the acquisition itself recorded beside the JSONL.
+
+    Why this exists (``PROVEN``): ``to_screen_row`` used to hard-wire
+    ``swe-bench-live``, so a single-source build from the **SWE-rebench-V2**
+    acquisition mapped ``test_cmd`` from ``test_cmds``/``test_cmd`` instead of
+    ``install_config.test_cmd``.  Rebench rows carry neither, so every one of the
+    32,079 rows came through with ``test_cmd == ""`` and was rejected at S5 -- a
+    silent, total loss of the population in the documented ``--acquired`` path.
+
+    The acquisition already writes ``PROVENANCE.json`` (with ``source_key``)
+    next to ``acquired.jsonl``, so the key is *read from the artifact that
+    declares it* rather than re-declared at the call site.  Fail closed: an
+    unreadable or unknown provenance must not silently fall back to the wrong
+    adapter.
+    """
+    prov_path = Path(acquired_path).parent / "PROVENANCE.json"
+    if not prov_path.is_file():
+        return DEFAULT_SOURCE_KEY
+    try:
+        prov = json.loads(prov_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"acquisition provenance is unreadable: {prov_path}: {exc}") from exc
+    if not isinstance(prov, Mapping):
+        raise ValueError(f"acquisition provenance is not a JSON object: {prov_path}")
+    key = str(prov.get("source_key") or "")
+    if key not in SOURCES:
+        raise ValueError(
+            f"acquisition provenance declares unknown source_key {key!r} "
+            f"(known: {sorted(SOURCES)})"
+        )
+    return key
+
+
+def to_screen_row(
+    row: Mapping[str, Any], *, source_key: str = DEFAULT_SOURCE_KEY
+) -> dict[str, Any]:
+    """Map an acquired row to the screening contract's row shape.
+
+    ``source_key`` selects the adapter (:func:`source_to_screen_row`).  It
+    defaults to the SWE-bench-Live shape for backwards compatibility; pass the
+    key (or use :func:`resolve_source_key`) for any other acquisition.
+    """
+    return source_to_screen_row(source_key, row)
 
 
 def _coerce_created_at(value: Any) -> str:
@@ -167,7 +220,8 @@ def build(
 ) -> tuple[Any, dict[str, Any]]:
     """Return ``(manifest, rejections_record)``. Pure except for reading ``acquired_path``."""
     raw_rows = _read_jsonl(acquired_path)
-    screen_rows = [to_screen_row(r) for r in raw_rows]
+    source_key = resolve_source_key(acquired_path)
+    screen_rows = [to_screen_row(r, source_key=source_key) for r in raw_rows]
 
     # D5: deterministic de-duplication BEFORE screening.
     kept_rows, dedupe_rejections = deduplicate_rows(screen_rows)
@@ -213,6 +267,7 @@ def build(
             }
         )
     rejections_record = {
+        "source_key": source_key,
         "pre_screen_exclusions": dedupe_rejections,
         "r8_no_source_file": r8_missing,
         "screen_rejections": screen_rejections,

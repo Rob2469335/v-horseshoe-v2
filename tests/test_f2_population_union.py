@@ -8,9 +8,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from qwen_train.f2_population_build import (
     _coerce_created_at,
+    build,
     build_union,
+    resolve_source_key,
     source_to_screen_row,
 )
 
@@ -189,3 +193,92 @@ class TestUnion:
         man, _ = build_union([("swe-rebench-v2", reb)])
         assert len(man.metadata_eligible) == 1
         assert len(man.admitted) == 0
+
+
+class TestSingleSourceBuild:
+    """``--acquired`` rebuilds must use the adapter the acquisition declares.
+
+    ``to_screen_row`` used to hard-wire ``swe-bench-live``, so a single-source
+    build from the **SWE-rebench-V2** acquisition mapped ``test_cmd`` from
+    ``test_cmds`` instead of ``install_config.test_cmd``: every rebench row came
+    through with an empty ``test_cmd`` and was rejected at S5.  The source key
+    is now read from the ``PROVENANCE.json`` the acquisition already writes
+    beside the JSONL.
+    """
+
+    def _acquired(self, tmp_path: Path, source_key: str, rows, provenance=True) -> Path:
+        d = tmp_path / source_key
+        d.mkdir()
+        p = _write(d, "acquired.jsonl", rows)
+        if provenance:
+            (d / "PROVENANCE.json").write_text(
+                json.dumps({"source_key": source_key, "row_count": len(rows)}),
+                encoding="utf-8",
+            )
+        return p
+
+    def test_rebench_provenance_selects_the_rebench_adapter(self, tmp_path):
+        p = self._acquired(
+            tmp_path,
+            "swe-rebench-v2",
+            [
+                _row(
+                    "o__a-1",
+                    install_config={"test_cmd": "npm run test:unit"},
+                    created_at="2025-06-01 00:00:00",
+                )
+            ],
+        )
+        man, rec = build(p)
+        assert rec["source_key"] == "swe-rebench-v2"
+        entry = man.entries[0]
+        # Under the hard-wired live adapter this row lost test_cmd and failed S5.
+        assert entry.test_cmd == "npm run test:unit"
+        assert entry.metadata_eligible is True
+        assert entry.admitted is False  # S8 evidence still does not exist
+
+    def test_live_provenance_keeps_the_live_adapter(self, tmp_path):
+        p = self._acquired(
+            tmp_path,
+            "swe-bench-live",
+            [_row("o__a-1", test_cmds=["pytest -q"], created_at="2025-06-01T00:00:00")],
+        )
+        man, rec = build(p)
+        assert rec["source_key"] == "swe-bench-live"
+        assert man.entries[0].test_cmd == "pytest -q"
+
+    def test_no_provenance_falls_back_to_the_documented_default(self, tmp_path):
+        """F2-IMPL-AUTH-029's reproduction command names a bare ``--acquired`` path."""
+        p = _write(
+            tmp_path,
+            "acquired.jsonl",
+            [_row("o__a-1", test_cmds=["pytest -q"], created_at="2025-06-01T00:00:00")],
+        )
+        assert resolve_source_key(p) == "swe-bench-live"
+        man, rec = build(p)
+        assert rec["source_key"] == "swe-bench-live"
+        assert man.entries[0].test_cmd == "pytest -q"
+
+    def test_unknown_declared_source_key_fails_closed(self, tmp_path):
+        d = tmp_path / "odd"
+        d.mkdir()
+        p = _write(d, "acquired.jsonl", [_row()])
+        (d / "PROVENANCE.json").write_text(
+            json.dumps({"source_key": "not-a-source"}), encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="unknown source_key"):
+            build(p)
+
+    def test_unreadable_provenance_fails_closed(self, tmp_path):
+        d = tmp_path / "broken"
+        d.mkdir()
+        p = _write(d, "acquired.jsonl", [_row()])
+        (d / "PROVENANCE.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(ValueError, match="unreadable"):
+            build(p)
+
+    def test_row_is_mapped_through_the_declared_key(self):
+        row = _row(install_config={"test_cmd": "go test ./..."})
+        # The defect, stated directly: the live adapter cannot read this field.
+        assert source_to_screen_row("swe-bench-live", row)["test_cmd"] == ""
+        assert source_to_screen_row("swe-rebench-v2", row)["test_cmd"] == "go test ./..."
