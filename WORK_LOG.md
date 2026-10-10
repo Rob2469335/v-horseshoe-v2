@@ -1281,3 +1281,50 @@ clean; the real Hyper-V scratch VHDX still round-trips.
 fixtures only. No VM started; no disk attached or mounted; no production integration
 or F2/S8 readiness. No metadata-region checksum was added (the specification defines
 none).
+
+---
+
+## 2026-10-09 - F2 S8 VHDX reader: structural-range and payload-interval overlap fixes (Stage 1)
+
+**State on entry.** HEAD `3639953d`, worktree clean except the pre-existing
+`tests/conftest.py` and 38 untracked user files.
+
+**Confirmed defects (PROVEN by the independent audit and reproduced here).**
+
+* **A - structural-range overlap.** `_structural_ranges` assembled the header
+  section, region-table area, declared regions, and the log, but the list was only
+  used to reject payload blocks; nothing compared the structural ranges with one
+  another. A file whose log region `[2,3) MiB` coincided with the declared metadata
+  region `[2,3) MiB` was **accepted**. Basis: [MS-VHDX] 2.1 (structures occupy
+  non-overlapping file ranges).
+* **B - partial payload-block overlap.** The BAT loop tracked exact start offsets
+  (`seen_offsets`) and checked payloads against structural ranges, but never checked
+  payload intervals against each other. With 2 MiB blocks, BAT offsets 4,5,6,7 MiB
+  produced spans `[4,6) [5,7) [6,8) [7,9)` and the image was **accepted**. Exact-start
+  uniqueness does not imply interval disjointness.
+
+**Corrections (`qwen_train/f2_s8_vhdx.py`).** Added `_check_structural_overlap`,
+called on the full structural list after `_structural_ranges` (half-open intervals;
+adjacency permitted), which rejects the log overlapping any declared region and
+regions overlapping the header/region-table area. Added payload-span collection with
+a sorted pairwise disjointness check (`a1 > b0`) in the BAT loop, preserving the
+existing state/reserved/alignment/bounds/structural checks and exact-start
+uniqueness.
+
+**Tests (`tests/test_f2_s8_stage1.py`).** New `TestOverlapDefects`:
+log-overlaps-metadata rejected; partial payload overlap (2 MiB blocks) rejected;
+duplicate payload start rejected; valid adjacent payload blocks accepted; valid
+payload blocks with a gap accepted. **89 passed**; `ruff --select E9,F` clean; the
+real Hyper-V scratch VHDX (2 MiB blocks, log `[1,2) MiB`, metadata `[2,3) MiB`)
+still round-trips.
+
+**Spec vs reader invariant.** Structural non-overlap is an explicit layout
+requirement ([MS-VHDX] 2.1). Payload interval disjointness is a necessary reader
+safety invariant: 2.5.1 states only FileOffsetMB uniqueness, so partial-span overlap
+with distinct offsets is not explicitly prohibited but would map two virtual blocks
+onto overlapping file bytes.
+
+**Limitations.** Live guest-written-disk evidence remains NOT ESTABLISHED; synthetic
+fixtures only. Fixed VHDX only; no active-log replay, dynamic, or differencing
+support. No VM started; no disk attached or mounted; no production integration or
+F2/S8 readiness.

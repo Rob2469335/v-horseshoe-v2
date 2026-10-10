@@ -238,6 +238,20 @@ def _check_regions(entries, file_size: int):
             raise VhdxError(f"regions overlap: {a['index']} and {b['index']}")
 
 
+def _check_structural_overlap(ranges) -> None:
+    """Reject intersections between structural ranges (half-open ``[start, end)``).
+
+    Structural ranges are the header section ``[0, 192K)``, the region-table area
+    ``[192K, 320K)`` (which covers BOTH region-table copies), every declared region,
+    and the log region when present.  Per [MS-VHDX] 2.1 these structures occupy
+    non-overlapping file ranges; adjacency (``a1 == b0``) is permitted.
+    """
+    ordered = sorted(ranges)
+    for (a0, a1), (b0, b1) in zip(ordered, ordered[1:]):
+        if a1 > b0:
+            raise VhdxError(f"structural ranges overlap: [{a0},{a1}) and [{b0},{b1})")
+
+
 def _structural_ranges(entries, log_offset: int, log_length: int):
     ranges = [(0, HEADER_SECTION_END), (HEADER_SECTION_END, REGION_TABLE_END)]
     for e in entries:
@@ -429,9 +443,11 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
             return bat_sb_index(chunk, chunk_ratio, block_count)
 
         structural = _structural_ranges(entries, log_offset, log_length)
+        _check_structural_overlap(structural)
         payload_offset = None
         bat0 = 0
         seen_offsets: set[int] = set()
+        spans: list[tuple[int, int, int]] = []
         for i in range(block_count):
             idx = payload_index(i)
             (entry,) = struct.unpack_from("<Q", bat_entries, idx * 8)
@@ -454,8 +470,16 @@ def inspect_vhdx(path: Path) -> VhdxInfo:
             for r0, r1 in structural:
                 if block_off < r1 and r0 < block_off + block_size:
                     raise VhdxError(f"BAT payload entry {i} block overlaps a structural region [{r0},{r1})")
+            spans.append((block_off, block_off + block_size, i))
             if i == 0:
                 bat0, payload_offset = entry, block_off
+        # Payload blocks must be pairwise disjoint (half-open intervals). Exact
+        # start-offset uniqueness alone does not catch partial overlap when the
+        # block size exceeds 1 MiB and starts differ by less than a block.
+        spans.sort()
+        for (a0, a1, ai), (b0, b1, bi) in zip(spans, spans[1:]):
+            if a1 > b0:
+                raise VhdxError(f"payload blocks {ai} and {bi} overlap: [{a0},{a1}) and [{b0},{b1})")
         for chunk in range(num_chunks):
             idx = sb_index(chunk)
             (entry,) = struct.unpack_from("<Q", bat_entries, idx * 8)

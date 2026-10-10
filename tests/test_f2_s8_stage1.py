@@ -647,6 +647,40 @@ class TestMetadataInvariants:
         assert info.layout == "fixed"
 
 
+class TestOverlapDefects:
+    def test_log_overlaps_metadata_region_rejected(self, tmp_path):
+        buf = build_vhdx()
+        struct.pack_into("<I", buf, HEADER_OFFS[1] + 68, MB)     # LogLength = 1 MiB
+        struct.pack_into("<Q", buf, HEADER_OFFS[1] + 72, 2 * MB)  # LogOffset == metadata region
+        _seal_header(buf, HEADER_OFFS[1])
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_partial_payload_overlap_rejected(self, tmp_path):
+        # block_size 2 MiB -> blocks at 4,5,6,7 MiB partially overlap.
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, build_vhdx(block_size=2 * MB)))
+
+    def test_duplicate_payload_start_rejected(self, tmp_path):
+        buf = build_vhdx()
+        first = struct.unpack_from("<Q", buf, BAT_OFF)[0]
+        struct.pack_into("<Q", buf, BAT_OFF + 8, first)  # block 1 aliases block 0
+        with pytest.raises(VhdxError):
+            inspect_vhdx(_write(tmp_path, buf))
+
+    def test_valid_adjacent_payload_blocks_accepted(self, tmp_path):
+        info = inspect_vhdx(_write(tmp_path, build_vhdx(record=_good_record())))
+        assert info.block_size == BLOCK
+
+    def test_valid_gap_between_payload_blocks_accepted(self, tmp_path):
+        buf = build_vhdx(vds=4 * MB)  # 4 blocks: default offsets 4,5,6,7 MiB
+        for i, off_mb in ((1, 6), (2, 7), (3, 8)):
+            struct.pack_into("<Q", buf, BAT_OFF + i * 8, (off_mb << 20) | 6)
+        # spans [4,5) [6,7) [7,8) [8,9): disjoint, with a gap between the first two
+        info = inspect_vhdx(_write(tmp_path, buf))
+        assert info.payload_offset == PAYLOAD_BASE
+
+
 class TestReaderMechanics:
     def test_reader_source_has_no_attach_or_subprocess(self):
         """Supplemental static guard: the reader must not attach/mount or shell out."""
