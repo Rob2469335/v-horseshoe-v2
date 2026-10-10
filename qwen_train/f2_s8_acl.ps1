@@ -129,13 +129,15 @@ function Compare-AclTable($readback) {
             }
         }
     }
-    return $mismatches
+    return ,$mismatches
 }
 
 $rb1 = @(Get-VMNetworkAdapterExtendedAcl -VMName $VMName)
 $rb2 = @(Get-VMNetworkAdapterExtendedAcl -VMName $VMName)
-$m1 = Compare-AclTable $rb1
-$m2 = Compare-AclTable $rb2
+# Normalise at the call site: a zero-element result unrolls to $null, and
+# $null.Count throws under Set-StrictMode -Version Latest.
+$m1 = @(Compare-AclTable $rb1)
+$m2 = @(Compare-AclTable $rb2)
 
 Write-Output "read-back 1: $($rb1.Count) entries, mismatches: $($m1.Count)"
 Write-Output "read-back 2: $($rb2.Count) entries, mismatches: $($m2.Count)"

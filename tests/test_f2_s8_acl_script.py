@@ -163,6 +163,52 @@ class TestNonMutatingByDefault:
         assert "0x80070057" in _text() and "Protocol" in _text()
 
 
+class TestMismatchHandling:
+    """Regression coverage for the empty-mismatch defect.
+
+    `Compare-AclTable` returned an empty array; PowerShell unrolled it to $null,
+    and `$null.Count` threw under `Set-StrictMode -Version Latest`, so a
+    SUCCESSFUL apply exited 1. These static assertions fail against the previous
+    revision and pin both the zero-mismatch and the mismatch paths.
+    """
+
+    def test_mismatch_result_is_not_unrolled(self):
+        assert "return ,$mismatches" in _text()
+
+    def test_call_site_normalises_to_an_array(self):
+        text = _text()
+        assert "$m1 = @(Compare-AclTable $rb1)" in text
+        assert "$m2 = @(Compare-AclTable $rb2)" in text
+
+    def test_no_bare_nullable_count_access_remains(self):
+        text = _text()
+        assert "$m1 = Compare-AclTable" not in text
+        assert "$m2 = Compare-AclTable" not in text
+
+    def test_zero_mismatch_path_exits_zero(self):
+        """Both read-backs clean -> print the success line, exit 0."""
+        text = _text()
+        verify = text.index("$m1 = @(Compare-AclTable $rb1)")
+        tail = text[verify:]
+        zero = tail.index("if ($m1.Count -gt 0 -or $m2.Count -gt 0)")
+        assert "exit 3" in tail[zero:zero + 400]
+        assert "RESULT: rule set matches the intended policy" in tail
+        assert tail.rindex("exit 0") > zero
+
+    def test_mismatch_path_exits_three(self):
+        text = _text()
+        verify = text.index("$m1 = @(Compare-AclTable $rb1)")
+        tail = text[verify:]
+        zero = tail.index("if ($m1.Count -gt 0 -or $m2.Count -gt 0)")
+        assert "MISMATCH" in tail[zero:zero + 400]
+        assert "exit 3" in tail[zero:zero + 400]
+
+    def test_comparison_covers_stateful_and_protocol(self):
+        text = _text()
+        assert "stateful mismatch" in text
+        assert "protocol mismatch" in text
+
+
 class TestPowerShellSyntax:
     """PowerShell syntax/dry-run were verified by hand this session under
     PowerShell 7.6.6 (ParseFile returned zero errors; the dry run printed the
