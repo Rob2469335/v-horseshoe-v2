@@ -485,30 +485,36 @@ class TestBug5VerificationGateNoRubberStamp:
 
     def test_verification_failure_records_reflexion(self, monkeypatch):
         """Event-driven reflexion (reviewer item #3): a goal-loop verification
-        failure must immediately write a ReflexionMemory rule keyed to the
-        entry agent so the closed learning loop sees CLI goal failures."""
-        from unittest.mock import AsyncMock
-        import swarm_os.services.reflection_loop as rl
+        failure must immediately write a machine-readable reflexion record keyed
+        to the entry agent so the closed learning loop sees CLI goal failures.
 
-        svc = AsyncMock()
-        svc.store_reflexion = AsyncMock()
-        monkeypatch.setattr(rl, "get_reflection_service", lambda: svc)
+        Since 717661a2 (2026-09-18) all reflection memory is routed through
+        PromptRepairer, so the record is written via
+        ``get_prompt_repairer().process_failure(...)`` rather than
+        ``reflection_loop.get_reflection_service().store_reflexion(...)``."""
+        from unittest.mock import MagicMock, patch
+
+        repairer = MagicMock()
+        repairer.process_failure = MagicMock()
 
         mod = _reload_autonomous()
-        mod._record_verification_reflexion(
-            "fix the bug",
-            "coder",
-            "E   AssertionError: boom\nFile: agent_service.py",
-            "Task completed.",
-            console=None,
-        )
+        with patch(
+            "swarm_os.services.prompt_repairer.get_prompt_repairer",
+            return_value=repairer,
+        ):
+            mod._record_verification_reflexion(
+                "fix the bug",
+                "coder",
+                "E   AssertionError: boom\nFile: agent_service.py",
+                "Task completed.",
+                console=None,
+            )
 
-        svc.store_reflexion.assert_awaited_once()
-        kwargs = svc.store_reflexion.await_args.kwargs
+        repairer.process_failure.assert_called_once()
+        kwargs = repairer.process_failure.call_args.kwargs
         assert kwargs["component"] == "coder"
-        assert kwargs["action"] == "verification_failed"
-        assert "verification failed" in kwargs["failure_reason"]
-        assert "coder" in kwargs["do_not_repeat"]
+        assert "goal verification failed" in kwargs["failure_reason"]
+        assert "related tests" in kwargs["hypothesized_action"]
 
     def test_verification_reflexion_never_raises(self, monkeypatch):
         """A failing reflexion store must never break the goal loop."""

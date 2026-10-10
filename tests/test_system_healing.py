@@ -150,21 +150,28 @@ def test_never_touch_protects_swarm_core():
 
 
 def test_healing_watchman_stores_system_lesson_issue_resolution():
-    """Verify that _store_system_lesson extracts the issue name cleanly without defaulting to 'None'."""
-    from unittest.mock import AsyncMock, patch
+    """Verify that _store_system_lesson extracts the issue name cleanly without
+    defaulting to 'None'.
+
+    Since 717661a2 (2026-09-18) all reflection memory is routed through
+    PromptRepairer, so the lesson is persisted via
+    ``get_prompt_repairer().process_failure(...)`` rather than
+    ``reflection_loop.get_reflection_service().store_reflexion(...)``.
+    """
+    from unittest.mock import MagicMock, patch
     from organism_console.core.healing_watchman import HealingWatchman
 
     watchman = HealingWatchman()
     stored_calls = []
 
-    mock_service = AsyncMock()
-    mock_service.store_reflexion = AsyncMock(
+    mock_repairer = MagicMock()
+    mock_repairer.process_failure = MagicMock(
         side_effect=lambda **kwargs: stored_calls.append(kwargs)
     )
 
     with patch(
-        "swarm_os.services.reflection_loop.get_reflection_service",
-        return_value=mock_service,
+        "swarm_os.services.prompt_repairer.get_prompt_repairer",
+        return_value=mock_repairer,
     ):
         # Case 1: Probe signal where detail is nested dict without top-level 'issue'
         symptom1 = {
@@ -180,8 +187,8 @@ def test_healing_watchman_stores_system_lesson_issue_resolution():
 
         assert len(stored_calls) == 1
         assert stored_calls[0]["component"] == "system:memory_pressure"
-        assert "None" not in stored_calls[0]["task"]
-        assert stored_calls[0]["action"] == "system:free_memory"
+        assert "None" not in stored_calls[0]["hypothesized_action"]
+        assert "free_memory" in stored_calls[0]["hypothesized_action"]
 
         # Case 2: Direct issue in detail dict
         symptom2 = {
@@ -197,7 +204,7 @@ def test_healing_watchman_stores_system_lesson_issue_resolution():
 
         assert len(stored_calls) == 2
         assert stored_calls[1]["component"] == "system:disk_space"
-        assert "None" not in stored_calls[1]["task"]
+        assert "None" not in stored_calls[1]["hypothesized_action"]
 
         # Case 3: Detail without issue key (e.g. qdrant probe failure)
         symptom3 = {
@@ -213,4 +220,4 @@ def test_healing_watchman_stores_system_lesson_issue_resolution():
 
         assert len(stored_calls) == 3
         assert stored_calls[2]["component"] == "system:qdrant"
-        assert "None" not in stored_calls[2]["task"]
+        assert "None" not in stored_calls[2]["hypothesized_action"]

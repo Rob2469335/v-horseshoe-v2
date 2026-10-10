@@ -537,6 +537,12 @@ def _find_related_test_files(file_path: str) -> list[str]:
     import glob as _glob
 
     try:
+        # A mutated module can be exercised by more tests than the old 8-file cap
+        # admitted: tool_executor's canonical test, test_opencode_parity.py, is
+        # the 9th content match and was silently dropped, so the mutation loop
+        # validated tool_executor edits without the test that actually covers
+        # them. Keep a generous bound (correctness over run time).
+        _max_related = 20
         base = Path(file_path).stem
         mod = str(file_path).replace("\\", "/").replace(".py", "")
         modtail = mod.split("/")[-1]
@@ -550,7 +556,7 @@ def _find_related_test_files(file_path: str) -> list[str]:
                 if t not in seen:
                     seen.add(t)
                     out.append(t)
-                if len(out) >= 8:
+                if len(out) >= _max_related:
                     return out
         # ...then content matches, EVEN when name matches already exist: a module
         # can be exercised by a test whose NAME does not contain it (e.g.
@@ -567,7 +573,7 @@ def _find_related_test_files(file_path: str) -> list[str]:
             if base in head or modtail in head:
                 seen.add(t)
                 out.append(t)
-                if len(out) >= 8:
+                if len(out) >= _max_related:
                     break
         return out
     except Exception as e:
