@@ -1,0 +1,33 @@
+{
+  "artifacts_sha256": {
+    "excluded": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "first_30": "254c148eff0397820537de41104cbd6180fb8a4ffaa575aa119b645a2989ee80",
+    "full_ordered_metadata": "970d3c18ff46a753a226a1a507eb28094fff885472508f1d6f90c1ae06157c8c",
+    "ordering_rule_manifest": "709f677897b96f5e489930981fade28991724881a677c3e584dd2986fce2ec7e",
+    "source_manifest": "dfe48e05c70294345d100a2169c0c5330f871ae0401b70c0599935d3eb17eefe"
+  },
+  "counts": {
+    "evaluator_compatible": 3870,
+    "excluded": 0,
+    "metadata_eligible": 9268,
+    "python_confirmed": 3828,
+    "registered": 3828,
+    "shortfall": {
+      "not_evaluator_compatible": 5398,
+      "not_python_confirmed": 42
+    }
+  },
+  "generated_at": "2026-10-10T17:31:57Z",
+  "inputs": {
+    "union_report_sha256": "fd523a9b450676285dd504a8f4245b690723849e54522b3962b0d10eaa83b54e",
+    "upstream_swe_bench_live_b51a8642_acquired_sha256": "9f22aa07a6510cb9aee455423a7aaa418c2417d488823b858d8fc1888bab2785",
+    "upstream_swe_rebench_v2_10483de0_acquired_sha256": "577b56ff483885ac3e22d78759f88453f33a3586fab4dd84b8b38a41eb3f5198"
+  },
+  "note": "Hash-only manifest. The ordered list and its per-task metadata live under data/f2_population/registration/ (git-ignored). created_at is ordering metadata only; eligibility never depends on a run outcome.",
+  "operative": true,
+  "ordering_rule": "created_at_desc_instance_id_asc_v1",
+  "predicate": "metadata-eligible (every screen except S8 passes) AND test_cmd matches \\bpytest\\b with no existing --junitxml AND every declared FAIL_TO_PASS and PASS_TO_PASS entry is a '<path>::[<Class>::]<test>' pytest node id with non-empty segments AND every declared node path ends '.py'",
+  "registration_content_sha256": "5f3c9f47eb622d7d983cfdcb6ebd3d240f6936087a049781c741ba37e237f042",
+  "registration_id": "evaluator_compat_python_confirmed_v1",
+  "schema_version": "f2_registration_v1"
+}
