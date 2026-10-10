@@ -35,32 +35,43 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Ordered exactly as tabled and approved for review.  Highest weight = highest
-# priority.  #1 must outrank #2 because the NAT gateway lives inside 10.0.0.0/8.
+# Ordered exactly as reviewed, then corrected against the official reference:
+#  * "Larger weight values apply first, and once an ACL entry applies to a packet,
+#     other entries are no longer relevant for that packet."  (doc: -Weight)
+#  * LocalIPAddress/RemoteIPAddress accept a host address, a SUBNET address,
+#    0.0.0.0/0 (all IPv4), ::/0 (all IPv6), or ANY (all IPv4 AND IPv6).
+#  * Stateful $True makes an entry apply to the return packet of the session, so
+#    every ALLOW entry must be stateful or its replies hit the inbound default deny.
+#  * #1 must outrank #2 because the NAT gateway lives inside 10.0.0.0/8.
+#  * #7 is IPv4-only (0.0.0.0/0) on purpose: with no allow above it, IPv6 traffic
+#    falls through to the default deny rather than being permitted by ANY.
+#  * Local is ANY because the ACL is already bound to this vNIC; pinning a guest
+#    address that has never been observed would be an unverified assumption.
 $Rules = @(
-    @{ N = 1; Direction = 'Outbound'; Action = 'Allow'; Local = $GuestIP; Remote = $Gateway;          Weight = 900 }
-    @{ N = 2; Direction = 'Outbound'; Action = 'Deny';  Local = $GuestIP; Remote = '10.0.0.0/8';     Weight = 800 }
-    @{ N = 3; Direction = 'Outbound'; Action = 'Deny';  Local = $GuestIP; Remote = '192.168.0.0/16'; Weight = 700 }
-    @{ N = 4; Direction = 'Outbound'; Action = 'Deny';  Local = $GuestIP; Remote = '172.16.0.0/12';  Weight = 600 }
-    @{ N = 5; Direction = 'Outbound'; Action = 'Deny';  Local = $GuestIP; Remote = '169.254.0.0/16'; Weight = 500 }
-    @{ N = 6; Direction = 'Outbound'; Action = 'Deny';  Local = $GuestIP; Remote = '10.72.0.0/24';   Weight = 400 }
-    @{ N = 7; Direction = 'Outbound'; Action = 'Allow'; Local = $GuestIP; Remote = 'ANY';            Weight = 300 }
-    @{ N = 8; Direction = 'Outbound'; Action = 'Deny';  Local = 'ANY';    Remote = 'ANY';            Weight = 1   }
-    @{ N = 9; Direction = 'Inbound';  Action = 'Deny';  Local = 'ANY';    Remote = 'ANY';            Weight = 1   }
+    @{ N = 1; Direction = 'Outbound'; Action = 'Allow'; Local = 'ANY'; Remote = $Gateway;          Weight = 900; Stateful = $true  }
+    @{ N = 2; Direction = 'Outbound'; Action = 'Deny';  Local = 'ANY'; Remote = '10.0.0.0/8';      Weight = 800; Stateful = $false }
+    @{ N = 3; Direction = 'Outbound'; Action = 'Deny';  Local = 'ANY'; Remote = '192.168.0.0/16';  Weight = 700; Stateful = $false }
+    @{ N = 4; Direction = 'Outbound'; Action = 'Deny';  Local = 'ANY'; Remote = '172.16.0.0/12';  Weight = 600; Stateful = $false }
+    @{ N = 5; Direction = 'Outbound'; Action = 'Deny';  Local = 'ANY'; Remote = '169.254.0.0/16'; Weight = 500; Stateful = $false }
+    @{ N = 6; Direction = 'Outbound'; Action = 'Deny';  Local = 'ANY'; Remote = '10.72.0.0/24';   Weight = 400; Stateful = $false }
+    @{ N = 7; Direction = 'Outbound'; Action = 'Allow'; Local = 'ANY'; Remote = '0.0.0.0/0';      Weight = 300; Stateful = $true  }
+    @{ N = 8; Direction = 'Outbound'; Action = 'Deny';  Local = 'ANY'; Remote = 'ANY';            Weight = 1;   Stateful = $false }
+    @{ N = 9; Direction = 'Inbound';  Action = 'Deny';  Local = 'ANY'; Remote = 'ANY';            Weight = 1;   Stateful = $false }
 )
 
 function Get-CommandText {
     $Rules | ForEach-Object {
+        $extra = if ($_.Stateful) { " -Stateful `$true -IdleSessionTimeout 1800" } else { " -Stateful `$false" }
         "Add-VMNetworkAdapterExtendedAcl -VMName '$VMName' -Direction $($_.Direction) " +
         "-Action $($_.Action) -LocalIPAddress '$($_.Local)' -RemoteIPAddress '$($_.Remote)' " +
-        "-Weight $($_.Weight) -Stateful `$false"
+        "-Weight $($_.Weight)$extra"
     }
 }
 
 Write-Output "F2-S8-VM1 extended-ACL plan  ($($Rules.Count) rules)"
 $Rules | ForEach-Object {
-    Write-Output ("  {0}. {1,-8} {2,-5} {3,-11} -> {4,-16} w={5}" -f
-        $_.N, $_.Direction, $_.Action, $_.Local, $_.Remote, $_.Weight)
+    Write-Output ("  {0}. {1,-8} {2,-5} {3,-6} -> {4,-16} w={5,-4} stateful={6}" -f
+        $_.N, $_.Direction, $_.Action, $_.Local, $_.Remote, $_.Weight, $_.Stateful)
 }
 
 if (-not $Apply) {
@@ -82,8 +93,17 @@ if ($existing.Count -gt 0) {
 }
 
 foreach ($r in $Rules) {
-    Add-VMNetworkAdapterExtendedAcl -VMName $VMName -Direction $r.Direction -Action $r.Action `
-        -LocalIPAddress $r.Local -RemoteIPAddress $r.Remote -Weight $r.Weight -Stateful $false
+    $params = @{
+        VMName           = $VMName
+        Direction        = $r.Direction
+        Action           = $r.Action
+        LocalIPAddress   = $r.Local
+        RemoteIPAddress  = $r.Remote
+        Weight           = $r.Weight
+        Stateful         = $r.Stateful
+    }
+    if ($r.Stateful) { $params['IdleSessionTimeout'] = 1800 }
+    Add-VMNetworkAdapterExtendedAcl @params
 }
 Write-Output 'Applied. Reading back twice for comparison...'
 
@@ -97,6 +117,9 @@ function Compare-AclTable($readback) {
         }
         if (-not $hit) {
             $mismatches += "rule $($r.N) missing or different: $($r.Direction) $($r.Action) -> $($r.Remote) w=$($r.Weight)"
+        }
+        elseif ([bool]$hit.Stateful -ne [bool]$r.Stateful) {
+            $mismatches += "rule $($r.N) stateful mismatch: read-back $($hit.Stateful), intended $($r.Stateful)"
         }
     }
     return $mismatches

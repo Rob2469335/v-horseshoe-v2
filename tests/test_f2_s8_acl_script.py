@@ -13,17 +13,20 @@ import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "qwen_train" / "f2_s8_acl.ps1"
 
-#: The reviewed table: (direction, action, local, remote, weight).
+#: The reviewed table, CORRECTED after the official reference was checked:
+#: allow entries must be stateful (return packets otherwise hit the inbound
+#: default deny), and the broad outbound allow is IPv4-only so IPv6 falls
+#: through to the default deny.  (direction, action, local, remote, weight, stateful)
 APPROVED = [
-    ("Outbound", "Allow", "10.73.0.2", "10.73.0.1", 900),
-    ("Outbound", "Deny", "10.73.0.2", "10.0.0.0/8", 800),
-    ("Outbound", "Deny", "10.73.0.2", "192.168.0.0/16", 700),
-    ("Outbound", "Deny", "10.73.0.2", "172.16.0.0/12", 600),
-    ("Outbound", "Deny", "10.73.0.2", "169.254.0.0/16", 500),
-    ("Outbound", "Deny", "10.73.0.2", "10.72.0.0/24", 400),
-    ("Outbound", "Allow", "10.73.0.2", "ANY", 300),
-    ("Outbound", "Deny", "ANY", "ANY", 1),
-    ("Inbound", "Deny", "ANY", "ANY", 1),
+    ("Outbound", "Allow", "ANY", "10.73.0.1", 900, True),
+    ("Outbound", "Deny", "ANY", "10.0.0.0/8", 800, False),
+    ("Outbound", "Deny", "ANY", "192.168.0.0/16", 700, False),
+    ("Outbound", "Deny", "ANY", "172.16.0.0/12", 600, False),
+    ("Outbound", "Deny", "ANY", "169.254.0.0/16", 500, False),
+    ("Outbound", "Deny", "ANY", "10.72.0.0/24", 400, False),
+    ("Outbound", "Allow", "ANY", "0.0.0.0/0", 300, True),
+    ("Outbound", "Deny", "ANY", "ANY", 1, False),
+    ("Inbound", "Deny", "ANY", "ANY", 1, False),
 ]
 
 
@@ -32,20 +35,22 @@ def _text() -> str:
 
 
 def _parsed_rules():
-    """Parse the rule table out of the script, resolving its two variables."""
+    """Parse the rule table out of the script, resolving its variables."""
     pattern = re.compile(
         r"Direction\s*=\s*'(?P<d>[A-Za-z]+)';\s*"
         r"Action\s*=\s*'(?P<a>[A-Za-z]+)';\s*"
         r"Local\s*=\s*(?P<l>\S+?);\s*"
         r"Remote\s*=\s*(?P<r>\S+?);\s*"
-        r"\s*Weight\s*=\s*(?P<w>\d+)"
+        r"\s*Weight\s*=\s*(?P<w>\d+);\s*"
+        r"\s*Stateful\s*=\s*(?P<s>\$\w+)"
     )
     variables = {"$GuestIP": "10.73.0.2", "$Gateway": "10.73.0.1"}
     out = []
     for m in pattern.finditer(_text()):
         resolve = lambda v: variables.get(v.strip(), v.strip().strip("'"))  # noqa: E731
         out.append((m.group("d"), m.group("a"), resolve(m.group("l")),
-                    resolve(m.group("r")), int(m.group("w"))))
+                    resolve(m.group("r")), int(m.group("w")),
+                    m.group("s") == "$true"))
     return out
 
 
@@ -78,7 +83,7 @@ class TestRuleTable:
         assert allow_gw[4] > deny_10[4]
 
     def test_every_specific_deny_outranks_the_broad_outbound_allow(self):
-        broad = next(r for r in APPROVED if r[3] == "ANY" and r[1] == "Allow")
+        broad = next(r for r in APPROVED if r[1] == "Allow" and r[3] == "0.0.0.0/0")
         for rule in APPROVED:
             if rule[1] == "Deny" and rule[3] not in ("ANY",):
                 assert rule[4] > broad[4], rule
@@ -86,6 +91,32 @@ class TestRuleTable:
     def test_default_deny_is_the_lowest_weight_outbound_rule(self):
         outbound = [r for r in APPROVED if r[0] == "Outbound"]
         assert min(outbound, key=lambda r: r[4])[1] == "Deny"
+
+    def test_every_allow_rule_is_stateful(self):
+        """Non-stateful allows are useless: the reply hits the inbound default deny."""
+        for rule in APPROVED:
+            if rule[1] == "Allow":
+                assert rule[5] is True, rule
+
+    def test_no_deny_rule_is_stateful(self):
+        for rule in APPROVED:
+            if rule[1] == "Deny":
+                assert rule[5] is False, rule
+
+    def test_the_broad_outbound_allow_is_ipv4_only(self):
+        """`ANY` covers IPv6 too; the broad allow must not, so IPv6 falls to deny."""
+        broad = next(r for r in APPROVED if r[1] == "Allow" and r[3].endswith("/0")
+                     and r[3] != "10.73.0.1")
+        assert broad[3] == "0.0.0.0/0"
+        assert not any(r[3] == "ANY" and r[1] == "Allow" for r in APPROVED)
+
+    def test_ipv6_is_denied_by_the_any_default_deny(self):
+        """ANY means all IPv4 AND IPv6, so the default deny covers IPv6."""
+        assert any(r[3] == "ANY" and r[0] == "Outbound" and r[1] == "Deny" for r in APPROVED)
+        assert any(r[3] == "ANY" and r[0] == "Inbound" and r[1] == "Deny" for r in APPROVED)
+
+    def test_the_gateway_allow_is_the_highest_weighted_rule(self):
+        assert max(APPROVED, key=lambda r: r[4])[3] == "10.73.0.1"
 
 
 class TestNonMutatingByDefault:
@@ -98,10 +129,7 @@ class TestNonMutatingByDefault:
         text = _text()
         dry = text.index("if (-not $Apply)")
         dry_exit = text.index("exit 0", dry)
-        first_add = min(
-            text.index("Add-VMNetworkAdapterExtendedAcl -VMName $VMName"),
-            text.index("Add-VMNetworkAdapterExtendedAcl -VMName $VMName -Direction $r.Direction"),
-        )
+        first_add = text.index("Add-VMNetworkAdapterExtendedAcl @params")
         assert dry_exit < first_add
 
     @pytest.mark.parametrize("forbidden", ["Remove-VM", "New-VMSwitch", "New-NetNat", "Set-NetFirewall",
