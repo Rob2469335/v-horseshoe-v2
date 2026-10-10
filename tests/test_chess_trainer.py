@@ -5,10 +5,17 @@ so the legality, classification, explanation, and routing logic is exercised
 deterministically and fast. The Qdrant book-index retrieval is also mocked.
 """
 
+from pathlib import Path
+
 import chess
 import pytest
 
 from swarm_os.services import chess_trainer as ct
+
+# The Stockfish binary is host-local and UNTRACKED (bin/stockfish.exe, AGENTS.md
+# section 4 protected paths), so any test that spawns the real engine cannot run
+# on a bare CI checkout. Guard those, matching the env-dependent-test convention.
+_STOCKFISH = Path(__file__).resolve().parents[1] / "bin" / "stockfish.exe"
 
 
 # ---------------------------------------------------------------------------
@@ -815,6 +822,10 @@ def test_socratic_deterministic_fallback_reacts_to_proposal(monkeypatch):
     assert "e4" in res["reply"] or "win chance" in res["reply"]
 
 
+@pytest.mark.skipif(
+    not _STOCKFISH.exists(),
+    reason="requires the host-local Stockfish binary (untracked; absent on CI)",
+)
 def test_engine_strong_level20_plays_best_move_not_blunder_sampling():
     """Regression (2026-08-23 audit F1): /engine-strong sent level=20, which
     missed the 1-4 sampling dicts and landed in the level-2 defaults

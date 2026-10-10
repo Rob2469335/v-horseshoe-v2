@@ -15,6 +15,23 @@ import pytest
 from swarm_os.lib.mcp.mcp_client import _merge_env
 
 
+@pytest.fixture
+def _real_subprocess():
+    """Give the requesting test the genuine subprocess.Popen.
+
+    The conftest's autouse global mock patches subprocess.Popen, which on POSIX
+    breaks asyncio.create_subprocess_exec (the selector transport wraps
+    subprocess.Popen there; Windows uses CreateProcess and is unaffected), so the
+    native `gh` path (_run_gh) cannot spawn on the Linux runner.
+    """
+    from unittest.mock import patch
+
+    from tests.conftest import _REAL_POPEN
+
+    with patch("subprocess.Popen", _REAL_POPEN):
+        yield
+
+
 class _FakeProc:
     def __init__(self, out: bytes, rc: int = 0, err: bytes = b""):
         self._out = out
@@ -131,7 +148,7 @@ def test_merge_env_none_cfg_returns_base_copy():
     assert base == {"A": "1"}
 
 
-def test_readonly_github_modes_are_allow_not_confirm():
+def test_readonly_github_modes_are_allow_not_confirm(_real_subprocess):
     """Read-only github_research (discover/verify) must classify as ALLOW so a
     research chain runs without a human approval; install stays gated.
 

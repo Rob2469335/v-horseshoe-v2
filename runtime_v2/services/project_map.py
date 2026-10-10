@@ -58,12 +58,25 @@ def _pick_sections(text: str) -> str:
         line = raw.strip()
         if line.startswith("## "):
             current_section = line[3:].strip().lower()
-            capture = current_section in (
-                "architecture overview",
-                "module map",
+            capture = (
+                "architecture overview" in current_section
+                or "module map" in current_section
+                or "repository map" in current_section
+            )
+            # The current AGENTS.md module layout lives in "## 2. Repository
+            # Map", a compact section whose value is partly in wrapped prose
+            # ("Key modules: ... (agent_service_v2) ..."). Capture that section
+            # wholesale; other architecture sections keep the shape filter.
+            capture_all = capture and (
+                "repository map" in current_section
+                or "architecture overview" in current_section
             )
             if capture:
-                picked.append(raw)
+                # Emit a STABLE heading for agents. AGENTS.md was restructured
+                # (2026-09) so the module layout now lives under
+                # "## 2. Repository Map"; without a canonical title the injected
+                # block's header tracked the source doc's section numbering.
+                picked.append("## Architecture Overview")
             continue
         if line.startswith("### "):
             # Keep sub-headers inside Module Map (e.g. swarm_os/core/)
@@ -72,6 +85,10 @@ def _pick_sections(text: str) -> str:
                 picked.append(raw)
             continue
         if capture:
+            if capture_all:
+                if line:
+                    picked.append(raw)
+                continue
             # Keep table rows and code-ish lines; drop prose paragraphs.
             if line.startswith("|") or line.startswith("```"):
                 picked.append(raw)

@@ -216,6 +216,9 @@ def test_local_only_refresh_builds_llama_only_chain(monkeypatch):
 
     fm._cached_mode = ""
     fm._last_fetch_time = 0.0
+    # Isolate from a cooldown recorded by an earlier test in the same process:
+    # get_live_fallbacks drops cooled-down models, which would empty this chain.
+    fm._cooldowns.clear()
 
     async def _run():
         # Cache must be stale AND the mode must differ so a real refresh runs.
