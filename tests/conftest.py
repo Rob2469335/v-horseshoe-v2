@@ -263,3 +263,48 @@ async def run_approved(tool_executor_run, tool_name: str, payload: dict) -> dict
     from runtime_v2.services.tool_executor import execute_approved
 
     return await execute_approved(pending_id)
+
+
+_F2_OPERATOR_ENV_VARS = (
+    'SWARM_DISTILLER_MODEL',
+    'SWARM_DISTILLER_WEIGHTS_DIGEST',
+    'SWARM_F2_EVALUATOR_ID',
+    'SWARM_F2_EVALUATOR_VERSION',
+    'SWARM_F2_EVALUATOR_PROCEDURE',
+    'SWARM_F2_EVALUATOR_IMPL',
+    'SWARM_F2_ARTIFACT_ROOT',
+    'SWARM_F2_ARTIFACT_RETENTION_DAYS',
+    'SWARM_F2_EMIT_BUNDLE',
+    'SWARM_F2_TASK_OUTCOME_REPORT',
+    # F2 authorization state: no test may inherit an ambient record, trust
+    # root, digest pin, consumption ledger, or parent binding receipt.
+    'F2_AUTHORIZATION_RECORD',
+    'F2_AUTHORIZATION_TRUST_ROOT',
+    'F2_AUTHORIZATION_TRUST_ROOT_SHA256',
+    'F2_AUTHZ_LEDGER_DIR',
+    'SWARM_F2_AUTHZ_STAGE',
+    'SWARM_F2_AUTHZ_OPERATION',
+    'SWARM_F2_AUTHZ_BINDING',
+    'SWARM_F2_AUTHZ_BINDING_DIGEST',
+    'SWARM_F2_AUTHZ_RECORD_DIGEST',
+    'SWARM_F2_AUTHZ_CONSUMPTION_ID',
+)
+
+@pytest.fixture(autouse=True)
+def isolate_f2_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _F2_OPERATOR_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def f2_test_repository_identity(monkeypatch: pytest.MonkeyPatch):
+    """Pin ``f2_authorization.repository_identity`` to a fixed clean revision.
+
+    Request this in tests that drive the real guards so they do not depend on
+    (or get denied by) the live working-tree state. The REAL git behaviour of
+    ``repository_identity`` is covered directly in
+    tests/test_f2_authz_binding_and_replay.py.
+    """
+    from tests.f2_authz_testkit import apply_repo_identity
+
+    apply_repo_identity(monkeypatch)

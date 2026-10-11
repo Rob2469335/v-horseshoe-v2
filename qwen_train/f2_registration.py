@@ -178,8 +178,17 @@ def build_manifest(
     """
     from qwen_train import f2_authorization as _auth
 
-    _auth.require_authorized(stage="POP-001", operation="register")
     union_report = Path(union_report)
+    # The population-manifest binding is RECOMPUTED here from the exact bytes
+    # this entry point is about to consume - never taken from the caller's
+    # assertion. A signed record that binds a different union-report digest is
+    # rejected before any registration work.
+    union_report_digest = _sha256_file(union_report)
+    _auth.require_authorized(
+        stage="POP-001",
+        operation="register",
+        binding={"population_manifest_digest": union_report_digest},
+    )
     report = json.loads(union_report.read_text(encoding="utf-8"))
     eligible_ids = [
         row["instance_id"]

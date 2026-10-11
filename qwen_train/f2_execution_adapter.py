@@ -462,15 +462,56 @@ def start_real_p2_production_model(
             "production P2 adapter is confirmatory-only "
             "(requires stage='CONF-001', operation='confirmatory_run')"
         )
-    _auth.require_authorized(stage="CONF-001", operation="confirmatory_run")
     # READINESS GATE (F2 execution prerequisite, fail closed): this is the
     # lowest production-reachable boundary before the P2/model spawn, so the
     # gate is enforced here from the MANIFEST (the only integrity anchor that
-    # crosses the process boundary) — a caller cannot inject ready=True.
+    # crosses the process boundary) - a caller cannot inject ready=True.
     _artifact = load_manifest(manifest_path)
     verify_manifest(_artifact)
     enforce_readiness_from_manifest_payload(
         _artifact.task_readiness, task_id=_artifact.task_id
+    )
+    # LOWEST-BOUNDARY AUTHORIZATION (independent, fail-closed). This boundary
+    # does NOT trust the worker's earlier check or the caller's arguments: it
+    # rebuilds the expected execution binding from the VERIFIED manifest
+    # (arm / experiment / protocol identity) plus the rollout identity, fully
+    # re-verifies the signed record against it (signature, scope, dates,
+    # strict binding, repository revision derived from git HERE), and requires
+    # the durable single-use consumption to exist for exactly this
+    # record+binding. Replaying a consumed binding - from any worker or
+    # process - is denied.
+    from qwen_train.f2_authz_ledger import AuthorizationLedger
+
+    expected_binding = {
+        "experiment_id": _artifact.experiment_id,
+        "protocol_version": _artifact.protocol_version,
+        "arm": _artifact.arm,
+        "rollout_id": str(rollout_id),
+    }
+    verified = _auth.verify_and_bind(
+        stage=stage, operation=operation, binding=expected_binding
+    )
+    env_consumption_id = os.environ.get("SWARM_F2_AUTHZ_CONSUMPTION_ID", "")
+    if not env_consumption_id:
+        raise _auth.AuthorizationError(
+            "no durable authorization consumption receipt in the environment "
+            "(SWARM_F2_AUTHZ_CONSUMPTION_ID); the production P2 boundary only "
+            "admits a consuming parent - fail-closed"
+        )
+    if os.environ.get("SWARM_F2_AUTHZ_RECORD_DIGEST", "") != verified.digest:
+        raise _auth.AuthorizationError(
+            "authorization record digest disagrees with the parent receipt - "
+            "fail-closed (record substitution?)"
+        )
+    if os.environ.get("SWARM_F2_AUTHZ_BINDING_DIGEST", "") != verified.binding_digest:
+        raise _auth.AuthorizationError(
+            "execution binding digest disagrees with the parent receipt - "
+            "fail-closed (binding substitution? manifest/parent divergence?)"
+        )
+    AuthorizationLedger(None).verify_consumption(
+        consumption_id=env_consumption_id,
+        record_digest=verified.digest,
+        binding_digest=verified.binding_digest,
     )
     return _start_real_p2(
         attempt_id=attempt_id,

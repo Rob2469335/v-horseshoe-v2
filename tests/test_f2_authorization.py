@@ -7,7 +7,6 @@ fixture, NOT a production trust root, and cannot authorise real execution.
 
 from __future__ import annotations
 
-import base64
 import datetime as dt
 import json
 from pathlib import Path
@@ -15,60 +14,36 @@ from pathlib import Path
 import pytest
 
 from qwen_train import f2_authorization as A
+from tests.f2_authz_testkit import (
+    apply_repo_identity,
+    keypair as _keypair,
+    signed_record as _signed_record,
+    write_record as _write_record,
+    write_trust_root as _write_trust,
+)
 
 
 def _now():
     return dt.datetime.now(dt.timezone.utc)
 
 
-def _keypair():
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from cryptography.hazmat.primitives import serialization
-
-    priv = Ed25519PrivateKey.generate()
-    pub = priv.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    return priv, base64.b64encode(pub).decode()
+@pytest.fixture(autouse=True)
+def _pinned_repo_identity(monkeypatch):
+    """All tests in this module pin repository_identity; the REAL git
+    behaviour is covered in test_f2_authz_binding_and_replay.py."""
+    apply_repo_identity(monkeypatch)
 
 
 def _write(tmp: Path, record: dict, priv, key_id="owner") -> Path:
-    sig = priv.sign(A.canonical_bytes(record))
-    doc = {
-        "record": record,
-        "signature": {
-            "alg": "ed25519",
-            "key_id": key_id,
-            "signer": record.get("approver"),
-            "sig": base64.b64encode(sig).decode(),
-        },
-    }
-    p = tmp / "auth.json"
-    p.write_text(json.dumps(doc), "utf-8")
-    return p
+    return _write_record(tmp, record, priv, key_id=key_id)
 
 
 def _trust(tmp: Path, key_id="owner", pub="") -> Path:
-    p = tmp / "trust_root.json"
-    p.write_text(json.dumps({"signers": {key_id: pub}}), "utf-8")
-    return p
+    return _write_trust(tmp, {key_id: (None, pub)})
 
 
 def _record(stage="POP-001", ops=("acquire",), **over):
-    now = _now()
-    rec = {
-        "id": "AUTH-TEST-1",
-        "schema": A.SCHEMA,
-        "stage": stage,
-        "operations": list(ops),
-        "approver": "owner",
-        "not_before": (now - dt.timedelta(minutes=1)).isoformat(),
-        "not_after": (now + dt.timedelta(days=1)).isoformat(),
-        "protocol_digest": "proto-sha",
-    }
-    rec.update(over)
-    return rec
+    return _signed_record(stage, ops, **over)
 
 
 def _expect_deny(fn):
@@ -293,7 +268,9 @@ def test_build_manifest_entrypoint_denied_without_authorization(tmp_path, monkey
     monkeypatch.delenv("F2_AUTHORIZATION_RECORD", raising=False)
     from qwen_train import f2_registration as reg
 
-    _expect_deny(lambda: reg.build_manifest(union_report=tmp_path / "x.json", acquired_paths=[]))
+    union = tmp_path / "x.json"
+    union.write_text("{}", "utf-8")  # digest is recomputed, then the guard denies
+    _expect_deny(lambda: reg.build_manifest(union_report=union, acquired_paths=[]))
 
 
 def test_pop_record_cannot_authorize_confirmatory(tmp_path):
@@ -354,6 +331,15 @@ def test_start_real_p2_production_model_denied_without_authorization(tmp_path, m
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(tmp_path / "absent.json"))
     monkeypatch.delenv("F2_AUTHORIZATION_RECORD", raising=False)
     from qwen_train import f2_execution_adapter as ad
+
+    # The lowest boundary loads the manifest first (read-only), then enforces
+    # authorization; stub the manifest seam so the auth guard is what denies.
+    artifact = type("Artifact", (), {"task_readiness": {}, "task_id": "task",
+                                     "experiment_id": "experiment_j",
+                                     "protocol_version": "f2_v1", "arm": "X"})()
+    monkeypatch.setattr(ad, "load_manifest", lambda _path: artifact)
+    monkeypatch.setattr(ad, "verify_manifest", lambda _a: None)
+    monkeypatch.setattr(ad, "enforce_readiness_from_manifest_payload", lambda *a, **k: None)
 
     _expect_deny(lambda: ad.start_real_p2_production_model(
         attempt_id="a", repo_root=tmp_path, workspace_root=tmp_path, port=8211,
@@ -454,16 +440,53 @@ def test_production_p2_rejects_expl_authorization(tmp_path, monkeypatch):
 
 
 def test_production_p2_confirmatory_authorization_passes_guard_no_spawn(tmp_path, monkeypatch):
-    """A CONF-001 record passes the guard; the next step (missing manifest) fails
-    WITHOUT spawning a worker/model — proving auth passed and no protected
-    side effect occurred."""
-    priv, pub = _keypair()
-    root = _trust(tmp_path, pub=pub)
-    p = _write(tmp_path, _record(stage="CONF-001", ops=("confirmatory_run",)), priv)
-    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
-    monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(p))
-    with pytest.raises(Exception) as ei:
+    """A CONF-001 record + a durable parent consumption passes the FULL lowest
+    boundary; the next step (stubbed spawn seam) raises its own sentinel -
+    proving auth AND consumption passed and no protected side effect occurred."""
+    from tests.f2_authz_testkit import provision_parent_receipt
+
+    ctx = provision_parent_receipt(tmp_path, monkeypatch, rollout_id="r")
+    from qwen_train import f2_execution_adapter as ad
+
+    artifact = type("Artifact", (), {"task_readiness": {}, "task_id": "task",
+                                     "experiment_id": ctx["experiment_id"],
+                                     "protocol_version": ctx["protocol_version"],
+                                     "arm": ctx["arm"]})()
+    monkeypatch.setattr(ad, "load_manifest", lambda _path: artifact)
+    monkeypatch.setattr(ad, "verify_manifest", lambda _a: None)
+    monkeypatch.setattr(ad, "enforce_readiness_from_manifest_payload", lambda *a, **k: None)
+
+    class _Sentinel(Exception):
+        pass
+
+    def _boom(**_kw):
+        raise _Sentinel("spawn-seam-reached")
+
+    monkeypatch.setattr(ad, "_start_real_p2", _boom)
+    with pytest.raises(_Sentinel):
         _p2_call(tmp_path)
-    assert not isinstance(ei.value, A.AuthorizationError), (
-        "confirmatory authorization must pass the guard; got an authorization error"
+
+
+def test_production_p2_requires_a_durable_consumption_receipt(tmp_path, monkeypatch):
+    """A valid record WITHOUT the parent consumption receipt is still denied
+    at the lowest boundary (single-use corroboration is mandatory)."""
+    from tests.f2_authz_testkit import provision_record_env
+
+    apply_repo_identity(monkeypatch)
+    ctx = provision_record_env(
+        tmp_path, monkeypatch,
+        stage="CONF-001", ops=("confirmatory_run",),
+        binding={"experiment_id": "experiment_j", "protocol_version": "f2_v1",
+                 "arm": "X", "rollout_id": "r"},
     )
+    from qwen_train import f2_execution_adapter as ad
+
+    artifact = type("Artifact", (), {"task_readiness": {}, "task_id": "task",
+                                     "experiment_id": "experiment_j",
+                                     "protocol_version": "f2_v1", "arm": "X"})()
+    monkeypatch.setattr(ad, "load_manifest", lambda _path: artifact)
+    monkeypatch.setattr(ad, "verify_manifest", lambda _a: None)
+    monkeypatch.setattr(ad, "enforce_readiness_from_manifest_payload", lambda *a, **k: None)
+    monkeypatch.delenv("SWARM_F2_AUTHZ_CONSUMPTION_ID", raising=False)
+    _expect_deny(lambda: _p2_call(tmp_path, "CONF-001", "confirmatory_run"))
+    assert ctx["record_path"].exists()

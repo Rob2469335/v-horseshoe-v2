@@ -975,10 +975,111 @@ def run_worker(argv: list[str] | None = None) -> int:
         execution_result: dict[str, Any]
         adapter_evidence: dict[str, Any] | None = None
         if structured_execute:
+            import json as _json
+
             from qwen_train import f2_authorization as _auth
 
             _auth.validate_execution_stage_operation(
                 args.authorization_stage, args.authorization_operation
+            )
+            # EXPLORATORY EXECUTION IS NOT IMPLEMENTED as a production route.
+            # The only production model seam (start_real_p2_production_model)
+            # is CONFIRMATORY-ONLY by policy. Refuse EXPL-001 HERE - before
+            # workspace preparation, adapter construction, or any spawn -
+            # instead of letting it fail deep inside the confirmatory seam.
+            if args.authorization_stage == "EXPL-001":
+                raise _auth.AuthorizationError(
+                    "exploratory execution route is not implemented or "
+                    "authorized (EXPL-001); the production adapter is "
+                    "confirmatory-only - refusing before any side effect"
+                )
+            # PARENT/CHILD BINDING CHECK (fail-closed): an executing child
+            # MUST carry the parent's immutable execution binding and durable
+            # consumption receipt. A worker invoked with --execute outside the
+            # governed orchestrator path has none, and is refused.
+            env_stage = os.environ.get("SWARM_F2_AUTHZ_STAGE", "")
+            env_operation = os.environ.get("SWARM_F2_AUTHZ_OPERATION", "")
+            env_binding_raw = os.environ.get("SWARM_F2_AUTHZ_BINDING", "")
+            env_consumption_id = os.environ.get("SWARM_F2_AUTHZ_CONSUMPTION_ID", "")
+            env_record_digest = os.environ.get("SWARM_F2_AUTHZ_RECORD_DIGEST", "")
+            if not (env_stage and env_operation and env_binding_raw and
+                    env_consumption_id and env_record_digest):
+                raise _auth.AuthorizationError(
+                    "F2 fail-closed: --execute requires the parent orchestrator's "
+                    "authorization binding environment (SWARM_F2_AUTHZ_*); this "
+                    "worker was not launched by a consuming parent"
+                )
+            if env_stage != args.authorization_stage or env_operation != args.authorization_operation:
+                raise _auth.AuthorizationError(
+                    "worker arguments disagree with the parent authorization "
+                    f"binding (args {args.authorization_stage!r}/"
+                    f"{args.authorization_operation!r} vs env {env_stage!r}/"
+                    f"{env_operation!r}) - fail-closed"
+                )
+            try:
+                parent_binding = _json.loads(env_binding_raw)
+            except ValueError as exc:
+                raise _auth.AuthorizationError(
+                    f"parent execution binding is not valid JSON ({exc}) - fail-closed"
+                ) from exc
+            if not isinstance(parent_binding, dict):
+                raise _auth.AuthorizationError(
+                    "parent execution binding is not an object - fail-closed"
+                )
+            if parent_binding.get("stage") != env_stage or parent_binding.get(
+                "operation"
+            ) != env_operation:
+                raise _auth.AuthorizationError(
+                    "parent execution binding stage/operation does not match the "
+                    "propagated stage - fail-closed"
+                )
+            if os.environ.get("SWARM_F2_ROLLOUT_ID", "") and parent_binding.get(
+                "rollout_id"
+            ) not in ("", os.environ.get("SWARM_F2_ROLLOUT_ID", "")):
+                raise _auth.AuthorizationError(
+                    "parent execution binding rollout_id does not match the "
+                    "propagated rollout identity - fail-closed"
+                )
+            # The VERIFIED manifest is the authoritative source for the arm /
+            # experiment / protocol identity; the parent binding must agree
+            # with it exactly (the parent's word alone is never enough).
+            for _field in ("arm", "experiment_id", "protocol_version"):
+                _expected = getattr(artifact, _field, "")
+                if parent_binding.get(_field) != _expected:
+                    raise _auth.AuthorizationError(
+                        f"parent execution binding {_field}="
+                        f"{parent_binding.get(_field)!r} disagrees with the "
+                        f"verified manifest ({_expected!r}) - fail-closed"
+                    )
+            # Independent re-verification of the record against the same
+            # binding, then corroboration of the DURABLE consumption. The
+            # child never re-consumes (the parent did); it refuses to run
+            # unless the ledger proves this exact record+binding was consumed.
+            from qwen_train.f2_authz_ledger import AuthorizationLedger
+
+            _binding_fields = {
+                k: v for k, v in parent_binding.items() if k in _auth.BINDING_FIELDS
+            }
+            verified = _auth.verify_and_bind(
+                stage=env_stage,
+                operation=env_operation,
+                binding=_binding_fields,
+            )
+            if verified.digest != env_record_digest:
+                raise _auth.AuthorizationError(
+                    "authorization record digest disagrees with the parent "
+                    "receipt - fail-closed (record substitution?)"
+                )
+            env_binding_digest = os.environ.get("SWARM_F2_AUTHZ_BINDING_DIGEST", "")
+            if not env_binding_digest or verified.binding_digest != env_binding_digest:
+                raise _auth.AuthorizationError(
+                    "execution binding digest disagrees with the parent receipt "
+                    "- fail-closed (binding substitution?)"
+                )
+            AuthorizationLedger(None).verify_consumption(
+                consumption_id=env_consumption_id,
+                record_digest=verified.digest,
+                binding_digest=verified.binding_digest,
             )
             # An execution arm MUST carry a declared task identity: without an
             # ``instance_id`` there is no pool ``base_commit`` and therefore no
