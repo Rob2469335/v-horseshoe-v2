@@ -2369,3 +2369,134 @@ With the guest proofs closed, the host/guest base-gold execution split (AUTH-027
 
 **File boundary.** This document, and `docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md`.
 No code, test, data, or frozen artifact changed.
+
+### F2-IMPL-AUTH-033 - Authorization hardening: strict execution binding, durable single-use consumption, trust-root identity
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-11
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-11
+(the "EXPERIMENT J / F2 — COMPLETE AUTHORIZATION HARDENING" mission), which
+authorizes repository code changes, isolated tests, one documentation update to
+this document, feature-branch publication, and one pull request. Entered by the
+implementation agent. This entry documents engineering controls only; it
+authorizes **no** protected-stage execution (POP-001/EXPL-001/CONF-001/Q10/Q12/
+Q13 remain governed by their own authorizations, and all remain PENDING where
+they were PENDING).
+
+**Issue.** A four-reviewer record and the mission's defect list (A–H) identified
+repository-resolvable gaps in the F2 authorization path: no durable single-use
+consumption (an expired-yet-valid signature could be replayed), incomplete
+execution binding (records were not bound to repository revision, experiment/
+protocol identity, manifest, run, rollout or arm), no trust-root identity
+validation, silent default stage substitution, exploratory execution reaching
+the confirmatory-only adapter late, and no independent recomputation of the
+execution binding at the child or lowest boundary.
+
+**Authoritative decision and implementation.**
+
+1. **Strict binding contract** (`qwen_train/f2_authorization.py`):
+   `BINDING_FIELDS` + `OPERATION_REQUIRED_BINDINGS` fix, per protected
+   operation, which identities a signed record MUST bind. Expected values come
+   from authoritative sources and are never trusted from the caller alone:
+   `repository_revision` is derived inside the verifier from
+   `git rev-parse HEAD` (`repository_identity`); `population_manifest_digest`
+   is recomputed by `f2_registration.build_manifest` from the exact union-report
+   bytes; `experiment_id`/`protocol_version`/`arm` are taken at the lowest
+   boundary from the independently verified frozen arm manifest. A protected
+   operation is denied on a dirty working tree (the executing code cannot be
+   proven to equal the bound commit) and when git metadata is unavailable.
+   Tests pin `repository_identity` via the shared fixture
+   (`tests/conftest.py::f2_test_repository_identity`); the real git semantics
+   (normal/dirty/detached/worktree/no-git) are covered directly in
+   `tests/test_f2_authz_binding_and_replay.py`.
+   *Tests:* `tests/test_f2_authz_binding_and_replay.py` (binding negatives,
+   caller-substitution, real-git identity, dirty-tree denial);
+   `tests/test_f2_authorization.py`.
+2. **Durable single-use consumption** (`qwen_train/f2_authz_ledger.py`):
+   one JSON file per `sha256(record_digest|binding_digest)` under
+   `data/f2_authz_ledger/` (gitignored; overridable via `F2_AUTHZ_LEDGER_DIR`),
+   created with atomic `O_CREAT|O_EXCL` (exactly one concurrent winner, proven
+   with real multi-process races); no update/delete API; corruption,
+   unavailability, or ambiguous state fail CLOSED.
+   `f2_authorization.verify_and_consume` verifies fully, then consumes, before
+   any protected side effect; the orchestrator consumes immediately before the
+   child spawn (a readiness failure never burns the grant); the worker and the
+   production adapter do not re-consume but independently corroborate the exact
+   consumption receipt against the record, the binding, and the ledger.
+   *Tests:* the 12 replay/crash/concurrency/corruption scenarios in
+   `tests/test_f2_authz_binding_and_replay.py`.
+3. **Parent/child propagation** (`qwen_train/f2_arm_orchestrator.py`,
+   `f2_arm_worker.py`): `execute=True` now REQUIRES an explicit stage (no
+   silent CONF-001 default); the parent publishes
+   `SWARM_F2_AUTHZ_{STAGE,OPERATION,BINDING,BINDING_DIGEST,RECORD_DIGEST,CONSUMPTION_ID}`;
+   the worker fails closed when the receipt env is absent, cross-checks
+   args↔env↔verified manifest, re-verifies the record, and refuses EXPL-001
+   BEFORE any workspace preparation (there is no authorized exploratory
+   production route; the production P2 adapter remains CONFIRMATORY-ONLY).
+   *Tests:* worker-side negatives in `tests/test_f2_authz_binding_and_replay.py`;
+   `tests/test_f2_execution_boundary.py`;
+   `tests/test_f2_arm_workspace_isolation.py`.
+4. **Lowest-boundary enforcement** (`qwen_train/f2_execution_adapter.py::
+   start_real_p2_production_model`): independently rebuilds the expected binding
+   from the VERIFIED manifest, fully re-verifies the signed record, and requires
+   the durable consumption receipt to match record digest AND binding digest
+   before `_start_real_p2`.
+5. **Trust-root identity** (`f2_authorization.py`): strict key validation
+   (base64 → exactly 32 raw bytes), optional key epochs (`key_epoch` must
+   match when declared), `revoked_key_ids` (a revoked key is denied even while
+   still listed), optional digest pin via
+   `F2_AUTHORIZATION_TRUST_ROOT_SHA256` (**process-controlled consistency
+   check, NOT independent custody**), and `describe_trust_root` for the owner's
+   out-of-band fingerprint verification. No production key or trust root was
+   created; `qwen_train/authorization/trust_root.json` remains absent (every
+   stage denied), proven by test.
+   *Tests:* trust-root section of `tests/test_f2_authz_binding_and_replay.py`.
+6. **Test-fixture isolation** (`tests/conftest.py`): the autouse
+   `isolate_f2_operator_env` fixture now also clears all F2 authorization env
+   state; every test trust root/ledger/record is ephemeral under `tmp_path`;
+   meta-tests prove the production ledger default is gitignored `data/` state,
+   that no production trust root exists, and that the testkit never references
+   production defaults.
+
+**What the tests prove / do not prove.** The suites prove: fail-closed denial
+for every missing/mismatched binding, replay, race, crash, corruption, and
+substitution scenario exercised; single-use durability across processes and
+restarts; confirmatory-only adapter preservation; exploratory refusal before
+side effects; clean-checkout reproducibility of the guard machinery (run from a
+`git worktree` of the branch commit). They do **NOT** prove: independent
+trust-root custody (the trust root does not yet exist — ceremony is
+`REQUIRES OWNER INPUT`); resistance to a hostile local administrator or
+compromised execution principal, who can delete ledger files (restoring a
+consumed binding — an explicitly documented and honesty-tested limitation) or
+set process-controlled env overrides; independent artifact provenance anchoring
+(the ledger and colocated digests are locally writable; an owner-custodied
+anchor does not exist); that any real signing ceremony occurred; or that any
+protected stage may execute.
+
+**Separation of duties / audit / stop conditions.** Signature authenticity,
+scope, binding, single-use consumption, artifact integrity, integrity anchoring,
+trust-root custody, revocation, and human approval are distinct properties; none
+is evidence for another. GitHub governance (required checks; note the live
+ruleset does not include `security-audit` among required checks —
+`GOVERNANCE GAP`, owner-operated) and the independent four-reviewer panel
+(Gemini Pro / Claude Sonnet / Codex — `REQUIRES OWNER INPUT`, not fabricated)
+remain open. Stop conditions: any failed or unverifiable binding, unavailable
+ledger, corrupt state, revoked key/record, or missing consumption receipt ⇒
+deny.
+
+**File boundary.** `qwen_train/f2_authorization.py`,
+`qwen_train/f2_authz_ledger.py` (new), `qwen_train/f2_arm_orchestrator.py`,
+`qwen_train/f2_arm_worker.py`, `qwen_train/f2_execution_adapter.py`,
+`qwen_train/f2_registration.py`, `tests/conftest.py`,
+`tests/f2_authz_testkit.py` (new), `tests/test_f2_authz_binding_and_replay.py`
+(new), and the authorization-related test files updated to the new contract.
+This document. No frozen artifact, F0/F1 document, or scientific definition
+changed. No merge of this entry's PR is authorized by this entry.
+
+**Explicit non-claims (binding).** A merged PR does not prove independent
+trust-root custody. Passing tests does not prove a real signing ceremony
+occurred. A local ledger does not prove independent tamper resistance.
+Documentation does not authorize protected execution. This entry does not make
+F2 ready for execution; every external prerequisite stands.
