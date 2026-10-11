@@ -34,6 +34,15 @@ from runtime_v2.services.task_readiness import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+_CONFIRMATORY = {"stage": "CONF-001", "operation": "confirmatory_run"}
+
+
+@pytest.fixture(autouse=True)
+def _authorization_is_out_of_scope_for_readiness_boundary_tests(monkeypatch):
+    """Keep these spawn-seam tests focused on readiness, not key verification."""
+    from qwen_train import f2_authorization
+
+    monkeypatch.setattr(f2_authorization, "require_authorized", lambda **_kw: {})
 
 
 def _tr(task_id: str = "TASK-1", base_commit: str = "deadbeef") -> TaskReadiness:
@@ -102,7 +111,7 @@ class TestExecuteArmRealBoundary:
             with pytest.raises(ReadinessGateError):
                 self._adapter(tmp_path, manifest).execute_arm_real(
                     task_prompt="p", task_id="TASK-1", rollout_id="ro",
-                    trajectory_run_id="tr", agent_id="coder", port=8211,
+                    trajectory_run_id="tr", agent_id="coder", port=8211, **_CONFIRMATORY,
                 )
         finally:
             ADAPTER.start_real_p2_production_model = real  # type: ignore[assignment]
@@ -117,7 +126,7 @@ class TestExecuteArmRealBoundary:
             with pytest.raises((ReadinessGateError, TaskReadinessError)):
                 self._adapter(tmp_path, manifest).execute_arm_real(
                     task_prompt="p", task_id="TASK-1", rollout_id="ro",
-                    trajectory_run_id="tr", agent_id="coder", port=8211,
+                    trajectory_run_id="tr", agent_id="coder", port=8211, **_CONFIRMATORY,
                 )
         finally:
             ADAPTER.start_real_p2_production_model = real  # type: ignore[assignment]
@@ -139,7 +148,7 @@ class TestExecuteArmRealBoundary:
             with pytest.raises(_Reached):
                 self._adapter(tmp_path, manifest).execute_arm_real(
                     task_prompt="p", task_id="TASK-1", rollout_id="ro",
-                    trajectory_run_id="tr", agent_id="coder", port=8211,
+                    trajectory_run_id="tr", agent_id="coder", port=8211, **_CONFIRMATORY,
                 )
         finally:
             ADAPTER.start_real_p2_production_model = real  # type: ignore[assignment]
@@ -161,7 +170,7 @@ class TestExecuteArmRealBoundary:
             with pytest.raises(ReadinessGateError):
                 self._adapter(tmp_path, manifest).execute_arm_real(
                     task_prompt="p", task_id="MANIFEST-TASK", rollout_id="ro",
-                    trajectory_run_id="tr", agent_id="coder", port=8211,
+                    trajectory_run_id="tr", agent_id="coder", port=8211, **_CONFIRMATORY,
                 )
         finally:
             ADAPTER.start_real_p2_production_model = real  # type: ignore[assignment]
@@ -182,7 +191,7 @@ class TestExecuteArmRealBoundary:
             with pytest.raises(ReadinessGateError):
                 self._adapter(tmp_path, manifest2).execute_arm_real(
                     task_prompt="p", task_id="TASK-1", rollout_id="ro",
-                    trajectory_run_id="tr", agent_id="coder", port=8211,
+                    trajectory_run_id="tr", agent_id="coder", port=8211, **_CONFIRMATORY,
                 )
         finally:
             ADAPTER.start_real_p2_production_model = real  # type: ignore[assignment]
@@ -227,7 +236,7 @@ class TestSpawnSeamBoundary:
                 ADAPTER.start_real_p2_production_model(
                     attempt_id="a", repo_root=REPO_ROOT, workspace_root=tmp_path,
                     port=8211, work_dir=tmp_path, manifest_path=manifest,
-                    rollout_id="ro", trajectory_run_id="tr",
+                    rollout_id="ro", trajectory_run_id="tr", **_CONFIRMATORY,
                 )
         finally:
             ADAPTER._start_real_p2 = real  # type: ignore[assignment]
@@ -246,7 +255,7 @@ class TestSpawnSeamBoundary:
                 ADAPTER.start_real_p2_production_model(
                     attempt_id="a", repo_root=REPO_ROOT, workspace_root=tmp_path,
                     port=8211, work_dir=tmp_path, manifest_path=manifest,
-                    rollout_id="ro", trajectory_run_id="tr",
+                    rollout_id="ro", trajectory_run_id="tr", **_CONFIRMATORY,
                 )
         finally:
             ADAPTER._start_real_p2 = real  # type: ignore[assignment]
@@ -256,7 +265,7 @@ class TestWorkerRoute:
     """The worker CLI has no execution route other than the gated adapter."""
 
     def test_execute_routes_through_the_gated_adapter(self, tmp_path, monkeypatch):
-        calls = {"constructed": 0, "executed": 0}
+        calls = {"constructed": 0, "executed": 0, "kwargs": {}}
 
         class _FakeAdapter:
             def __init__(self, *a, **k):
@@ -264,6 +273,7 @@ class TestWorkerRoute:
 
             def execute_arm_real(self, **k):
                 calls["executed"] += 1
+                calls["kwargs"] = k
                 return {"mode": "fake", "p2_pid": None, "p2_launcher_pid": None,
                         "serving_pid_source": "none", "backend_healthy": False}
 
@@ -286,6 +296,8 @@ class TestWorkerRoute:
             monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
             run_worker(argv=[
                 "--manifest", str(manifest), "--arm", "T", "--execute",
+                "--authorization-stage", "CONF-001",
+                "--authorization-operation", "confirmatory_run",
                 "--instance-id", "pypa__twine-1066", "--task-id", "TASK-1",
                 "--port", "8211",
             ])
@@ -293,6 +305,7 @@ class TestWorkerRoute:
             # adapter entry, which it did reach. The receipt afterwards enforces
             # the separate P2-delivery-evidence safeguard (D3).
             assert calls["constructed"] == 1 and calls["executed"] == 1
+            assert _CONFIRMATORY.items() <= calls["kwargs"].items()
         finally:
             ADAPTER.F2ExecutionAdapter = real  # type: ignore[assignment]
             ADAPTER.bind_task_environment = real_bind  # type: ignore[assignment]

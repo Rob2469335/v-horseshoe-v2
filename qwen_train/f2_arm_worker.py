@@ -927,6 +927,8 @@ def run_worker(argv: list[str] | None = None) -> int:
         "--execute", action="store_true",
         help="Execute this arm through the F2 execution adapter (production model seam)",
     )
+    parser.add_argument("--authorization-stage", default="")
+    parser.add_argument("--authorization-operation", default="")
     parser.add_argument("--task-prompt", default="", help="Task prompt driven over loopback HTTP/SSE")
     parser.add_argument("--task-id", default="", help="Task identity for this execution")
     parser.add_argument("--instance-id", default="", help="Curriculum instance_id (task provenance)")
@@ -973,6 +975,11 @@ def run_worker(argv: list[str] | None = None) -> int:
         execution_result: dict[str, Any]
         adapter_evidence: dict[str, Any] | None = None
         if structured_execute:
+            from qwen_train import f2_authorization as _auth
+
+            _auth.validate_execution_stage_operation(
+                args.authorization_stage, args.authorization_operation
+            )
             # An execution arm MUST carry a declared task identity: without an
             # ``instance_id`` there is no pool ``base_commit`` and therefore no
             # way to establish per-arm workspace isolation (design §13.5). Fail
@@ -1037,6 +1044,8 @@ def run_worker(argv: list[str] | None = None) -> int:
                 task_id=args.task_id or (task_binding.get("instance_id") or ""),
                 rollout_id=rollout_id,
                 trajectory_run_id=trajectory_run_id,
+                stage=args.authorization_stage,
+                operation=args.authorization_operation,
                 agent_id=args.agent_id,
                 port=args.port,
             )

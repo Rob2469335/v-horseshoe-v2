@@ -139,6 +139,31 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _verified_acquired_sha256(path: Path) -> str:
+    """Verify an acquired JSONL against its adjacent acquisition provenance."""
+    path = Path(path)
+    provenance_path = path.parent / "PROVENANCE.json"
+    try:
+        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RegistrationError(
+            f"unreadable or malformed acquisition provenance: {provenance_path} ({exc})"
+        ) from exc
+    if not isinstance(provenance, dict):
+        raise RegistrationError(f"acquisition provenance is not an object: {provenance_path}")
+    declared = provenance.get("normalised_sha256")
+    if not isinstance(declared, str) or not re.fullmatch(r"[0-9a-f]{64}", declared):
+        raise RegistrationError(
+            f"acquisition provenance has no valid normalised_sha256: {provenance_path}"
+        )
+    actual = _sha256_file(path)
+    if actual != declared:
+        raise RegistrationError(
+            f"acquired artifact digest mismatch: {path} does not match {provenance_path}"
+        )
+    return actual
+
+
 def build_manifest(
     *,
     union_report: Path,
@@ -151,6 +176,9 @@ def build_manifest(
     Reads the pinned inputs only.  No task command is executed; ``test_cmd`` is
     used solely to compute the eligibility predicate and a digest.
     """
+    from qwen_train import f2_authorization as _auth
+
+    _auth.require_authorized(stage="POP-001", operation="register")
     union_report = Path(union_report)
     report = json.loads(union_report.read_text(encoding="utf-8"))
     eligible_ids = [
@@ -201,8 +229,7 @@ def build_manifest(
     }
     for path in acquired_paths:
         path = Path(path)
-        provenance = path.parent / "PROVENANCE.json"
-        sha = json.loads(provenance.read_text(encoding="utf-8")).get("normalised_sha256", "")
+        sha = _verified_acquired_sha256(path)
         inputs[f"{path.parent.name}_acquired_sha256"] = sha
 
     arts = registration_artifacts(ordered, excluded, inputs=inputs, top_n=top_n,

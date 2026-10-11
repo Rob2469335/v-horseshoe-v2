@@ -147,3 +147,39 @@ class TestOrchestratorWorkspaceGate:
         assert not manifests.exists(), (
             "a manifest was frozen before the workspace gate refused"
         )
+
+# Isolated TEST authorization (CONF-001) so the workspace-governance tests reach
+# their intended behavior. Ephemeral key + temp trust root; NOT a production root.
+import base64 as _b64
+import datetime as _dt
+import json as _json
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _authorize_workspace_tests(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from qwen_train import f2_authorization as _A
+
+    priv = Ed25519PrivateKey.generate()
+    pub = _b64.b64encode(priv.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
+    root = tmp_path / "trust_root.json"
+    root.write_text(_json.dumps({"signers": {"owner": pub}}), "utf-8")
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rec = {"id": "TEST-WSG", "schema": _A.SCHEMA, "stage": "CONF-001",
+           "operations": ["confirmatory_run"], "approver": "owner",
+           "not_before": (now - _dt.timedelta(minutes=1)).isoformat(),
+           "not_after": (now + _dt.timedelta(days=1)).isoformat(),
+           "protocol_digest": "d"}
+    sig = priv.sign(_A.canonical_bytes(rec))
+    rp = tmp_path / "auth.json"
+    rp.write_text(_json.dumps({"record": rec, "signature": {
+        "alg": "ed25519", "key_id": "owner", "signer": "owner",
+        "sig": _b64.b64encode(sig).decode()}}), "utf-8")
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
+    monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(rp))
+    yield
