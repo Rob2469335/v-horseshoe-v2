@@ -89,6 +89,8 @@ def signed_record(
             rec.setdefault("experiment_id", "experiment_j")
         if "protocol_version" in required:
             rec.setdefault("protocol_version", "f2_v1")
+        if "arm" in required:
+            rec.setdefault("arm", "X")
         if "population_manifest_digest" in required:
             rec.setdefault("population_manifest_digest", "pop-manifest-sha")
     rec.update(over)

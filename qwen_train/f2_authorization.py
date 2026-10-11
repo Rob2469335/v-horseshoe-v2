@@ -20,7 +20,8 @@ every identity that operation requires is bound in the record AND matches the
 independently obtained expected value (repository revision from git; artifact
 digests recomputed by the entry point; experiment/protocol/arm from the
 verified manifest at the lowest boundary). ``verify_and_consume`` then records
-one durable consumption per (record digest, execution-binding digest); see
+one durable consumption PER GRANT (the canonical record digest - one grant
+authorizes exactly one execution, whatever the binding); see
 ``f2_authz_ledger`` for the exact threat model, including what a local
 administrator could still undo.
 """
@@ -91,8 +92,11 @@ BINDING_WITH_STAGE = tuple(BINDING_FIELDS) + ("stage", "operation")
 #:     (caller-supplied values are compared, never trusted);
 #:   * ``population_manifest_digest`` - recomputed by the protected entry point
 #:     from the exact artifact bytes it is about to consume;
-#:   * ``experiment_id`` / ``protocol_version`` - taken at the lowest boundary
-#:     from the independently VERIFIED frozen arm manifest.
+#:   * ``experiment_id`` / ``protocol_version`` / ``arm`` - taken at the
+#:     lowest boundary from the independently VERIFIED frozen arm manifest
+#:     (the orchestrator may only cross-check values that later must equal
+#:     the manifest; a caller cannot substitute the arm without the record
+#:     and the verified manifest disagreeing at the lowest boundary).
 #: A record missing any required binding, or carrying a mismatching one, is
 #: denied before any protected side effect.
 OPERATION_REQUIRED_BINDINGS: dict[tuple[str, str], frozenset[str]] = {
@@ -101,10 +105,10 @@ OPERATION_REQUIRED_BINDINGS: dict[tuple[str, str], frozenset[str]] = {
         {"repository_revision", "population_manifest_digest"}
     ),
     ("EXPL-001", "exploratory_run"): frozenset(
-        {"repository_revision", "experiment_id", "protocol_version"}
+        {"repository_revision", "experiment_id", "protocol_version", "arm"}
     ),
     ("CONF-001", "confirmatory_run"): frozenset(
-        {"repository_revision", "experiment_id", "protocol_version"}
+        {"repository_revision", "experiment_id", "protocol_version", "arm"}
     ),
 }
 
@@ -270,8 +274,12 @@ def _decode_ed25519_public(kid: str, value: Any) -> tuple[bytes, int | None]:
 
 def load_trust_root(
     path: Path | None = None,
-) -> tuple[Mapping[str, str], frozenset[str], Mapping[str, int]]:
-    """Return ``(signers, revoked_key_ids, key_epochs)``. Absent root => deny.
+) -> tuple[Mapping[str, str], frozenset[str], Mapping[str, int], frozenset[str]]:
+    """Return ``(signers, revoked_key_ids, key_epochs, revoked_record_ids)``.
+
+    Absent root => deny. The trust root is the OWNER-controlled trust
+    configuration file; its revocation lists are the authoritative revocation
+    source in this design (there is no external revocation service).
 
     * ``signers`` maps ``key_id -> base64(ed25519 raw public key)`` (kept as the
       historical string form so existing callers keep working).
@@ -280,6 +288,12 @@ def load_trust_root(
       present in ``signers`` (the "revoked but not yet removed" state).
     * ``key_epochs`` maps ``key_id -> epoch`` for signer entries that declare
       one (dict form ``{"public_key": ..., "epoch": n}``).
+    * ``revoked_record_ids`` comes from the root's optional
+      ``revoked_record_ids`` list: individual signed grants (by record ``id``)
+      the owner has revoked post-signing WITHOUT mutating the signed record.
+      This is record-level revocation within the existing trust model: it is
+      only as durable and independent as the trust-root file itself - it does
+      NOT defend against a principal who can rewrite the trust root.
     """
     p = _trust_root_path(path)
     if not p.exists():
@@ -297,6 +311,13 @@ def load_trust_root(
         isinstance(k, str) and k for k in revoked_raw
     ):
         raise AuthorizationError("trust root revoked_key_ids must be a list of key ids")
+    revoked_records_raw = root.get("revoked_record_ids", [])
+    if not isinstance(revoked_records_raw, list) or not all(
+        isinstance(r, str) and r for r in revoked_records_raw
+    ):
+        raise AuthorizationError(
+            "trust root revoked_record_ids must be a list of record ids"
+        )
     signers: dict[str, str] = {}
     epochs: dict[str, int] = {}
     for kid, value in signers_raw.items():
@@ -317,23 +338,25 @@ def load_trust_root(
                 f"trust root digest mismatch (pinned {pinned[:12]}…, actual "
                 f"{actual[:12]}…) - fail-closed"
             )
-    return signers, frozenset(revoked_raw), epochs
+    return signers, frozenset(revoked_raw), epochs, frozenset(revoked_records_raw)
 
 
 def describe_trust_root(path: Path | None = None) -> Mapping[str, Any]:
     """Public trust-root identity for OUT-OF-BAND owner verification.
 
-    Returns only public material (key ids, epochs, file digest) so the owner
-    can compare fingerprints through a channel independent of this process.
-    It never returns private key material (a trust root holds none).
+    Returns only public material (key ids, epochs, revocation lists, file
+    digest) so the owner can compare fingerprints through a channel
+    independent of this process. It never returns private key material (a
+    trust root holds none).
     """
-    signers, revoked, epochs = load_trust_root(path)
+    signers, revoked, epochs, revoked_records = load_trust_root(path)
     return {
         "path": str(_trust_root_path(path)),
         "digest_sha256": trust_root_digest(path),
         "signer_key_ids": sorted(signers),
         "key_epochs": dict(sorted(epochs.items())),
         "revoked_key_ids": sorted(revoked),
+        "revoked_record_ids": sorted(revoked_records),
     }
 
 
@@ -414,6 +437,12 @@ def verify_authorization(
     rid = record["id"]
     if not isinstance(rid, str) or not rid:
         raise AuthorizationError("authorization record id must be a non-empty string")
+    # ``revoked``/``superseded_by`` are only meaningful when the OWNER signed
+    # them into the record; the caller-supplied ``revoked_ids`` argument is a
+    # SUPPLEMENTARY filter (e.g. an in-memory list), NOT an authoritative
+    # revocation source - the authoritative post-signing record revocation is
+    # the trust root's ``revoked_record_ids`` (checked after the trust root is
+    # loaded below).
     if rid in set(revoked_ids) or record.get("revoked") is True:
         raise AuthorizationError(f"authorization {rid!r} is revoked")
     if record.get("superseded_by"):
@@ -442,12 +471,19 @@ def verify_authorization(
     _check_binding(record, required, supplied, repository_root)
 
     # ---- signature verification against the owner-controlled trust root ----
-    signers, root_revoked, key_epochs = load_trust_root(trust_root)
+    signers, root_revoked, key_epochs, root_revoked_records = load_trust_root(
+        trust_root
+    )
     kid = sig.get("key_id")
     if not isinstance(kid, str) or kid not in signers:
         raise AuthorizationError(f"untrusted signer: {kid!r}")
     if kid in root_revoked:
         raise AuthorizationError(f"signer key {kid!r} is revoked in the trust root")
+    if rid in root_revoked_records:
+        raise AuthorizationError(
+            f"authorization {rid!r} is revoked via the trust root's "
+            "revoked_record_ids (owner-controlled revocation)"
+        )
     if sig.get("alg") != "ed25519":
         raise AuthorizationError(f"unsupported signature alg: {sig.get('alg')!r}")
     if sig.get("signer") != record.get("approver"):

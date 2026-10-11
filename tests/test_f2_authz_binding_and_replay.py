@@ -163,7 +163,7 @@ def test_corrupt_ledger_entry_fails_closed(tmp_path):
     entry = AuthorizationLedger(ledger_dir).consume(
         record_digest="d" * 64, binding=_binding(), binding_digest=bd,
         stage="CONF-001", operation="confirmatory_run")
-    path = ledger_dir / f"{consumption_key('d' * 64, bd)}.json"
+    path = ledger_dir / f"{consumption_key('d' * 64)}.json"
     path.write_text('{"schema": "f2-authz-consumption/v1", "trunc', "utf-8")
     with pytest.raises(LedgerError):
         AuthorizationLedger(ledger_dir).verify_consumption(
@@ -181,7 +181,7 @@ def test_crashed_creator_partial_write_fails_closed_not_unused(tmp_path):
     ledger_dir = tmp_path / "ledger"
     ledger_dir.mkdir()
     bd = execution_binding_digest(_binding())
-    (ledger_dir / f"{consumption_key('e' * 64, bd)}.json").write_text(
+    (ledger_dir / f"{consumption_key('e' * 64)}.json").write_text(
         '{"schema": "f2-authz-consumption/v1"}', "utf-8")
     # Not "unused": the key exists, so consumption is refused (fail closed).
     _expect_deny(lambda: AuthorizationLedger(ledger_dir).consume(
@@ -325,6 +325,43 @@ def test_conf_record_missing_experiment_id_denied(tmp_path, monkeypatch):
         trust_root=ctx["trust_root"],
         binding={"experiment_id": "experiment_j",
                  "protocol_version": "f2_v1"}))
+
+
+def test_conf_record_missing_arm_denied(tmp_path, monkeypatch):
+    """arm is now a REQUIRED binding for execution grants: a compliant
+    signature cannot smuggle a missing arm past the guard."""
+    import base64
+
+    apply_repo_identity(monkeypatch)
+    ctx = provision_record_env(
+        tmp_path, monkeypatch, stage="CONF-001", ops=("confirmatory_run",),
+        binding={"experiment_id": "experiment_j", "protocol_version": "f2_v1",
+                 "arm": "X"})
+    doc = json.loads(ctx["record_path"].read_text("utf-8"))
+    del doc["record"]["arm"]
+    doc["signature"]["sig"] = base64.b64encode(
+        ctx["priv"].sign(A.canonical_bytes(doc["record"]))).decode()
+    ctx["record_path"].write_text(json.dumps(doc), "utf-8")
+    _expect_deny(lambda: A.verify_authorization(
+        ctx["record_path"], stage="CONF-001", operation="confirmatory_run",
+        trust_root=ctx["trust_root"],
+        binding={"experiment_id": "experiment_j",
+                 "protocol_version": "f2_v1", "arm": "X"}))
+
+
+def test_ledger_denies_second_consumption_of_same_grant_with_new_binding(tmp_path):
+    """Ledger-level one-grant-one-execution: the key is the grant, so a fresh
+    binding cannot obtain a second consumption."""
+    ledger = AuthorizationLedger(tmp_path / "ledger")
+    bd1 = execution_binding_digest(_binding("r1"))
+    ledger.consume(record_digest="6" * 64, binding=_binding("r1"),
+                   binding_digest=bd1, stage="CONF-001",
+                   operation="confirmatory_run")
+    with pytest.raises(A.AuthorizationError) as ei:
+        ledger.consume(record_digest="6" * 64, binding=_binding("r2"),
+                       binding_digest=execution_binding_digest(_binding("r2")),
+                       stage="CONF-001", operation="confirmatory_run")
+    assert "exactly one execution" in str(ei.value)
 
 
 def test_conf_record_mismatched_protocol_version_denied(tmp_path, monkeypatch):
@@ -476,8 +513,8 @@ def test_trust_root_digest_pin_match_allows(tmp_path, monkeypatch):
     priv, pub = keypair()
     root = write_trust_root(tmp_path, {"owner": (priv, pub)})
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", A.trust_root_digest(root))
-    signers, revoked, epochs = A.load_trust_root(root)
-    assert "owner" in signers and not revoked and not epochs
+    signers, revoked, epochs, revoked_records = A.load_trust_root(root)
+    assert "owner" in signers and not revoked and not epochs and not revoked_records
 
 
 def test_key_epoch_mismatch_denies_correct_epoch_allows(tmp_path, monkeypatch):
@@ -523,8 +560,58 @@ def test_describe_trust_root_exposes_public_fingerprint_only(tmp_path):
     desc = A.describe_trust_root(root)
     assert desc["signer_key_ids"] == ["owner"]
     assert desc["key_epochs"] == {"owner": 1}
+    assert desc["revoked_record_ids"] == []
     assert len(desc["digest_sha256"]) == 64
     assert "priv" not in json.dumps(desc).lower()
+
+
+# ===========================================================================
+# Record-level revocation (trust-root revoked_record_ids = the authoritative
+# post-signing revocation source in this design)
+# ===========================================================================
+
+def test_trust_root_revoked_record_ids_denies_grant(tmp_path, monkeypatch):
+    apply_repo_identity(monkeypatch)
+    priv, pub = keypair()
+    root = write_trust_root(tmp_path, {"owner": (priv, pub)},
+                            revoked=())  # key NOT revoked
+    # Owner revokes the grant post-signing WITHOUT mutating the signed record.
+    root_doc = json.loads(root.read_text("utf-8"))
+    root_doc["revoked_record_ids"] = ["AUTH-TEST-1"]
+    root.write_text(json.dumps(root_doc), "utf-8")
+    p = write_record(tmp_path, signed_record(), priv)
+    _expect_deny(lambda: A.verify_authorization(
+        p, stage="POP-001", operation="acquire", trust_root=root))
+    # Removing it from the revocation list restores the grant (revocation is
+    # state in the owner-controlled trust root, not a property of the record).
+    root_doc["revoked_record_ids"] = []
+    root.write_text(json.dumps(root_doc), "utf-8")
+    got = A.verify_authorization(
+        p, stage="POP-001", operation="acquire", trust_root=root)
+    assert got["id"] == "AUTH-TEST-1"
+
+
+def test_revoked_record_denied_even_after_resigning(tmp_path, monkeypatch):
+    """Re-signing (fresh signature, fresh timestamp window) cannot evade the
+    owner's record-level revocation: revocation is by record id, not digest."""
+    apply_repo_identity(monkeypatch)
+    priv, pub = keypair()
+    root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    root_doc = json.loads(root.read_text("utf-8"))
+    root_doc["revoked_record_ids"] = ["AUTH-TEST-1"]
+    root.write_text(json.dumps(root_doc), "utf-8")
+    # A re-signed copy of the same grant id (attacker-controlled reissue).
+    p = write_record(tmp_path, signed_record(), priv, name="auth_re.json")
+    _expect_deny(lambda: A.verify_authorization(
+        p, stage="POP-001", operation="acquire", trust_root=root))
+
+
+def test_malformed_revoked_record_ids_fails_closed(tmp_path):
+    priv, pub = keypair()
+    (tmp_path / "bad_revoked.json").write_text(json.dumps(
+        {"signers": {"owner": pub}, "revoked_record_ids": "not-a-list"}),
+        "utf-8")
+    _expect_deny(lambda: A.load_trust_root(tmp_path / "bad_revoked.json"))
 
 
 # ===========================================================================
@@ -727,7 +814,7 @@ def test_protected_execution_modules_never_reference_test_ledger_defaults():
         assert "F2_AUTHZ_LEDGER_DIR" not in src or "AuthorizationLedger(None)" in src
 
 
-def test_verify_and_consume_happy_and_replay(tmp_path, monkeypatch):
+def test_verify_and_consume_enforces_one_grant_one_execution(tmp_path, monkeypatch):
     apply_repo_identity(monkeypatch)
     binding = {"experiment_id": "experiment_j", "protocol_version": "f2_v1",
                "arm": "X", "rollout_id": "r9"}
@@ -744,20 +831,46 @@ def test_verify_and_consume_happy_and_replay(tmp_path, monkeypatch):
         stage="CONF-001", operation="confirmatory_run",
         binding=binding, record_path=ctx["record_path"],
         trust_root=ctx["trust_root"]))
-    # 2. a record that PINS rollout r9 can never authorise a different rollout
-    other = dict(binding, rollout_id="r10")
+    # 2. REPLAY WITH A DIFFERENT ROLLOUT must not authorize a second
+    #    execution: one grant permits exactly one execution, whatever the
+    #    mutable execution identifiers say.
     _expect_deny(lambda: A.verify_and_consume(
         stage="CONF-001", operation="confirmatory_run",
-        binding=other, record_path=ctx["record_path"],
+        binding=dict(binding, rollout_id="r10"), record_path=ctx["record_path"],
         trust_root=ctx["trust_root"]))
-    # 3. an UNPINNED record (no rollout_id bound) may authorise a distinct
-    #    rollout - a separate execution unit with its own single-use entry.
+    # 3. ARM SUBSTITUTION must not authorize a second execution either.
+    _expect_deny(lambda: A.verify_and_consume(
+        stage="CONF-001", operation="confirmatory_run",
+        binding=dict(binding, arm="C0"), record_path=ctx["record_path"],
+        trust_root=ctx["trust_root"]))
+    # 4. An UNPINNED record is still one-grant-one-execution: a fresh record
+    #    (a distinct grant, distinct signature) is what authorizes another
+    #    execution, not a rebound copy of this one.
     rec2 = signed_record("CONF-001", ("confirmatory_run",),
-                         experiment_id="experiment_j", protocol_version="f2_v1")
+                         experiment_id="experiment_j", protocol_version="f2_v1",
+                         arm="X")
     p2 = write_record(tmp_path, rec2, ctx["priv"], name="auth_unpinned.json")
     v2, e2 = A.verify_and_consume(
         stage="CONF-001", operation="confirmatory_run",
         binding=dict(binding, rollout_id="r10"), record_path=p2,
         trust_root=ctx["trust_root"])
     assert e2["consumption_id"] != entry["consumption_id"]
-    assert v2.digest != verified.digest
+    assert v2.digest != verified.digest  # different grant, different digest
+
+
+def test_consumed_grant_entry_records_the_executed_binding(tmp_path):
+    """Audit: the ledger entry binds consumption to the exact execution binding."""
+    ledger = AuthorizationLedger(tmp_path / "ledger")
+    bd = execution_binding_digest(_binding("r1"))
+    entry = ledger.consume(record_digest="5" * 64, binding=_binding("r1"),
+                           binding_digest=bd, stage="CONF-001",
+                           operation="confirmatory_run")
+    found = ledger.find(record_digest="5" * 64)
+    assert found is not None
+    assert found["binding"] == _binding("r1")
+    assert found["binding_digest"] == bd
+    # The corroboration path rejects a DIFFERENT binding for this grant.
+    with pytest.raises(A.AuthorizationError):
+        ledger.verify_consumption(
+            consumption_id=entry["consumption_id"], record_digest="5" * 64,
+            binding_digest=execution_binding_digest(_binding("r2")))

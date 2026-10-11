@@ -1,19 +1,27 @@
 """Experiment J / F2 - durable single-use authorization consumption ledger.
 
-One consumption = one authorization-record digest + one execution binding
-digest.  The unit of single-use is the *binding*, not the record file: an
-owner-signed record may authorise several distinct executions inside its
-validity window (one per rollout), but replaying the SAME record against the
-SAME binding is refused forever, from any process, after any restart.
+CONTRACT: one signed grant (one authorization record) permits exactly ONE
+authorized execution.  The unit of single-use is the GRANT itself - the
+canonical record digest - NOT the (record, binding) pair.  A consumed grant is
+refused for any further execution: replay with the identical binding AND
+substitution of any binding value (rollout id, arm, experiment, ...) are both
+denied, from any process and across restarts, for as long as the consumption
+entry exists (see the threat-model boundary below for what that does NOT
+cover).  The consumed entry records the full execution binding so the child
+worker and the lowest adapter boundary must present the SAME binding to
+corroborate the receipt; a different binding cannot be corroborated, and a
+fresh consumption of the same grant is denied at the key level.
 
-Mechanism: one JSON file per consumption under a ledger directory, created with
+Mechanism: one JSON file per grant under a ledger directory, created with
 ``os.open(..., O_CREAT | O_EXCL | O_WRONLY)`` - an atomic create-if-absent at
 the filesystem layer on POSIX and Windows (CreateFile CREATE_NEW).  Exactly one
-concurrent creator can win a given key; every other attempt observes
+concurrent creator can win a given grant key; every other attempt observes
 ``FileExistsError`` and is denied.  There is deliberately **no** update,
-truncate, or delete method: a consumed binding never returns to an unused
-state, and a crash after the create leaves the consumption durable (the
-fail-closed direction).
+truncate, or delete method: a consumed grant never returns to an unused state
+through this API, and a crash after the create leaves the consumption durable
+(the fail-closed direction).  A crash BETWEEN the create and the write leaves
+an unparseable entry, which every later reader treats as corrupt => fail
+closed, never as unused.
 
 THREAT-MODEL BOUNDARY (read before relying on this module):
 
@@ -22,7 +30,7 @@ THREAT-MODEL BOUNDARY (read before relying on this module):
   principal that cannot write the ledger directory.
 * It is NOT independent tamper resistance.  A hostile local administrator or a
   compromised execution principal that can write the ledger directory can
-  delete or roll back consumption files; a consumed binding then becomes
+  delete or roll back consumption files; a consumed grant then becomes
   reusable again.  No claim of tamper-evident or tamper-proof storage is made;
   establishing that would require an anchor whose writer is independent of the
   executing principal (owner-held custody), which does not exist here.
@@ -67,10 +75,16 @@ def ledger_root(explicit: Path | str | None = None) -> Path:
     return Path(os.environ.get(LEDGER_DIR_ENV) or DEFAULT_LEDGER_ROOT)
 
 
-def consumption_key(record_digest: str, binding_digest: str) -> str:
-    if not record_digest or not binding_digest:
-        raise LedgerError("record_digest and binding_digest are required")
-    return hashlib.sha256(f"{record_digest}|{binding_digest}".encode("utf-8")).hexdigest()
+def consumption_key(record_digest: str) -> str:
+    """Grant-level single-use key: the canonical record digest itself.
+
+    Keying on the grant (not the grant+binding pair) is what enforces
+    "one grant, one execution": any second consumption of the same record -
+    identical or substituted binding - collides on this key and is denied.
+    """
+    if not record_digest or not isinstance(record_digest, str):
+        raise LedgerError("record_digest is required")
+    return record_digest
 
 
 def execution_binding_digest(binding: Mapping[str, Any]) -> str:
@@ -109,14 +123,15 @@ class AuthorizationLedger:
         stage: str,
         operation: str,
     ) -> dict[str, Any]:
-        """Atomically record one consumption. Exactly one caller can succeed.
+        """Atomically consume ONE grant. Exactly one caller can ever succeed.
 
-        Raises ``AuthorizationError`` when the same (record, binding) pair was
-        already consumed, and ``LedgerError`` when the store is unavailable.
-        A partial write by a crashed creator leaves an unparseable file, which
-        every later reader treats as corrupt => fail closed (never as unused).
+        Raises ``AuthorizationError`` when the grant was already consumed (for
+        any binding - same or different), and ``LedgerError`` when the store is
+        unavailable or corrupt. A partial write by a crashed creator leaves an
+        unparseable file, which every later reader treats as corrupt => fail
+        closed (never as unused).
         """
-        key = consumption_key(record_digest, binding_digest)
+        key = consumption_key(record_digest)
         entry_path = self.root / f"{key}.json"
         entry: dict[str, Any] = {
             "schema": SCHEMA,
@@ -153,9 +168,15 @@ class AuthorizationLedger:
                     f"authorization ledger entry invalid schema "
                     f"({entry_path.name!r}) - fail-closed"
                 )
+            if prior.get("binding_digest") == binding_digest:
+                raise AuthorizationError(
+                    f"grant already consumed for this execution binding "
+                    f"(record {key[:12]}...); replay denied"
+                ) from None
             raise AuthorizationError(
-                f"authorization already consumed for this record+binding "
-                f"(key {key[:12]}...); replay denied"
+                f"grant already consumed; one grant authorizes exactly one "
+                f"execution (record {key[:12]}... consumed with a DIFFERENT "
+                f"binding - binding substitution denied)"
             ) from None
         except OSError as exc:
             raise LedgerError(
@@ -193,22 +214,17 @@ class AuthorizationLedger:
             out.append(doc)
         return out
 
-    def find(
-        self, *, record_digest: str, binding_digest: str
-    ) -> dict[str, Any] | None:
-        key = consumption_key(record_digest, binding_digest)
+    def find(self, *, record_digest: str) -> dict[str, Any] | None:
+        """Return the consumption entry for this grant, if any (grant-level key)."""
+        key = consumption_key(record_digest)
         path = self.root / f"{key}.json"
         if not path.exists():
             return None
         entries = self._entries()
         for doc in entries:
-            if doc.get("record_digest") == record_digest and doc.get(
-                "binding_digest"
-            ) == binding_digest:
-                # Integrity: the filename key must match the content digests.
-                if consumption_key(
-                    str(doc.get("record_digest")), str(doc.get("binding_digest"))
-                ) != key:
+            if doc.get("record_digest") == record_digest:
+                # Integrity: the filename key must match the content digest.
+                if consumption_key(str(doc.get("record_digest"))) != key:
                     raise LedgerError(
                         f"authorization ledger entry key mismatch: {path.name!r}"
                     )

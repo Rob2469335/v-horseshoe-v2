@@ -23,9 +23,10 @@ Contract guarantees enforced here:
   - Fail-closed: missing/corrupt manifest, invalid X/C0, non-zero child exit,
     and invalid receipt all raise and never fall back to LIVE.
   - An EXECUTING arm is bound to a signed authorization record (strict
-    stage/operation/identity binding), durably consumed ONCE per
-    record+binding immediately before the child spawn, and the child plus the
-    lowest adapter boundary independently re-verify the same binding and
+    stage/operation/identity binding), durably consumed ONCE per grant
+    immediately before the child spawn (one grant authorizes exactly one
+    execution), and the child plus the lowest adapter boundary independently
+    re-verify the same binding and
     consumption (f2_authorization / f2_authz_ledger).
   - Delivery uses the authoritative ``get_delivery_artifact()`` inside the child
     worker; this module does not call ``render_active_lessons`` (that is the
