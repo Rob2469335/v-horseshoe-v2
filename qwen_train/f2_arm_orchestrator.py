@@ -163,6 +163,8 @@ def run_f2_arm(
     system_prompt: str = "",
     timeout_s: int = 60,
     execute: bool = False,
+    stage: str = "CONF-001",
+    operation: str | None = None,
     task_prompt: str = "",
     instance_id: str = "",
     agent_id: str = "coder",
@@ -190,6 +192,14 @@ def run_f2_arm(
         raise ValueError(f"invalid arm: {arm!r}")
 
     if execute:
+        from qwen_train import f2_authorization as _auth
+
+        operation = operation or _auth.EXECUTION_STAGE_OPERATIONS.get(stage, "")
+        _auth.validate_execution_stage_operation(stage, operation)
+        _auth.require_authorized(
+            stage=stage,
+            operation=operation,
+        )
         # Fail closed BEFORE any freeze/spawn work if the workspace is not
         # explicitly declared. No fallback to ``repo_root`` (the code root is a
         # git repository and would be reset as if it were the task workspace).
@@ -305,6 +315,8 @@ def run_f2_arm(
     if execute:
         cmd += [
             "--execute",
+            "--authorization-stage", stage,
+            "--authorization-operation", operation,
             "--task-id", task_id or instance_id or "engineering-rehearsal",
             "--instance-id", instance_id,
             "--agent-id", agent_id,

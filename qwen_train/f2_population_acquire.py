@@ -113,6 +113,9 @@ def acquire(
     Refuses a non-immutable revision.  Never overwrites an existing normalised
     JSONL -- callers choose a fresh destination.
     """
+    from qwen_train import f2_authorization as _auth
+
+    _auth.require_authorized(stage="POP-001", operation="acquire")
     if source_key not in SOURCES:
         raise ValueError(f"unknown source {source_key!r}; known: {sorted(SOURCES)}")
     src = SOURCES[source_key]

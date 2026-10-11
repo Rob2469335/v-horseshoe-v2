@@ -431,6 +431,8 @@ def start_real_p2_production_model(
     manifest_path: str | Path,
     rollout_id: str,
     trajectory_run_id: str,
+    stage: str,
+    operation: str,
     evidence_path: str | Path | None = None,
     startup_timeout: int = 60,
 ) -> dict[str, Any]:
@@ -450,6 +452,17 @@ def start_real_p2_production_model(
 
     The fake-model entry point is retained unchanged for the existing tests.
     """
+    from qwen_train import f2_authorization as _auth
+
+    # Production P2 is CONFIRMATORY-ONLY (policy): a caller-supplied exploratory
+    # stage must never reach the production launch seam. Reject before the auth
+    # check and before any spawn.
+    if stage != "CONF-001" or operation != "confirmatory_run":
+        raise _auth.AuthorizationError(
+            "production P2 adapter is confirmatory-only "
+            "(requires stage='CONF-001', operation='confirmatory_run')"
+        )
+    _auth.require_authorized(stage="CONF-001", operation="confirmatory_run")
     # READINESS GATE (F2 execution prerequisite, fail closed): this is the
     # lowest production-reachable boundary before the P2/model spawn, so the
     # gate is enforced here from the MANIFEST (the only integrity anchor that
@@ -1208,6 +1221,8 @@ class F2ExecutionAdapter:
         task_id: str,
         rollout_id: str,
         trajectory_run_id: str,
+        stage: str,
+        operation: str,
         agent_id: str = "coder",
         port: int = 8211,
         work_dir: str | Path | None = None,
@@ -1266,6 +1281,8 @@ class F2ExecutionAdapter:
                 manifest_path=self.manifest_path,
                 rollout_id=rollout_id,
                 trajectory_run_id=trajectory_run_id,
+                stage=stage,
+                operation=operation,
                 startup_timeout=startup_timeout,
             )
 

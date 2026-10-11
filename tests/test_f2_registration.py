@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from qwen_train.f2_registration import (
+    RegistrationError,
     PREDICATE,
     REGISTRATION_ID,
     SCHEMA_VERSION,
@@ -95,7 +96,7 @@ def _write_fixture(tmp_path: Path):
     p = d / "acquired.jsonl"
     p.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     (d / "PROVENANCE.json").write_text(
-        json.dumps({"source_key": "swe-bench-live", "normalised_sha256": "a" * 64}),
+        json.dumps({"source_key": "swe-bench-live", "normalised_sha256": hashlib.sha256(p.read_bytes()).hexdigest()}),
         encoding="utf-8",
     )
     report = tmp_path / "union_report.json"
@@ -149,11 +150,74 @@ class TestBuildManifest:
         base, _, _ = build_manifest(union_report=report, acquired_paths=[acquired], generated_at="T")
         text = acquired.read_text(encoding="utf-8").replace('"o/a"', '"o/other"')
         acquired.write_text(text, encoding="utf-8")
+        provenance = acquired.parent / "PROVENANCE.json"
+        provenance.write_text(json.dumps({"normalised_sha256": hashlib.sha256(acquired.read_bytes()).hexdigest()}), encoding="utf-8")
         after, _, _ = build_manifest(union_report=report, acquired_paths=[acquired], generated_at="T")
         assert base["registration_content_sha256"] != after["registration_content_sha256"]
+
+    def test_acquired_bytes_must_match_provenance(self, tmp_path):
+        report, acquired = _write_fixture(tmp_path)
+        acquired.write_text(acquired.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        with pytest.raises(RegistrationError, match="digest mismatch"):
+            build_manifest(union_report=report, acquired_paths=[acquired], generated_at="T")
+
+    @pytest.mark.parametrize("declared", [None, "not-a-digest", "A" * 64])
+    def test_missing_or_malformed_acquired_digest_is_rejected(self, tmp_path, declared):
+        report, acquired = _write_fixture(tmp_path)
+        (acquired.parent / "PROVENANCE.json").write_text(
+            json.dumps({"normalised_sha256": declared}), encoding="utf-8"
+        )
+        with pytest.raises(RegistrationError, match="valid normalised_sha256"):
+            build_manifest(union_report=report, acquired_paths=[acquired], generated_at="T")
 
     def test_empty_eligible_set_is_refused(self, tmp_path):
         report, acquired = _write_fixture(tmp_path)
         report.write_text(json.dumps({"screen_rejections": []}), encoding="utf-8")
         with pytest.raises(Exception, match="no metadata-eligible"):
             build_manifest(union_report=report, acquired_paths=[acquired], generated_at="T")
+
+
+# ---------------------------------------------------------------------------
+# Isolated TEST authorization for build_manifest's logic tests. This is NOT a
+# production trust root and cannot authorise real acquisition/admission/execution.
+# ---------------------------------------------------------------------------
+import base64 as _b64
+import datetime as _dt
+import json as _json
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _authorize_registration(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from qwen_train import f2_authorization as _A
+
+    priv = Ed25519PrivateKey.generate()
+    pub = _b64.b64encode(
+        priv.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+    ).decode()
+    root = tmp_path / "trust_root.json"
+    root.write_text(_json.dumps({"signers": {"owner": pub}}), "utf-8")
+    now = _dt.datetime.now(_dt.timezone.utc)
+    rec = {
+        "id": "TEST-REG", "schema": _A.SCHEMA, "stage": "POP-001",
+        "operations": ["register"], "approver": "owner",
+        "not_before": (now - _dt.timedelta(minutes=1)).isoformat(),
+        "not_after": (now + _dt.timedelta(days=1)).isoformat(),
+        "protocol_digest": "d",
+    }
+    sig = priv.sign(_A.canonical_bytes(rec))
+    recp = tmp_path / "auth.json"
+    recp.write_text(_json.dumps({
+        "record": rec,
+        "signature": {"alg": "ed25519", "key_id": "owner", "signer": "owner",
+                      "sig": _b64.b64encode(sig).decode()},
+    }), "utf-8")
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
+    monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(recp))
+    yield
