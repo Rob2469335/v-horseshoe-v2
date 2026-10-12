@@ -42,6 +42,7 @@ mcp>=1.28.1,<2
 mdurl==0.1.2
 multidict==6.9.1
 numpy==2.5.0
+networkx>=3.0
 openai==2.30.0
 packaging==26.2
 pluggy==1.6.0
