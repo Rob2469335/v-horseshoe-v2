@@ -233,7 +233,7 @@ async def web_research(req: WebResearchRequest):
     Pipeline: web_search_handler (parallel fan-out across every configured engine
     — Tavily/Serper/Brave/Exa/SerpAPI/TinyFish run concurrently and merge by RRF
     consensus ranking, each result tagged with its provider(s)) ->
-    web_fetch_handler (Crawl4AI deep-read) on the top `deep_read` results ->
+    web_fetch_handler (plain-HTTP deep-read) on the top `deep_read` results ->
     a synthesis prompt to the analysis-cloud model (deepseek-v4-flash by default)
     that MUST cite sources as [1][2]... against the fetched list.
 

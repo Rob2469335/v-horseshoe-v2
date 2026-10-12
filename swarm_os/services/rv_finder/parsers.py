@@ -550,7 +550,9 @@ async def _discover_web(
 
 # --------------------------------------------------------------------------
 # Craigslist parser (real marketplace — private sellers, no dealer markup).
-# Uses the Crawl4AI browser fetch so the JS-rendered listing grid is read.
+# Uses web_fetch_handler's plain-HTTP fetch. (The former Crawl4AI browser
+# engine was removed with its dependency chain - JS-rendered listing grids are
+# no longer rendered, so Craigslist discovery may return fewer listings.)
 # --------------------------------------------------------------------------
 def _build_craigslist_queries(budget: int, rv_type: str) -> list[str]:
     """Craigslist search URLs for the budget + (optionally) the RV type.
@@ -601,7 +603,7 @@ def _build_craigslist_queries(budget: int, rv_type: str) -> list[str]:
 
 
 def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
-    """Parse the Crawl4AI markdown of a Craigslist /search/rvs page into listings.
+    """Parse fetched markdown of a Craigslist /search/rvs page into listings.
 
     Listing shape (verified live): `[TITLE](https://www.craigslist.org/view/d/{area}-{slug}/{hash})`
     followed on the same text run by `| {MM/DD}{Area} | ${price}`. Only /view/d/
@@ -632,7 +634,8 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
         title = re.sub(r"\s+\d+$", "", title).strip()
         title = re.sub(r"\s*https?://\S+", "", title).strip()
         title = re.sub(r"\s+", " ", title).strip()
-        # Crawl4AI truncates long image-alt titles ("...5th WHEEL TR"). The URL
+        # Truncated image-alt titles ("...5th WHEEL TR") occur in fetched
+        # markup; the URL
         # slug carries the full readable title — use it when it's longer.
         slug_title = re.sub(r"[-_]+", " ", slug.rsplit("/", 1)[0])
         slug_title = re.sub(r"^\s*\S+\s+", "", slug_title)  # drop area word
@@ -688,7 +691,7 @@ def _parse_craigslist_content(content: str, budget: int) -> list[RVListing]:
 async def _discover_craigslist(
     budget: int, rv_type: str = "all", max_results: int = 40
 ) -> list[RVListing]:
-    """Discover used-RV listings from Craigslist via the Crawl4AI browser fetch."""
+    """Discover used-RV listings from Craigslist via web_fetch_handler."""
     from swarm_os.lib.mcp.web_search import web_fetch_handler
 
     listings: list[RVListing] = []
