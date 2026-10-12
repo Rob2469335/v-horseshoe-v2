@@ -342,6 +342,9 @@ class TestWorkerPlumbing:
         ws.mkdir(exist_ok=True)  # an EXECUTING arm requires an existing workspace
         monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
         manifest = self._manifest(tmp_path, with_readiness=True)
+        from tests.f2_authz_testkit import consume_parent_receipt_from_env
+
+        consume_parent_receipt_from_env(monkeypatch, arm="T")
         WORKER.run_worker(argv=[
             "--manifest", str(manifest), "--arm", "T", "--execute",
             "--instance-id", "pypa__twine-1066", "--task-id", "pypa__twine-1066", "--authorization-stage", "CONF-001", "--authorization-operation", "confirmatory_run",
@@ -390,6 +393,9 @@ class TestWorkerPlumbing:
         ws.mkdir(exist_ok=True)  # an EXECUTING arm requires an existing workspace
         monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
         manifest = self._manifest(tmp_path, with_readiness=False)  # NO readiness
+        from tests.f2_authz_testkit import consume_parent_receipt_from_env
+
+        consume_parent_receipt_from_env(monkeypatch, arm="T")
         rc = WORKER.run_worker(argv=[
             "--manifest", str(manifest), "--arm", "T", "--execute",
             "--instance-id", "pypa__twine-1066", "--task-id", "pypa__twine-1066", "--authorization-stage", "CONF-001", "--authorization-operation", "confirmatory_run",
@@ -583,27 +589,49 @@ import pytest as _pytest
 
 @_pytest.fixture(autouse=True)
 def _authorize_f2_tests(tmp_path, monkeypatch):
+    """Isolated TEST authorization (CONF-001). Ephemeral key + temp trust root
+    + temp ledger; NOT production. The fixture plays the OWNER role and lazily
+    signs whatever binding the guard demands; every check is the REAL one."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from qwen_train import f2_authorization as _A
+    from tests.f2_authz_testkit import TEST_REPO_REVISION, apply_repo_identity
 
+    apply_repo_identity(monkeypatch)
     priv = Ed25519PrivateKey.generate()
     pub = _b64.b64encode(priv.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
     root = tmp_path / "trust_root.json"
     root.write_text(_json.dumps({"signers": {"owner": pub}}), "utf-8")
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", _A.trust_root_digest(root))
     now = _dt.datetime.now(_dt.timezone.utc)
-    rec = {"id": "TEST-CONF", "schema": _A.SCHEMA, "stage": "CONF-001",
-           "operations": ["confirmatory_run"], "approver": "owner",
-           "not_before": (now - _dt.timedelta(minutes=1)).isoformat(),
-           "not_after": (now + _dt.timedelta(days=1)).isoformat(),
-           "protocol_digest": "d"}
-    sig = priv.sign(_A.canonical_bytes(rec))
+    template = {"id": "TEST-CONF", "schema": _A.SCHEMA, "stage": "CONF-001",
+                "operations": ["confirmatory_run"], "approver": "owner",
+                "not_before": (now - _dt.timedelta(minutes=1)).isoformat(),
+                "not_after": (now + _dt.timedelta(days=1)).isoformat(),
+                "protocol_digest": "d",
+                "repository_revision": TEST_REPO_REVISION}
     rp = tmp_path / "auth.json"
-    rp.write_text(_json.dumps({"record": rec, "signature": {
+
+    def _sign_then_verify(record_path, **kw):
+        rec = dict(template)
+        rec.update(dict(kw.get("binding") or {}))
+        sig = priv.sign(_A.canonical_bytes(rec))
+        Path(str(record_path)).write_text(_json.dumps({"record": rec, "signature": {
+            "alg": "ed25519", "key_id": "owner", "signer": "owner",
+            "sig": _b64.b64encode(sig).decode()}}), "utf-8")
+        return real_verify(record_path, **kw)
+
+    real_verify = _A.verify_authorization
+    rp.write_text(_json.dumps({"record": template, "signature": {
         "alg": "ed25519", "key_id": "owner", "signer": "owner",
-        "sig": _b64.b64encode(sig).decode()}}), "utf-8")
+        "sig": _b64.b64encode(priv.sign(_A.canonical_bytes(template))).decode()}}),
+        "utf-8")
+    monkeypatch.setattr(_A, "verify_authorization", _sign_then_verify)
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
     monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(rp))
+    from tests.f2_authz_testkit import use_test_ledger
+
+    use_test_ledger(monkeypatch, tmp_path)
     yield

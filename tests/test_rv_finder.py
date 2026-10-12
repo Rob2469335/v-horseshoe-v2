@@ -433,7 +433,9 @@ def test_ppl_item_regex_handles_sale_price_label():
 
 
 def test_craigslist_parser_extracts_listings_with_price_and_location():
-    """The Craigslist parser must turn the Crawl4AI markdown (real listing
+    """The Craigslist parser must turn fetched markdown (real listing
+    sample captured from the former Crawl4AI-era fetch; the parser itself is
+    engine-agnostic)
     links + '| MM/DD Area | $price') into RVListing objects."""
     from swarm_os.services.rv_finder import parsers
 

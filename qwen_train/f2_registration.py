@@ -27,7 +27,7 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from qwen_train.f2_task_plan import (
     ORDERING_RULE_ID,
@@ -131,21 +131,40 @@ def eligible(
     )
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
-def _verified_acquired_sha256(path: Path) -> str:
-    """Verify an acquired JSONL against its adjacent acquisition provenance."""
-    path = Path(path)
-    provenance_path = path.parent / "PROVENANCE.json"
+def _read_bytes_once(path: Path, label: str) -> bytes:
+    """Read a pinned input EXACTLY ONCE into an immutable buffer. Fail-closed.
+
+    Every digest computation, authorization binding, and parse of a pinned
+    input in this module runs over these same bytes; the file is never reread,
+    so a swap-after-authorization TOCTOU cannot substitute different content
+    than what was authorized and parsed.
+    """
     try:
-        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        return Path(path).read_bytes()
+    except OSError as exc:
+        raise RegistrationError(f"unreadable {label}: {path} ({exc})") from exc
+
+
+def _verified_acquired_digest(
+    path: Path, data: bytes, provenance_data: bytes
+) -> str:
+    """Verify one acquired JSONL's bytes against its provenance bytes.
+
+    Both buffers were read ONCE by the caller; the digest is computed from the
+    exact acquired bytes that will be parsed. The provenance file is
+    producer-written at acquisition time but colocated and rewritable by the
+    executing principal - this is a digest-CONSISTENCY check, not an
+    independent anchor (the owner-signed record is the anchor, via
+    ``acquired_inputs_digest``).
+    """
+    provenance_path = Path(path).parent / "PROVENANCE.json"
+    try:
+        provenance = json.loads(provenance_data)
+    except json.JSONDecodeError as exc:
         raise RegistrationError(
             f"unreadable or malformed acquisition provenance: {provenance_path} ({exc})"
         ) from exc
@@ -156,12 +175,25 @@ def _verified_acquired_sha256(path: Path) -> str:
         raise RegistrationError(
             f"acquisition provenance has no valid normalised_sha256: {provenance_path}"
         )
-    actual = _sha256_file(path)
+    actual = _sha256_bytes(data)
     if actual != declared:
         raise RegistrationError(
             f"acquired artifact digest mismatch: {path} does not match {provenance_path}"
         )
     return actual
+
+
+def _acquired_inputs_digest(per_file: dict[str, str]) -> str:
+    """Canonical digest of the COMPLETE acquired input set (name -> sha256).
+
+    Bound into the owner-signed register grant, so the exact input set - not
+    just the union report - is anchored by the signature. Key collisions
+    (two inputs whose parent directory names are equal) are rejected by the
+    caller before this point; the map is sorted canonically.
+    """
+    from qwen_train.f2_authorization import canonical_bytes
+
+    return hashlib.sha256(canonical_bytes(dict(sorted(per_file.items())))).hexdigest()
 
 
 def build_manifest(
@@ -173,14 +205,62 @@ def build_manifest(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Return ``(manifest, ordered, excluded)`` for the operative registration.
 
-    Reads the pinned inputs only.  No task command is executed; ``test_cmd`` is
-    used solely to compute the eligibility predicate and a digest.
+    Reads the pinned inputs only, each EXACTLY ONCE. No task command is
+    executed; ``test_cmd`` is used solely to compute the eligibility predicate
+    and a digest.
     """
     from qwen_train import f2_authorization as _auth
 
-    _auth.require_authorized(stage="POP-001", operation="register")
     union_report = Path(union_report)
-    report = json.loads(union_report.read_text(encoding="utf-8"))
+    # --- ONE immutable read per pinned input; every digest, every parse,
+    # --- and the authorization binding below run over THESE bytes only.
+    union_bytes = _read_bytes_once(union_report, "union report")
+    union_digest = _sha256_bytes(union_bytes)
+
+    acquired_bytes: dict[Path, bytes] = {}
+    provenance_bytes: dict[Path, bytes] = {}
+    per_file_digests: dict[str, str] = {}
+    seen_resolved: set[Path] = set()
+    for raw in acquired_paths:
+        path = Path(raw)
+        resolved = path.resolve()
+        if resolved in seen_resolved:
+            raise RegistrationError(
+                f"duplicate acquired input (same file declared twice): {path}"
+            )
+        seen_resolved.add(resolved)
+        name = path.parent.name
+        if name in per_file_digests:
+            raise RegistrationError(
+                f"ambiguous acquired source directory name {name!r} "
+                "(two inputs would collide in the manifest inputs map)"
+            )
+        data = _read_bytes_once(path, "acquired input")
+        prov = _read_bytes_once(path.parent / "PROVENANCE.json", "acquisition provenance")
+        acquired_bytes[path] = data
+        provenance_bytes[path] = prov
+        per_file_digests[name] = _verified_acquired_digest(path, data, prov)
+
+    # The population binding RECOMPUTED from the exact bytes this entry point
+    # consumes, plus the complete acquired input set, both bound into the
+    # owner-signed record: a record that binds different evidence is rejected
+    # before any registration work, and no second read can change what was
+    # authorized.
+    _auth.require_authorized(
+        stage="POP-001",
+        operation="register",
+        binding={
+            "population_manifest_digest": union_digest,
+            "acquired_inputs_digest": _acquired_inputs_digest(per_file_digests),
+        },
+    )
+    try:
+        report = json.loads(union_bytes)
+    except json.JSONDecodeError as exc:
+        raise RegistrationError(
+            f"union report is not valid JSON (parsed from the authorized "
+            f"bytes): {union_report} ({exc})"
+        ) from exc
     eligible_ids = [
         row["instance_id"]
         for row in report.get("screen_rejections") or []
@@ -193,6 +273,8 @@ def build_manifest(
         union_report=union_report,
         acquired_paths=[Path(p) for p in acquired_paths],
         eligible_ids=eligible_ids,
+        acquired_bytes=acquired_bytes,
+        provenance_bytes=provenance_bytes,
     )
 
     compatible = 0
@@ -205,9 +287,8 @@ def build_manifest(
             shortfall["missing_metadata"] += 1
             continue
         rows.append({"instance_id": iid, **record})
-    # Declarations are read in one second pass so the streaming metadata loader
-    # stays untouched; both passes treat the task fields as inert data.
-    declarations = _load_declarations(acquired_paths, set(eligible_ids))
+    # Declarations are parsed from the SAME verified bytes (no second read).
+    declarations = _load_declarations(acquired_bytes, set(eligible_ids))
     kept: list[dict[str, Any]] = []
     for row in rows:
         iid = row["instance_id"]
@@ -224,13 +305,11 @@ def build_manifest(
         kept.append(row)
 
     ordered, excluded = order_tasks(kept)
-    inputs = {
-        "union_report_sha256": _sha256_file(union_report),
-    }
-    for path in acquired_paths:
-        path = Path(path)
-        sha = _verified_acquired_sha256(path)
-        inputs[f"{path.parent.name}_acquired_sha256"] = sha
+    # The manifest records the digest of the AUTHORIZED bytes, not a reread.
+    inputs: dict[str, str] = {"union_report_sha256": union_digest}
+    for name, sha in sorted(per_file_digests.items()):
+        inputs[f"{name}_acquired_sha256"] = sha
+    inputs["acquired_inputs_sha256"] = _acquired_inputs_digest(per_file_digests)
 
     arts = registration_artifacts(ordered, excluded, inputs=inputs, top_n=top_n,
                                   generated_at=generated_at)
@@ -268,24 +347,29 @@ def build_manifest(
 
 
 def _load_declarations(
-    acquired_paths: Sequence[Path], wanted: set[str]
+    acquired_bytes: Mapping[Path, bytes], wanted: set[str]
 ) -> dict[str, tuple[list[str], list[str]]]:
-    """Read FAIL_TO_PASS/PASS_TO_PASS for the wanted identities, as data only."""
+    """Parse FAIL_TO_PASS/PASS_TO_PASS for the wanted identities from the
+    SAME verified byte buffers that were digested and authorized (no reread)."""
     out: dict[str, tuple[list[str], list[str]]] = {}
-    for path in acquired_paths:
-        path = Path(path)
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                iid = str(row.get("instance_id") or "")
-                if iid in wanted and iid not in out:
-                    out[iid] = (
-                        [str(x) for x in (row.get("FAIL_TO_PASS") or [])],
-                        [str(x) for x in (row.get("PASS_TO_PASS") or [])],
-                    )
+    for path, data in acquired_bytes.items():
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RegistrationError(
+                f"acquired input is not valid UTF-8: {path} ({exc})"
+            ) from exc
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            iid = str(row.get("instance_id") or "")
+            if iid in wanted and iid not in out:
+                out[iid] = (
+                    [str(x) for x in (row.get("FAIL_TO_PASS") or [])],
+                    [str(x) for x in (row.get("PASS_TO_PASS") or [])],
+                )
     return out
 
 

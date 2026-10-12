@@ -323,11 +323,19 @@ def load_eligible_created_at(
     union_report: Path,
     acquired_paths: Sequence[Path],
     eligible_ids: Sequence[str] | None = None,
+    acquired_bytes: Mapping[Path, bytes] | None = None,
+    provenance_bytes: Mapping[Path, bytes] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Read ``created_at``/``test_cmd``/``language`` for eligible identities.
 
     Streams the pinned acquisitions as data.  No task command is executed;
     ``test_cmd`` is captured only to be hashed and statically classified.
+
+    ``acquired_bytes`` / ``provenance_bytes`` are optional immutable buffers
+    read ONCE by the caller (the registration entry point passes them so the
+    metadata parse consumes exactly the bytes that were digested and
+    authorized - no second file read, no TOCTOU window). When omitted (CLI
+    use), the files are streamed from disk as before.
     """
     from qwen_train.f2_population_build import source_to_screen_row  # local import
 
@@ -337,25 +345,33 @@ def load_eligible_created_at(
         path = Path(path)
         source_key = "swe-bench-live" if "live" in path.parent.name else "swe-rebench-v2"
         prov = path.parent / "PROVENANCE.json"
-        if prov.is_file():
+        prov_data = (provenance_bytes or {}).get(path)
+        if prov_data is not None:
+            source_key = str(json.loads(prov_data).get("source_key") or source_key)
+        elif prov.is_file():
             source_key = str(json.loads(prov.read_text(encoding="utf-8")).get("source_key") or source_key)
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                row = json.loads(line)
-                iid = str(row.get("instance_id") or "")
-                if not iid or (wanted is not None and iid not in wanted) or iid in out:
-                    continue
-                mapped = source_to_screen_row(source_key, row)
-                out[iid] = {
-                    "created_at": mapped.get("created_at") or "",
-                    "test_cmd": mapped.get("test_cmd") or "",
-                    "language": mapped.get("language") or "",
-                    "repo": mapped.get("repo") or "",
-                    "source": source_key,
-                }
+        data = (acquired_bytes or {}).get(path)
+        if data is not None:
+            lines = data.decode("utf-8").splitlines()
+        else:
+            with path.open("r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            iid = str(row.get("instance_id") or "")
+            if not iid or (wanted is not None and iid not in wanted) or iid in out:
+                continue
+            mapped = source_to_screen_row(source_key, row)
+            out[iid] = {
+                "created_at": mapped.get("created_at") or "",
+                "test_cmd": mapped.get("test_cmd") or "",
+                "language": mapped.get("language") or "",
+                "repo": mapped.get("repo") or "",
+                "source": source_key,
+            }
     return out
 
 

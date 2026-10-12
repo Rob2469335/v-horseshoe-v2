@@ -434,15 +434,24 @@ class TestProductionWiring:
         return [str(c) for c in captured["cmd"]]
 
     def test_orchestrator_passes_the_structured_execute_flag(self):
-        argv = self._captured_argv(execute=True, instance_id=POOL_INSTANCE,
+        argv = self._captured_argv(execute=True, stage="CONF-001",
+                                   instance_id=POOL_INSTANCE,
                                    task_id="ENGINEERING-REHEARSAL")
         assert "--execute" in argv
+        assert "--authorization-stage" in argv and "CONF-001" in argv
         assert "--instance-id" in argv and POOL_INSTANCE in argv
         assert "--task-id" in argv and "ENGINEERING-REHEARSAL" in argv
         assert "--agent-id" in argv and "coder" in argv
 
+    def test_execute_without_an_explicit_stage_is_refused(self):
+        """No silent default stage: execute=True without a stage is denied
+        before any work (fail-closed)."""
+        with pytest.raises(Exception):
+            self._captured_argv(execute=True, instance_id=POOL_INSTANCE)
+
     def test_production_argv_never_uses_the_dead_env_seam(self):
-        argv = self._captured_argv(execute=True, instance_id=POOL_INSTANCE)
+        argv = self._captured_argv(execute=True, stage="CONF-001",
+                                   instance_id=POOL_INSTANCE)
         assert "F2_ARM_EXEC_CMD" not in " ".join(argv)
 
     def test_no_execute_means_no_execute_flag(self):
@@ -460,7 +469,9 @@ class TestProductionWiring:
         assert "adapter.execute_arm_real" in src
         i = src.find("if structured_execute:")
         assert i > 0
-        assert "F2ExecutionAdapter" in src[i: i + 3000]
+        # The authorization/binding/consumption guard block precedes the
+        # adapter import; allow room for it.
+        assert "F2ExecutionAdapter" in src[i: i + 8000]
 
     def test_manifest_and_arm_verification_preserved(self):
         src = (REPO_ROOT / "qwen_train" / "f2_arm_worker.py").read_text("utf-8")
@@ -710,27 +721,50 @@ import pytest as _pytest
 
 @_pytest.fixture(autouse=True)
 def _authorize_f2_tests(tmp_path, monkeypatch):
+    """Isolated TEST authorization (CONF-001) so the enforcement guard is
+    satisfied for these plumbing tests. Ephemeral key + temp trust root + temp
+    ledger; NOT production. The fixture plays the OWNER role and lazily signs
+    whatever binding the guard demands; every check is the REAL verifier's."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from qwen_train import f2_authorization as _A
+    from tests.f2_authz_testkit import TEST_REPO_REVISION, apply_repo_identity
 
+    apply_repo_identity(monkeypatch)
     priv = Ed25519PrivateKey.generate()
     pub = _b64.b64encode(priv.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
     root = tmp_path / "trust_root.json"
     root.write_text(_json.dumps({"signers": {"owner": pub}}), "utf-8")
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", _A.trust_root_digest(root))
     now = _dt.datetime.now(_dt.timezone.utc)
-    rec = {"id": "TEST-CONF", "schema": _A.SCHEMA, "stage": "CONF-001",
-           "operations": ["confirmatory_run"], "approver": "owner",
-           "not_before": (now - _dt.timedelta(minutes=1)).isoformat(),
-           "not_after": (now + _dt.timedelta(days=1)).isoformat(),
-           "protocol_digest": "d"}
-    sig = priv.sign(_A.canonical_bytes(rec))
+    template = {"id": "TEST-CONF", "schema": _A.SCHEMA, "stage": "CONF-001",
+                "operations": ["confirmatory_run"], "approver": "owner",
+                "not_before": (now - _dt.timedelta(minutes=1)).isoformat(),
+                "not_after": (now + _dt.timedelta(days=1)).isoformat(),
+                "protocol_digest": "d",
+                "repository_revision": TEST_REPO_REVISION}
     rp = tmp_path / "auth.json"
-    rp.write_text(_json.dumps({"record": rec, "signature": {
+
+    def _sign_then_verify(record_path, **kw):
+        rec = dict(template)
+        rec.update(dict(kw.get("binding") or {}))
+        sig = priv.sign(_A.canonical_bytes(rec))
+        Path(str(record_path)).write_text(_json.dumps({"record": rec, "signature": {
+            "alg": "ed25519", "key_id": "owner", "signer": "owner",
+            "sig": _b64.b64encode(sig).decode()}}), "utf-8")
+        return real_verify(record_path, **kw)
+
+    real_verify = _A.verify_authorization
+    rp.write_text(_json.dumps({"record": template, "signature": {
         "alg": "ed25519", "key_id": "owner", "signer": "owner",
-        "sig": _b64.b64encode(sig).decode()}}), "utf-8")
+        "sig": _b64.b64encode(priv.sign(_A.canonical_bytes(template))).decode()}}),
+        "utf-8")
+    monkeypatch.setattr(_A, "verify_authorization", _sign_then_verify)
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
     monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(rp))
+    from tests.f2_authz_testkit import use_test_ledger
+
+    use_test_ledger(monkeypatch, tmp_path)
     yield

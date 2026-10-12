@@ -242,8 +242,13 @@ class TestSpawnSeamBoundary:
             ADAPTER._start_real_p2 = real  # type: ignore[assignment]
         assert calls == []  # NO Popen was attempted
 
-    def test_with_valid_readiness_reaches_popen(self, tmp_path):
+    def test_with_valid_readiness_reaches_popen(self, tmp_path, monkeypatch):
+        from tests.f2_authz_testkit import provision_parent_receipt
+
         manifest = _frozen(tmp_path, with_readiness=True)
+        # The lowest boundary now ALSO requires the parent's durable
+        # consumption receipt bound to this manifest identity (arm "T").
+        provision_parent_receipt(tmp_path, monkeypatch, arm="T", rollout_id="ro")
 
         class _Reached(Exception):
             pass
@@ -265,6 +270,8 @@ class TestWorkerRoute:
     """The worker CLI has no execution route other than the gated adapter."""
 
     def test_execute_routes_through_the_gated_adapter(self, tmp_path, monkeypatch):
+        from tests.f2_authz_testkit import provision_parent_receipt
+
         calls = {"constructed": 0, "executed": 0, "kwargs": {}}
 
         class _FakeAdapter:
@@ -289,6 +296,11 @@ class TestWorkerRoute:
         AW.prepare_arm_workspace = lambda ws, bc: None  # type: ignore[assignment]
         try:
             manifest = _frozen(tmp_path, with_readiness=True)
+            # Parent-side durable consumption bound to this manifest identity
+            # (arm "T", rollout matching the module's replay-env fixture); the
+            # child worker and adapter corroborate it.
+            provision_parent_receipt(tmp_path, monkeypatch, arm="T",
+                                     rollout_id="ro-test")
             monkeypatch.setenv("SWARM_F2_REPO_ROOT", str(REPO_ROOT))
             monkeypatch.setenv("SWARM_F2_TRAJECTORY_RUN_ID", "tr")
             ws = tmp_path / "ws"

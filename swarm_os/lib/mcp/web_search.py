@@ -1167,8 +1167,13 @@ async def _ddg_fallback(query: str, max_results: int) -> Dict[str, Any]:
 
 
 async def web_fetch_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str, Any]:
-    """Fetch a URL and return clean markdown via Crawl4AI (LLM-optimized extraction).
-    Falls back to plain HTTP+regex stripping if Crawl4AI is unavailable."""
+    """Fetch a URL and return clean markdown via plain HTTP + HTML stripping.
+
+    This is the only fetch engine: a pooled httpx client with per-hop SSRF
+    redirect checks. (The optional Crawl4AI browser engine was removed with
+    its dependency chain - see WORK_LOG 2026-10-11 - so JS-rendered pages are
+    fetched as static HTML.)
+    """
     import re as _re
 
     url = str(params.get("url", "")).strip()
@@ -1187,53 +1192,7 @@ async def web_fetch_handler(params: Dict[str, Any], trace_hook=None) -> Dict[str
 
     max_chars = int(params.get("max_chars", 20000))
 
-    # Crawl4AI: browser-level extraction → clean LLM-friendly markdown
-    try:
-        from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
-
-        run_cfg = CrawlerRunConfig(
-            page_timeout=15000,  # ms — gives JS-heavy pages time to render
-            wait_until="domcontentloaded",
-            remove_overlay_elements=True,  # dismiss cookie/GDPR popups
-            word_count_threshold=10,  # discard near-empty extractions
-        )
-        async with AsyncWebCrawler(verbose=False) as crawler:
-            result = await crawler.arun(url=url, config=run_cfg)
-        # SECURITY: the browser path follows redirects internally with no
-        # per-hop check (unlike the pooled-client fallback). If the final URL
-        # resolved to a loopback/private/cloud-metadata target, discard the
-        # content instead of returning it — an attacker redirect would otherwise
-        # make the agent read internal services.
-        final_url = getattr(result, "url", None)
-        if final_url and str(final_url).strip().lower() != url.lower():
-            _final_ssrf = _ssrf_check(str(final_url))
-            if _final_ssrf:
-                return {
-                    "ok": False,
-                    "error": f"web_fetch blocked: redirect landed on {_final_ssrf}",
-                }
-        if result and result.markdown and len(result.markdown.strip()) > 50:
-            text = result.markdown.strip()
-            title = result.metadata.get("title", "") if result.metadata else ""
-            if len(text) > max_chars:
-                text = text[:max_chars] + "\n...[FETCH TRUNCATED]..."
-            if trace_hook:
-                trace_hook(
-                    "web_fetch",
-                    {"ok": True, "url": url, "chars": len(text), "engine": "crawl4ai"},
-                )
-            return {
-                "ok": True,
-                "url": url,
-                "title": title or _extract_title_from_url(url),
-                "content": text,
-            }
-    except Exception as c4a_err:
-        logger.debug(
-            "Crawl4AI fetch failed for %s, falling back to HTTP: %s", url, c4a_err
-        )
-
-    # Fallback: plain HTTP + regex HTML stripping
+    # Plain HTTP + regex HTML stripping
     client = _get_client()
     try:
         r = await client.get(
@@ -1283,18 +1242,3 @@ def _extract_title(html: str, content_type: str) -> str:
         return ""
     m = _re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
     return _re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
-
-
-def _extract_title_from_url(url: str) -> str:
-    from urllib.parse import urlparse
-
-    parsed = urlparse(url)
-    host = parsed.hostname or ""
-    return (
-        host.replace("www.", "")
-        .replace(".com", "")
-        .replace(".org", "")
-        .replace(".io", "")
-        .replace(".net", "")
-        .title()
-    )

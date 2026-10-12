@@ -190,11 +190,22 @@ import pytest as _pytest
 
 @_pytest.fixture(autouse=True)
 def _authorize_registration(tmp_path, monkeypatch):
+    """Isolated TEST authorization for build_manifest's logic tests.
+
+    Ephemeral ed25519 key + temp trust root. This is NOT a production trust
+    root and cannot authorise real acquisition/admission/execution. The
+    fixture plays the OWNER role: it lazily signs whatever union-report digest
+    the guard demands (the owner signs the population manifest it approves);
+    every check - signature, scope, dates, binding equality, repository
+    revision - is the REAL verifier's.
+    """
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from qwen_train import f2_authorization as _A
+    from tests.f2_authz_testkit import TEST_REPO_REVISION, apply_repo_identity
 
+    apply_repo_identity(monkeypatch)
     priv = Ed25519PrivateKey.generate()
     pub = _b64.b64encode(
         priv.public_key().public_bytes(
@@ -203,21 +214,39 @@ def _authorize_registration(tmp_path, monkeypatch):
     ).decode()
     root = tmp_path / "trust_root.json"
     root.write_text(_json.dumps({"signers": {"owner": pub}}), "utf-8")
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", _A.trust_root_digest(root))
     now = _dt.datetime.now(_dt.timezone.utc)
-    rec = {
+    template = {
         "id": "TEST-REG", "schema": _A.SCHEMA, "stage": "POP-001",
         "operations": ["register"], "approver": "owner",
         "not_before": (now - _dt.timedelta(minutes=1)).isoformat(),
         "not_after": (now + _dt.timedelta(days=1)).isoformat(),
         "protocol_digest": "d",
+        "repository_revision": TEST_REPO_REVISION,
     }
-    sig = priv.sign(_A.canonical_bytes(rec))
     recp = tmp_path / "auth.json"
+
+    def _sign_then_verify(record_path, **kw):
+        binding = dict(kw.get("binding") or {})
+        rec = dict(template)
+        rec.update(binding)
+        sig = priv.sign(_A.canonical_bytes(rec))
+        Path(str(record_path)).write_text(_json.dumps({
+            "record": rec,
+            "signature": {"alg": "ed25519", "key_id": "owner", "signer": "owner",
+                          "sig": _b64.b64encode(sig).decode()},
+        }), "utf-8")
+        return real_verify(record_path, **kw)
+
+    real_verify = _A.verify_authorization
+    # Seed the env record (some tests inspect it), then route every
+    # verification through the signing oracle.
     recp.write_text(_json.dumps({
-        "record": rec,
+        "record": template,
         "signature": {"alg": "ed25519", "key_id": "owner", "signer": "owner",
-                      "sig": _b64.b64encode(sig).decode()},
+                      "sig": _b64.b64encode(priv.sign(_A.canonical_bytes(template))).decode()},
     }), "utf-8")
+    monkeypatch.setattr(_A, "verify_authorization", _sign_then_verify)
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
     monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(recp))
     yield

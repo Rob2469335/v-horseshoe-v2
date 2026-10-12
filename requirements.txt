@@ -42,6 +42,7 @@ mcp>=1.28.1,<2
 mdurl==0.1.2
 multidict==6.9.1
 numpy==2.5.0
+networkx>=3.0
 openai==2.30.0
 packaging==26.2
 pluggy==1.6.0
@@ -82,7 +83,6 @@ typer==0.26.8
 typing-inspection==0.4.2
 typing_extensions==4.16.0
 urllib3==2.8.0
-crawl4ai>=0.9.0
 uvicorn>=0.52.1
 yarl==1.24.2
 zipp==4.1.0

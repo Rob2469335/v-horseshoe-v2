@@ -22,6 +22,12 @@ Contract guarantees enforced here:
     cwd, or editable-install state.
   - Fail-closed: missing/corrupt manifest, invalid X/C0, non-zero child exit,
     and invalid receipt all raise and never fall back to LIVE.
+  - An EXECUTING arm is bound to a signed authorization record (strict
+    stage/operation/identity binding), durably consumed ONCE per grant
+    immediately before the child spawn (one grant authorizes exactly one
+    execution), and the child plus the lowest adapter boundary independently
+    re-verify the same binding and
+    consumption (f2_authorization / f2_authz_ledger).
   - Delivery uses the authoritative ``get_delivery_artifact()`` inside the child
     worker; this module does not call ``render_active_lessons`` (that is the
     worker/gated runtime path).
@@ -163,7 +169,7 @@ def run_f2_arm(
     system_prompt: str = "",
     timeout_s: int = 60,
     execute: bool = False,
-    stage: str = "CONF-001",
+    stage: str | None = None,
     operation: str | None = None,
     task_prompt: str = "",
     instance_id: str = "",
@@ -191,14 +197,35 @@ def run_f2_arm(
     if arm not in ("T", "X", "C0"):
         raise ValueError(f"invalid arm: {arm!r}")
 
+    verified_auth = None
+    authz_entry = None
     if execute:
         from qwen_train import f2_authorization as _auth
 
+        # NO silent default stage/operation: an executing arm must name its
+        # authorized stage explicitly. An unknown or absent stage is a
+        # fail-closed error, never substituted with CONF-001.
+        if not stage:
+            raise _auth.AuthorizationError(
+                "execute=True requires an explicit authorization stage "
+                "(POP-001/EXPL-001/CONF-001); refusing to guess - fail-closed"
+            )
         operation = operation or _auth.EXECUTION_STAGE_OPERATIONS.get(stage, "")
         _auth.validate_execution_stage_operation(stage, operation)
+        # EARLY verification (signature, scope, dates, binding) so a
+        # mismatched or missing binding is rejected before readiness, render,
+        # freeze or spawn work begins. The durable single-use CONSUMPTION
+        # happens later (right before the child spawn) via verify_and_consume,
+        # which repeats the full verification, so a readiness failure never
+        # burns the grant and the consume point is TOCTOU-free.
         _auth.require_authorized(
             stage=stage,
             operation=operation,
+            binding={
+                "experiment_id": experiment_id,
+                "protocol_version": protocol_version,
+                "arm": arm,
+            },
         )
         # Fail closed BEFORE any freeze/spawn work if the workspace is not
         # explicitly declared. No fallback to ``repo_root`` (the code root is a
@@ -276,6 +303,29 @@ def run_f2_arm(
     ro = rollout_id or uuid.uuid4().hex
     traj = trajectory_run_id or uuid.uuid4().hex
 
+    if execute:
+        # DURABLE SINGLE-USE CONSUMPTION (fail-closed, immediately before the
+        # child spawn): the full verification is repeated here against the
+        # FINAL execution binding (including the now-generated rollout id) and
+        # the grant is atomically consumed in the durable ledger. A second
+        # attempt with the same record+binding - concurrent or later, from any
+        # process - is denied. The receipt (consumption id + digests) travels
+        # to the child so the worker and the lowest adapter boundary can
+        # independently corroborate the SAME consumption instead of trusting
+        # the parent's word.
+        from qwen_train import f2_authorization as _auth
+
+        verified_auth, authz_entry = _auth.verify_and_consume(
+            stage=stage,
+            operation=operation,
+            binding={
+                "experiment_id": experiment_id,
+                "protocol_version": protocol_version,
+                "arm": arm,
+                "rollout_id": ro,
+            },
+        )
+
     # -- 2b. persist the readiness verdict alongside the arm manifest -------
     # Co-located provenance: the canonical TaskReadiness declaration + the
     # canonical ReadinessVerdict, bound to this arm + rollout. This is not a
@@ -304,6 +354,21 @@ def run_f2_arm(
         # mismatch between the two is a fail-closed error rather than a silent
         # divergence.
         env["SWARM_WORKSPACE_ROOT"] = str(resolved_workspace_root)
+        # Immutable execution binding + consumption receipt for the child.
+        # The worker and the adapter re-derive and re-check ALL of this from
+        # the record file, the ledger, git, and the verified manifest; the env
+        # values are cross-checked inputs, never trusted on their own.
+        env["SWARM_F2_AUTHZ_STAGE"] = stage
+        env["SWARM_F2_AUTHZ_OPERATION"] = operation
+        env["SWARM_F2_AUTHZ_BINDING"] = json.dumps(dict(verified_auth.binding))
+        env["SWARM_F2_AUTHZ_BINDING_DIGEST"] = verified_auth.binding_digest
+        env["SWARM_F2_AUTHZ_RECORD_DIGEST"] = verified_auth.digest
+        env["SWARM_F2_AUTHZ_CONSUMPTION_ID"] = str(
+            authz_entry.get("consumption_id") or ""
+        )
+        env["SWARM_F2_AUTHORIZATION_RECORD"] = os.environ.get(
+            "F2_AUTHORIZATION_RECORD", ""
+        )
 
     cmd = [sys.executable, "-u", str(worker_script), "--manifest", str(manifest_path), "--arm", arm]
     if system_prompt:
