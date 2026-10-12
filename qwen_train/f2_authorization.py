@@ -74,6 +74,7 @@ BINDING_FIELDS = (
     "protocol_digest",
     "population_digest",
     "population_manifest_digest",
+    "acquired_inputs_digest",
     "repository_revision",
     "experiment_id",
     "protocol_version",
@@ -92,6 +93,11 @@ BINDING_WITH_STAGE = tuple(BINDING_FIELDS) + ("stage", "operation")
 #:     (caller-supplied values are compared, never trusted);
 #:   * ``population_manifest_digest`` - recomputed by the protected entry point
 #:     from the exact artifact bytes it is about to consume;
+#:   * ``acquired_inputs_digest`` - recomputed by the registration entry point
+#:     as the canonical digest of the COMPLETE acquired input set (each file
+#:     verified against its producer-written provenance, all read exactly
+#:     once), so the owner's signature anchors every consumed input, not just
+#:     the union report;
 #:   * ``experiment_id`` / ``protocol_version`` / ``arm`` - taken at the
 #:     lowest boundary from the independently VERIFIED frozen arm manifest
 #:     (the orchestrator may only cross-check values that later must equal
@@ -102,7 +108,7 @@ BINDING_WITH_STAGE = tuple(BINDING_FIELDS) + ("stage", "operation")
 OPERATION_REQUIRED_BINDINGS: dict[tuple[str, str], frozenset[str]] = {
     ("POP-001", "acquire"): frozenset({"repository_revision"}),
     ("POP-001", "register"): frozenset(
-        {"repository_revision", "population_manifest_digest"}
+        {"repository_revision", "population_manifest_digest", "acquired_inputs_digest"}
     ),
     ("EXPL-001", "exploratory_run"): frozenset(
         {"repository_revision", "experiment_id", "protocol_version", "arm"}
@@ -274,12 +280,25 @@ def _decode_ed25519_public(kid: str, value: Any) -> tuple[bytes, int | None]:
 
 def load_trust_root(
     path: Path | None = None,
+    *,
+    require_pin: bool = True,
 ) -> tuple[Mapping[str, str], frozenset[str], Mapping[str, int], frozenset[str]]:
     """Return ``(signers, revoked_key_ids, key_epochs, revoked_record_ids)``.
 
     Absent root => deny. The trust root is the OWNER-controlled trust
     configuration file; its revocation lists are the authoritative revocation
     source in this design (there is no external revocation service).
+
+    PIN POLICY (fail closed): ``require_pin=True`` (every protected
+    verification path) REQUIRES ``F2_AUTHORIZATION_TRUST_ROOT_SHA256`` to be
+    set and to equal the SHA-256 of the loaded root file. A missing pin is a
+    denial, not a pass: a missing/unset pin can no longer silently disable
+    integrity checking. The pin is process-controlled configuration - it
+    defeats accidental root substitution and forces any redirect of the root
+    file to also falsify the pin explicitly; it is NOT independent custody
+    (see ``describe_trust_root``). ``require_pin=False`` exists ONLY for the
+    owner-facing fingerprinting helper, which performs no authorization and
+    may be used to establish the pin in the first place.
 
     * ``signers`` maps ``key_id -> base64(ed25519 raw public key)`` (kept as the
       historical string form so existing callers keep working).
@@ -329,15 +348,32 @@ def load_trust_root(
         signers[kid] = _b64.b64encode(raw).decode("ascii")
         if epoch is not None:
             epochs[kid] = epoch
-    # Optional environment digest pin (process-controlled consistency check).
+    # Digest pin. REQUIRED on every protected verification path: a missing
+    # pin denies; a wrong pin denies. The pin env is process-controlled (see
+    # the pin policy above) - it cannot turn a signature/revocation/binding
+    # failure into success, only attest which root file was intended.
     pinned = os.environ.get(TRUST_ROOT_DIGEST_ENV, "").strip()
-    if pinned:
-        actual = hashlib.sha256(p.read_bytes()).hexdigest()
+    actual = hashlib.sha256(p.read_bytes()).hexdigest()
+    if require_pin:
+        if not pinned:
+            raise AuthorizationError(
+                f"trust root digest pin required but not set "
+                f"({TRUST_ROOT_DIGEST_ENV}); protected verification is "
+                "fail-closed: denied. Establish the pin out-of-band with "
+                "describe_trust_root() and the owner's authenticated channel."
+            )
         if actual.lower() != pinned.lower():
             raise AuthorizationError(
                 f"trust root digest mismatch (pinned {pinned[:12]}…, actual "
                 f"{actual[:12]}…) - fail-closed"
             )
+    elif pinned and actual.lower() != pinned.lower():
+        # Even the fingerprinting helper refuses a root that contradicts an
+        # EXPLICITLY set pin (a wrong pin must never read as success).
+        raise AuthorizationError(
+            f"trust root digest mismatch (pinned {pinned[:12]}…, actual "
+            f"{actual[:12]}…) - fail-closed"
+        )
     return signers, frozenset(revoked_raw), epochs, frozenset(revoked_records_raw)
 
 
@@ -346,10 +382,15 @@ def describe_trust_root(path: Path | None = None) -> Mapping[str, Any]:
 
     Returns only public material (key ids, epochs, revocation lists, file
     digest) so the owner can compare fingerprints through a channel
-    independent of this process. It never returns private key material (a
-    trust root holds none).
+    independent of this process and ESTABLISH the digest pin. It never
+    returns private key material (a trust root holds none). This helper
+    performs no authorization; it is the one caller allowed to load a root
+    without a pin (``require_pin=False``) - and it still refuses a root that
+    contradicts an explicitly set pin.
     """
-    signers, revoked, epochs, revoked_records = load_trust_root(path)
+    signers, revoked, epochs, revoked_records = load_trust_root(
+        path, require_pin=False
+    )
     return {
         "path": str(_trust_root_path(path)),
         "digest_sha256": trust_root_digest(path),

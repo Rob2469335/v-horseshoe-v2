@@ -214,6 +214,7 @@ def _authorize_registration(tmp_path, monkeypatch):
     ).decode()
     root = tmp_path / "trust_root.json"
     root.write_text(_json.dumps({"signers": {"owner": pub}}), "utf-8")
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", _A.trust_root_digest(root))
     now = _dt.datetime.now(_dt.timezone.utc)
     template = {
         "id": "TEST-REG", "schema": _A.SCHEMA, "stage": "POP-001",

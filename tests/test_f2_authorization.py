@@ -29,9 +29,21 @@ def _now():
 
 @pytest.fixture(autouse=True)
 def _pinned_repo_identity(monkeypatch):
-    """All tests in this module pin repository_identity; the REAL git
-    behaviour is covered in test_f2_authz_binding_and_replay.py."""
+    """Pin repository_identity AND act as the operator pinning each root under
+    test (the trust-root pin is REQUIRED on protected paths; the dedicated
+    pin-denial tests live in test_f2_authz_binding_and_replay.py, which does
+    NOT auto-pin). The REAL git semantics are covered there too."""
     apply_repo_identity(monkeypatch)
+    real_load = A.load_trust_root
+
+    def _auto_pin_load(path=None, *, require_pin=True):
+        if require_pin:
+            monkeypatch.setenv(
+                "F2_AUTHORIZATION_TRUST_ROOT_SHA256", A.trust_root_digest(path)
+            )
+        return real_load(path, require_pin=require_pin)
+
+    monkeypatch.setattr(A, "load_trust_root", _auto_pin_load)
 
 
 def _write(tmp: Path, record: dict, priv, key_id="owner") -> Path:

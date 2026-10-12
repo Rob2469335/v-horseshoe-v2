@@ -31,6 +31,7 @@ from tests.f2_authz_testkit import (
     provision_parent_receipt,
     provision_record_env,
     signed_record,
+    use_test_ledger,
     write_record,
     write_trust_root,
 )
@@ -50,6 +51,11 @@ def real_subprocess(monkeypatch):
 def _expect_deny(fn):
     with pytest.raises(A.AuthorizationError):
         fn()
+
+
+def _pin_root(monkeypatch, root):
+    """Act as the operator pinning this root (the pin is REQUIRED)."""
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", A.trust_root_digest(root))
 
 
 # ===========================================================================
@@ -193,26 +199,30 @@ def test_crashed_creator_partial_write_fails_closed_not_unused(tmp_path):
 # 7-10. Revocation, record substitution, binding substitution, duplicate ids
 # ===========================================================================
 
-def test_revoked_key_in_trust_root_denies_even_when_still_listed(tmp_path):
+def test_revoked_key_in_trust_root_denies_even_when_still_listed(
+        tmp_path, monkeypatch):
     priv, pub = keypair()
     root = write_trust_root(tmp_path, {"owner": (priv, pub)}, revoked=("owner",))
+    _pin_root(monkeypatch, root)
     rec = signed_record()
     p = write_record(tmp_path, rec, priv)
     _expect_deny(lambda: A.verify_authorization(
         p, stage="POP-001", operation="acquire", trust_root=root))
 
 
-def test_record_revoked_flag_denies(tmp_path):
+def test_record_revoked_flag_denies(tmp_path, monkeypatch):
     priv, pub = keypair()
     root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    _pin_root(monkeypatch, root)
     p = write_record(tmp_path, signed_record(revoked=True), priv)
     _expect_deny(lambda: A.verify_authorization(
         p, stage="POP-001", operation="acquire", trust_root=root))
 
 
-def test_record_substitution_after_signing_denied(tmp_path):
+def test_record_substitution_after_signing_denied(tmp_path, monkeypatch):
     priv, pub = keypair()
     root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    _pin_root(monkeypatch, root)
     p = write_record(tmp_path, signed_record(), priv)
     doc = json.loads(p.read_text("utf-8"))
     doc["record"]["id"] = "IMPOSTOR"
@@ -278,6 +288,25 @@ def test_recovery_preserves_consumed_state_across_sibling_corruption(tmp_path):
             binding_digest=bd)
     _expect_deny(lambda: AuthorizationLedger(ledger_dir).consume(
         record_digest="1" * 64, binding=_binding(), binding_digest=bd,
+        stage="CONF-001", operation="confirmatory_run"))
+
+
+def test_ledger_env_cannot_redirect_the_production_ledger(tmp_path, monkeypatch):
+    """A stray/attacker-set ledger env var has NO effect: the production
+    resolution is the code constant, and a replay stays denied even when the
+    env points at an empty directory."""
+    prod_root = use_test_ledger(monkeypatch, tmp_path)  # the code constant
+    empty = tmp_path / "attacker_empty_ledger"
+    empty.mkdir()
+    monkeypatch.setenv("F2_AUTHZ_LEDGER_DIR", str(empty))  # must be inert
+    bd = execution_binding_digest(_binding())
+    AuthorizationLedger(None).consume(  # production resolution path
+        record_digest="7" * 64, binding=_binding(), binding_digest=bd,
+        stage="CONF-001", operation="confirmatory_run")
+    assert list(prod_root.glob("*.json"))  # landed in the CODE-CONSTANT root
+    assert not list(empty.glob("*.json"))  # NOT in the env-selected dir
+    _expect_deny(lambda: AuthorizationLedger(None).consume(
+        record_digest="7" * 64, binding=_binding(), binding_digest=bd,
         stage="CONF-001", operation="confirmatory_run"))
 
 
@@ -472,6 +501,7 @@ def test_dirty_tree_denies_protected_operation_with_real_git(tmp_path, monkeypat
     head = _init_repo(repo)
     priv, pub = keypair()
     root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    _pin_root(monkeypatch, root)
     rec = signed_record(repository_revision=head)
     p = write_record(tmp_path, rec, priv)
     # clean tree: passes (identity derived from the REAL tmp repo)
@@ -517,10 +547,57 @@ def test_trust_root_digest_pin_match_allows(tmp_path, monkeypatch):
     assert "owner" in signers and not revoked and not epochs and not revoked_records
 
 
+def test_missing_pin_denies_load_trust_root(tmp_path):
+    """Fail closed: an UNSET pin can no longer silently disable integrity
+    checking - protected loading requires the pin."""
+    priv, pub = keypair()
+    root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    with pytest.raises(A.AuthorizationError, match="pin required"):
+        A.load_trust_root(root)
+
+
+def test_missing_pin_denies_protected_verification(tmp_path, monkeypatch):
+    apply_repo_identity(monkeypatch)
+    priv, pub = keypair()
+    root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    p = write_record(tmp_path, signed_record(), priv)
+    monkeypatch.delenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", raising=False)
+    with pytest.raises(A.AuthorizationError, match="pin required"):
+        A.verify_authorization(
+            p, stage="POP-001", operation="acquire", trust_root=root)
+
+
+def test_pin_present_but_signature_invalid_still_denies(tmp_path, monkeypatch):
+    """An environment pin cannot turn a production verification failure into
+    success: the pin only attests WHICH root was loaded."""
+    apply_repo_identity(monkeypatch)
+    priv, pub = keypair()
+    other_priv, _ = keypair()
+    root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    _pin_root(monkeypatch, root)
+    rec = signed_record()
+    rec["approver"] = "MALLORY"  # breaks the approver/signer identity check
+    p = write_record(tmp_path, rec, other_priv)  # signed by the WRONG key
+    _expect_deny(lambda: A.verify_authorization(
+        p, stage="POP-001", operation="acquire", trust_root=root))
+
+
+def test_describe_trust_root_bootstraps_without_pin_but_refutes_wrong_pin(
+        tmp_path, monkeypatch):
+    priv, pub = keypair()
+    root = write_trust_root(tmp_path, {"owner": (priv, pub)})
+    monkeypatch.delenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", raising=False)
+    assert A.describe_trust_root(root)["signer_key_ids"] == ["owner"]
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", "0" * 64)
+    with pytest.raises(A.AuthorizationError, match="mismatch"):
+        A.describe_trust_root(root)
+
+
 def test_key_epoch_mismatch_denies_correct_epoch_allows(tmp_path, monkeypatch):
     apply_repo_identity(monkeypatch)
     priv, pub = keypair()
     root = write_trust_root(tmp_path, {"owner": (priv, pub)}, epochs={"owner": 2})
+    _pin_root(monkeypatch, root)
     p_wrong = write_record(tmp_path, signed_record(), priv, key_epoch=1,
                            name="auth_wrong_epoch.json")
     _expect_deny(lambda: A.verify_authorization(
@@ -542,6 +619,7 @@ def test_trust_root_replacement_with_new_key_rejects_old_records(tmp_path, monke
     old_priv, old_pub = keypair()
     old_root = write_trust_root(tmp_path, {"owner": (old_priv, old_pub)},
                                 name="root_old.json")
+    _pin_root(monkeypatch, old_root)
     rec = signed_record()
     p = write_record(tmp_path, rec, old_priv)
     A.verify_authorization(p, stage="POP-001", operation="acquire",
@@ -550,6 +628,7 @@ def test_trust_root_replacement_with_new_key_rejects_old_records(tmp_path, monke
     new_priv, new_pub = keypair()
     new_root = write_trust_root(tmp_path, {"owner-2": (new_priv, new_pub)},
                                 name="root_new.json")
+    _pin_root(monkeypatch, new_root)
     _expect_deny(lambda: A.verify_authorization(
         p, stage="POP-001", operation="acquire", trust_root=new_root))
 
@@ -579,6 +658,7 @@ def test_trust_root_revoked_record_ids_denies_grant(tmp_path, monkeypatch):
     root_doc = json.loads(root.read_text("utf-8"))
     root_doc["revoked_record_ids"] = ["AUTH-TEST-1"]
     root.write_text(json.dumps(root_doc), "utf-8")
+    _pin_root(monkeypatch, root)
     p = write_record(tmp_path, signed_record(), priv)
     _expect_deny(lambda: A.verify_authorization(
         p, stage="POP-001", operation="acquire", trust_root=root))
@@ -586,6 +666,7 @@ def test_trust_root_revoked_record_ids_denies_grant(tmp_path, monkeypatch):
     # state in the owner-controlled trust root, not a property of the record).
     root_doc["revoked_record_ids"] = []
     root.write_text(json.dumps(root_doc), "utf-8")
+    _pin_root(monkeypatch, root)
     got = A.verify_authorization(
         p, stage="POP-001", operation="acquire", trust_root=root)
     assert got["id"] == "AUTH-TEST-1"
@@ -600,6 +681,7 @@ def test_revoked_record_denied_even_after_resigning(tmp_path, monkeypatch):
     root_doc = json.loads(root.read_text("utf-8"))
     root_doc["revoked_record_ids"] = ["AUTH-TEST-1"]
     root.write_text(json.dumps(root_doc), "utf-8")
+    _pin_root(monkeypatch, root)
     # A re-signed copy of the same grant id (attacker-controlled reissue).
     p = write_record(tmp_path, signed_record(), priv, name="auth_re.json")
     _expect_deny(lambda: A.verify_authorization(
@@ -666,8 +748,6 @@ def test_readiness_failure_does_not_burn_the_consumption(tmp_path, monkeypatch):
     ws = tmp_path / "task-ws"
     ws.mkdir()
     monkeypatch.setenv("SWARM_WORKSPACE_ROOT", str(ws))
-    ledger_dir = tmp_path / "fresh-ledger"
-    monkeypatch.setenv("F2_AUTHZ_LEDGER_DIR", str(ledger_dir))
     provision_record_env(
         tmp_path, monkeypatch, stage="CONF-001", ops=("confirmatory_run",),
         binding={"experiment_id": "experiment_j", "protocol_version": "f2_v1",
@@ -682,7 +762,7 @@ def test_readiness_failure_does_not_burn_the_consumption(tmp_path, monkeypatch):
             readiness=None, rollout_id="roll-fresh")
     # Readiness failed BEFORE the consume point: the fresh ledger has no
     # consumption, so the grant was not burned by a readiness failure.
-    assert not list(ledger_dir.glob("*.json"))
+    assert not list((tmp_path / "ledger").glob("*.json"))
 
 
 def _last_json_line(text: str) -> dict:
@@ -800,18 +880,27 @@ def test_no_production_trust_root_is_provisioned_by_tests():
 
 
 def test_testkit_never_references_production_paths():
+    """The testkit may only *monkeypatch* the ledger constant (sanctioned DI);
+    it must never reference the production trust root or treat the ledger
+    constant as a path to write to directly."""
     kit = (Path(__file__).parent / "f2_authz_testkit.py").read_text("utf-8")
-    assert "DEFAULT_LEDGER_ROOT" not in kit
     assert "DEFAULT_TRUST_ROOT" not in kit
+    # every use of the ledger constant is an attribute patch target, not a Path
+    for line in kit.splitlines():
+        if "DEFAULT_LEDGER_ROOT" in line:
+            assert "setattr" in line
 
 
 def test_protected_execution_modules_never_reference_test_ledger_defaults():
-    """Production boundaries must take the ledger from env/constructor only;
-    no production module may hardcode a test directory."""
+    """Production boundaries must resolve the ledger from the CODE CONSTANT
+    (or constructor DI) only; no production module may read a ledger
+    environment variable that could silently redirect consumption state."""
     for mod in ("f2_arm_orchestrator.py", "f2_arm_worker.py",
                 "f2_execution_adapter.py", "f2_registration.py"):
         src = (_REPO_ROOT / "qwen_train" / mod).read_text("utf-8")
-        assert "F2_AUTHZ_LEDGER_DIR" not in src or "AuthorizationLedger(None)" in src
+        assert "F2_AUTHZ_LEDGER_DIR" not in src
+    ledger_src = (_REPO_ROOT / "qwen_train" / "f2_authz_ledger.py").read_text("utf-8")
+    assert 'os.environ.get("F2_AUTHZ_LEDGER_DIR"' not in ledger_src
 
 
 def test_verify_and_consume_enforces_one_grant_one_execution(tmp_path, monkeypatch):

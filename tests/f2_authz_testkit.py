@@ -130,6 +130,20 @@ def apply_repo_identity(monkeypatch, revision: str = TEST_REPO_REVISION, dirty: 
     )
 
 
+def use_test_ledger(monkeypatch, tmp: Path) -> Path:
+    """Redirect the production ledger constant to a temporary directory.
+
+    The production ledger path is a CODE CONSTANT (not env-selectable, by
+    design - see f2_authz_ledger); tests isolate via this monkeypatch or via
+    explicit constructor/parameter injection.
+    """
+    from qwen_train import f2_authz_ledger as L
+
+    root = Path(tmp) / "ledger"
+    monkeypatch.setattr(L, "DEFAULT_LEDGER_ROOT", root)
+    return root
+
+
 def provision_record_env(
     tmp: Path,
     monkeypatch,
@@ -147,9 +161,12 @@ def provision_record_env(
     rec.update(dict(binding or {}))
     path = write_record(tmp, rec, priv)
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
+    # The pin is REQUIRED for protected verification (fail-closed); the test
+    # acts as the operator pinning the root it just provisioned.
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", A.trust_root_digest(root))
     monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(path))
     if ledger:
-        monkeypatch.setenv("F2_AUTHZ_LEDGER_DIR", str(tmp / "ledger"))
+        use_test_ledger(monkeypatch, tmp)
     return {
         "priv": priv,
         "pub": pub,
@@ -259,6 +276,7 @@ __all__ = [
     "provision_parent_receipt",
     "provision_record_env",
     "signed_record",
+    "use_test_ledger",
     "write_record",
     "write_trust_root",
 ]

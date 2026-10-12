@@ -38,9 +38,12 @@ THREAT-MODEL BOUNDARY (read before relying on this module):
   fail CLOSED: protected execution is denied rather than proceeding without a
   verifiable consumption.
 
-Test isolation: tests MUST point ``F2_AUTHZ_LEDGER_DIR`` (or the ``root``
-argument) at a temporary directory.  The production default lives under the
-gitignored ``data/`` tree and must never be written by a test run.
+Test isolation: tests MUST inject a temporary directory - either
+``AuthorizationLedger(root=...)`` / ``verify_and_consume(ledger_root=...)`` or
+by monkeypatching ``DEFAULT_LEDGER_ROOT`` (see ``tests/f2_authz_testkit.py::
+use_test_ledger``). The production default is a code constant under the
+gitignored ``data/`` tree and must never be written by a test run; it is not
+selectable by any environment variable.
 """
 
 from __future__ import annotations
@@ -56,12 +59,15 @@ from qwen_train.f2_authorization import AuthorizationError, canonical_bytes
 
 SCHEMA = "f2-authz-consumption/v1"
 
-#: Environment variable overriding the ledger directory. Process-controlled
-#: configuration, NOT independent custody (see module docstring).
-LEDGER_DIR_ENV = "F2_AUTHZ_LEDGER_DIR"
-
-#: Production default. ``data/`` is gitignored runtime state; a checkout has no
-#: ledger until a real (owner-authorized) consumption happens.
+#: Production ledger location: a CODE CONSTANT under the gitignored ``data/``
+#: tree. It is deliberately NOT environment-selectable: a process that can
+#: set ``F2_AUTHZ_LEDGER_DIR``-style variables could otherwise redirect a
+#: protected operation to an empty ledger and make a consumed grant appear
+#: unused. Tests use the constructor/parameter injection
+#: (``AuthorizationLedger(root=...)`` / ``verify_and_consume(ledger_root=...)``)
+#: or monkeypatch this constant - never a production environment variable.
+#: A checkout has no ledger until a real (owner-authorized) consumption
+#: happens.
 DEFAULT_LEDGER_ROOT = Path(__file__).resolve().parents[1] / "data" / "f2_authz_ledger"
 
 
@@ -70,9 +76,12 @@ class LedgerError(AuthorizationError):
 
 
 def ledger_root(explicit: Path | str | None = None) -> Path:
+    """Resolve the ledger directory. ``explicit`` is dependency injection
+    (constructor/tests); the production default is the code constant above,
+    never an environment variable."""
     if explicit is not None:
         return Path(explicit)
-    return Path(os.environ.get(LEDGER_DIR_ENV) or DEFAULT_LEDGER_ROOT)
+    return Path(DEFAULT_LEDGER_ROOT)
 
 
 def consumption_key(record_digest: str) -> str:

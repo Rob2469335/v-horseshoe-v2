@@ -604,6 +604,7 @@ def _authorize_f2_tests(tmp_path, monkeypatch):
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode()
     root = tmp_path / "trust_root.json"
     root.write_text(_json.dumps({"signers": {"owner": pub}}), "utf-8")
+    monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", _A.trust_root_digest(root))
     now = _dt.datetime.now(_dt.timezone.utc)
     template = {"id": "TEST-CONF", "schema": _A.SCHEMA, "stage": "CONF-001",
                 "operations": ["confirmatory_run"], "approver": "owner",
@@ -630,5 +631,7 @@ def _authorize_f2_tests(tmp_path, monkeypatch):
     monkeypatch.setattr(_A, "verify_authorization", _sign_then_verify)
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(root))
     monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(rp))
-    monkeypatch.setenv("F2_AUTHZ_LEDGER_DIR", str(tmp_path / "ledger"))
+    from tests.f2_authz_testkit import use_test_ledger
+
+    use_test_ledger(monkeypatch, tmp_path)
     yield
