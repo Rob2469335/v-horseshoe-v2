@@ -22,6 +22,7 @@ from qwen_train.f2_s8_compose import (
     GuestEvidence,
     S8ComposeError,
     assemble_governed_bundle,
+    guest_evidence_from_junit,
     load_governance_from_env,
     produce_governed_task,
 )
@@ -256,3 +257,35 @@ class TestEnvironmentLoader:
         inputs = load_governance_from_env(env)
         assert inputs.evaluator.implementation_digest == evaluator.implementation_digest()
         assert inputs.store.root == tmp_path / "store"
+
+
+class TestJunitToAdmission:
+    """The full production chain: raw JUnit bytes -> evaluator -> bundle -> admit.
+
+    This is the shape the disk channel returns: the guest hands back the retained
+    JUnit, not a verdict. The host runs the authoritative evaluator to produce the
+    report, then the governed composition verifies and admits. Only the guest
+    execution itself is simulated here.
+    """
+
+    def test_raw_junit_bytes_admit_end_to_end(self, tmp_path):
+        spec = _spec()
+
+        def execute(_spec, side):
+            xml = JUNIT_BASE if side == "base" else JUNIT_GOLD
+            return guest_evidence_from_junit(
+                spec=spec, side=side, junit_bytes=xml.encode("utf-8"),
+                run_log=f"{side} log".encode("utf-8"),
+                started_at="t0", finished_at="t1",
+            )
+
+        res = _run(tmp_path, spec, _inputs(tmp_path), execute)
+        assert res.state == "admitted"
+        assert res.record["admitted"] is True
+
+    def test_empty_junit_is_refused_not_treated_as_a_verdict(self, tmp_path):
+        spec = _spec()
+        with pytest.raises(S8ComposeError, match="empty"):
+            guest_evidence_from_junit(
+                spec=spec, side="base", junit_bytes=b"", run_log=b"x",
+            )

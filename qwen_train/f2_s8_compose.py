@@ -57,6 +57,7 @@ __all__ = [
     "S8_GOVERNANCE_ENV",
     "load_governance_from_env",
     "retain_artifact",
+    "guest_evidence_from_junit",
     "assemble_governed_bundle",
     "build_governed_verifiers",
     "produce_governed_task",
@@ -208,6 +209,55 @@ class GuestEvidence:
     started_at: str
     finished_at: str
     failure_class: str = ""
+
+
+def guest_evidence_from_junit(
+    *,
+    spec: TaskSpec,
+    side: str,
+    junit_bytes: bytes,
+    run_log: bytes,
+    started_at: str = "",
+    finished_at: str = "",
+    work_dir: Path | str | None = None,
+) -> GuestEvidence:
+    """Run the authoritative evaluator over retained guest JUnit bytes.
+
+    This is the host-side step that turns the raw JUnit artifact returned over
+    the disk channel into the evaluator report the governed composition requires.
+    It refuses to invent a result: :func:`qwen_train.f2_evaluator.produce_report`
+    derives the verdict from the JUnit and the declared test contract, and any
+    unparseable evidence raises rather than becoming a pass.
+    """
+    import tempfile
+
+    if side not in ("base", "gold"):
+        raise S8ComposeError(f"unknown side {side!r}")
+    if not junit_bytes:
+        raise S8ComposeError(f"{side} JUnit evidence is empty; cannot evaluate")
+    with tempfile.TemporaryDirectory(dir=work_dir) as td:
+        junit_path = Path(td) / f"{spec.task_id}.{side}.junit.xml"
+        junit_path.write_bytes(junit_bytes)
+        out_path = Path(td) / f"{spec.task_id}.{side}.report.json"
+        try:
+            evaluator.produce_report(
+                junit_path=junit_path,
+                fail_to_pass=list(spec.payload["fail_to_pass"]),
+                pass_to_pass=list(spec.payload["pass_to_pass"]),
+                out_path=out_path,
+                instance_id=spec.task_id,
+                repository=str(spec.payload["repo"]),
+                base_commit=str(spec.payload["base_commit"]),
+                execution_state_identity=side,
+            )
+        except evaluator.EvaluatorError as exc:
+            raise S8ComposeError(
+                f"{side} JUnit evidence could not be evaluated: {exc}"
+            ) from exc
+        report = out_path.read_bytes()
+    return GuestEvidence(
+        report=report, run_log=run_log, started_at=started_at, finished_at=finished_at
+    )
 
 
 def retain_artifact(store_root: Path | str, name: str, data: bytes) -> str:
