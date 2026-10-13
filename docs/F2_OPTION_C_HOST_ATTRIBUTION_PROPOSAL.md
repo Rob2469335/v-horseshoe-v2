@@ -131,23 +131,32 @@ result. If nothing qualifies, the dimension stays `unproven` and Q9 stays `NOT E
 Files: `qwen_train/f2_evidence_ingestion.py`, `qwen_train/f2_host_attribution.py`,
 `tests/test_f2_evidence_ingestion.py`, `tests/test_f2_host_attribution.py`.
 
-## Owner decisions — status OPEN (no authorization implied)
+## Owner decisions — recorded direction A3 + B2 (status OPEN; no authorization implied)
 
-Two decisions are required before Option C could ever be activated; both are currently
-unauthorized (`GOVERNANCE GAP`). Full package (outside the repo):
-`C:\Users\rober\F2_EVIDENCE\Q9_OPTION_C_OWNER_DECISION_RECORD.md`.
+The working direction is **A3** (two-source correlation → `CORRELATED_CANDIDATE` only) and
+**B2** (owner-controlled HMAC-SHA-256). It is a recorded design direction, **not**
+authorization. Package (all under `C:\Users\rober\F2_EVIDENCE\`):
+`Q9_OPTION_C_OWNER_DECISION_RECORD.md`, `Q9_OPTION_C_B2_HMAC_TRUST_DESIGN.md`,
+`Q9_OPTION_C_NEXT_STAGE_AUTHORIZATION_CHECKLIST.md`.
 
-- **A — correlation rule (`option-c-correlation/1`).** Event 131 carries no 5-tuple, no
-  packet id, and no ACL-entry field; the flow source's reason is generic. Two-source
-  evidence can therefore support at most a `CORRELATED_CANDIDATE` by default; accepting
-  `ACCEPTED_ATTRIBUTION` requires an owner rule (named component/weight, a unique in-window
-  flow match, `AMBIGUOUS` otherwise) and is **correlation, not causation**. Owner judgment:
-  is that sufficient, or is an intrinsic ACL-entry identifier required?
-- **B — producer trust anchor.** Options: trusted parser over bytes only (integrity, not
-  authenticity); owner-controlled HMAC (authenticates the producer; needs key custody);
-  digital signature (authentication + non-repudiation; needs PKI). Recommended default:
-  owner-controlled HMAC with run-binding. Owner judgment: producer identity, key custody,
-  and whether non-repudiation is required. **No key is created here.**
+Four things are held distinct: **artifact integrity** (bytes match a digest) · **producer
+authenticity** (a trusted identity produced them — needs a key) · **temporal association**
+(same window/boundary) · **causal attribution** (this control caused this drop).
 
-Until both are authorized **and** the anchor is provisioned, this rule stays inactive and the
-frozen baseline remains the default. Q9 remains NOT ESTABLISHED.
+- **A3 (recorded).** Event 131 has no flow tuple and no intrinsic packet id, and a generic
+  flow-drop reason does not establish that the extended port ACL caused the drop; matching
+  timestamps, tuples, port names, or configured weights do **not** prove packet identity or
+  causation. Two-source evidence supports `CORRELATED_CANDIDATE` **only**, and candidate
+  status is **not** established Q9 attribution. Ambiguous, missing, unauthenticated,
+  mismatched, or unsupported evidence fails closed.
+- **B2 (recorded).** Owner-controlled HMAC-SHA-256 with explicit producer identity, byte-exact
+  canonical binding (artifact digest + experiment/arm/rollout/run ids), replay/duplicate
+  rejection, rotation/revocation/compromise handling, and fail-closed verification. B2
+  authenticates the **producer**, not its truthfulness or the science. **No key is created
+  here.**
+
+Gates **A–E** (correlation semantics · producer identity + trust policy · readiness-path
+implementation · bounded live validation · evidence review) are **all open** and independent;
+this document grants none. Until A and B are authorized and the anchor is provisioned, the
+rule stays inactive and the frozen baseline remains the default. **Q9 remains NOT
+ESTABLISHED.**
