@@ -56,7 +56,19 @@ class TestCategoriesAreNeverCollapsed:
         assert by["evidence.s8_base_gold"]["status"] != "present"
         assert by["evidence.active_lesson"]["status"] != "present"
         assert by["host.egress_enforcement"]["status"] == "not_enforced"
-        assert by["authz.population_acquisition"]["status"] == "not_authorized"
+        assert by["population.admission"]["status"] == "insufficient"
+
+    def test_population_acquisition_is_authorized_not_authz_blocked(self):
+        # F2-IMPL-AUTH-028/029/031 record population acquisition, so preflight must
+        # not claim it is unauthorized; admission stays blocked by missing S8
+        # evidence, so preflight must still be blocked (never READY from this).
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert "authz.population_acquisition" not in by
+        assert by["population.admission"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["population.admission"]["status"] != "present"
+        assert by["evidence.s8_base_gold"]["status"] == "absent"
+        assert rep["blocking_count"] > 0
 
     def test_implemented_findings_are_all_present(self):
         rep = pf.run_preflight()
@@ -370,7 +382,7 @@ class TestAttestationVerification:
         # blocking findings that cleared.
         assert by["evidence.s8_base_gold"]["category"] == pf.EXTERNAL_EVIDENCE
         assert by["evidence.active_lesson"]["category"] == pf.EXTERNAL_EVIDENCE
-        assert by["authz.population_acquisition"]["category"] == pf.AUTHORIZATION
+        assert by["population.admission"]["category"] == pf.EXTERNAL_EVIDENCE
         assert rep["blocking_count"] == base["blocking_count"] - 2
 
     def test_missing_enforcement_identity_does_not_verify(self, tmp_path):

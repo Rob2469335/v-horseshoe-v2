@@ -29,8 +29,9 @@ must never be collapsed:
     Real base/gold executions, or a genuine ACTIVE lesson, must be produced by
     running something. No amount of repository work substitutes for them.
 ``AUTHORIZATION REQUIRED``
-    An operator decision that has not been recorded, most notably population
-    acquisition, which ``F2-IMPL-AUTH-013`` explicitly does not authorize.
+    An operator decision that has not been recorded. (Population acquisition is
+    no longer in this class: ``F2-IMPL-AUTH-028/029/031`` record it, so the
+    population gate below is evidence-blocked, not authorization-blocked.)
 
 Nothing here fabricates. Every finding is either measured on this host, read from
 the repository, or explicitly reported as absent. No secret value is ever read or
@@ -392,11 +393,12 @@ def _evidence_findings(root: Path) -> list[Finding]:
                 "and X cannot be derived from it",
                 "perform the authorized clean-room learning event (requires Q9 "
                 "isolation, the receipt key, and an admitted population)"),
-        Finding(AUTHORIZATION, "authz.population_acquisition", "not_authorized",
-                "F2-IMPL-AUTH-013 explicitly does not authorize acquiring the "
-                "task population; no task may be admitted without it",
-                "record an explicit authorization, or accept that the admitted "
-                "population is zero"),
+        Finding(EXTERNAL_EVIDENCE, "population.admission", "insufficient",
+                "population acquisition IS authorized (F2-IMPL-AUTH-028/029/031); "
+                "0 tasks are ADMITTED because S8 base/gold execution evidence is "
+                "absent (see evidence.s8_base_gold)",
+                "produce S8 base/gold evidence for the metadata-eligible tasks so "
+                "they can be admitted"),
         Finding(NOT_EXECUTED, "run.q10_calibration", "not_executed",
                 "calibration (Q10) is implemented but was not executed; it is not "
                 "authorized in this repository state",
