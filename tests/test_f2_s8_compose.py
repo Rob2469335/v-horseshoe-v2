@@ -258,6 +258,41 @@ class TestEnvironmentLoader:
         assert inputs.evaluator.implementation_digest == evaluator.implementation_digest()
         assert inputs.store.root == tmp_path / "store"
 
+    def test_established_f2_variables_are_accepted_as_fallbacks(self, tmp_path):
+        # An operator who has provisioned the F2 governed-bundle variables need
+        # not duplicate them: the shared evaluator/store inputs resolve from the
+        # SWARM_F2_* names, while the S8-only inputs remain S8-specific.
+        env = {
+            "SWARM_F2_ARTIFACT_ROOT": str(tmp_path / "store"),
+            "SWARM_F2_ARTIFACT_RETENTION_DAYS": "30",
+            "SWARM_F2_EVALUATOR_ID": EVAL["evaluator_id"],
+            "SWARM_F2_EVALUATOR_VERSION": EVAL["version"],
+            "SWARM_F2_EVALUATOR_IMPL": str(Path(evaluator.__file__).resolve()),
+            "SWARM_F2_EVALUATOR_PROCEDURE": EVAL["procedure_id"],
+            "SWARM_S8_ENVIRONMENT_IDENTITY": "env-1",
+            "SWARM_S8_BASE_STATE_DIGEST": "a" * 64,
+            "SWARM_S8_GOLD_STATE_DIGEST": "b" * 64,
+        }
+        inputs = load_governance_from_env(env)
+        assert inputs.store.root == tmp_path / "store"
+        assert inputs.evaluator.evaluator_id == EVAL["evaluator_id"]
+
+    def test_s8_variables_win_over_f2_fallbacks(self, tmp_path):
+        env = {
+            "SWARM_S8_ARTIFACT_ROOT": str(tmp_path / "s8store"),
+            "SWARM_F2_ARTIFACT_ROOT": str(tmp_path / "f2store"),
+            "SWARM_S8_ARTIFACT_RETENTION_DAYS": "7",
+            "SWARM_S8_EVALUATOR_ID": EVAL["evaluator_id"],
+            "SWARM_S8_EVALUATOR_VERSION": EVAL["version"],
+            "SWARM_S8_EVALUATOR_IMPL": str(Path(evaluator.__file__).resolve()),
+            "SWARM_S8_EVALUATOR_PROCEDURE": EVAL["procedure_id"],
+            "SWARM_S8_ENVIRONMENT_IDENTITY": "env-1",
+            "SWARM_S8_BASE_STATE_DIGEST": "a" * 64,
+            "SWARM_S8_GOLD_STATE_DIGEST": "b" * 64,
+        }
+        inputs = load_governance_from_env(env)
+        assert inputs.store.root == tmp_path / "s8store"
+
 
 class TestJunitToAdmission:
     """The full production chain: raw JUnit bytes -> evaluator -> bundle -> admit.

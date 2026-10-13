@@ -55,6 +55,7 @@ __all__ = [
     "GovernanceInputs",
     "GuestEvidence",
     "S8_GOVERNANCE_ENV",
+    "S8_ENV_FALLBACKS",
     "load_governance_from_env",
     "retain_artifact",
     "guest_evidence_from_junit",
@@ -80,6 +81,31 @@ S8_GOVERNANCE_ENV: tuple[tuple[str, str], ...] = (
     ("SWARM_S8_BASE_STATE_DIGEST", "opaque digest of the base execution state"),
     ("SWARM_S8_GOLD_STATE_DIGEST", "opaque digest of the gold execution state"),
 )
+
+#: Shared governance inputs already provisioned for the F2 governed-bundle path
+#: (``f2_arm_worker._load_bundle_governance``).  The S8 base/gold stage uses the
+#: same authorized evaluator and trusted store, so an operator who has already
+#: provisioned the F2 variables need not duplicate them.  The S8-specific
+#: variables win when both are set; the environment identity and the opaque
+#: base/gold state digests have no F2 equivalent and remain S8-only.
+S8_ENV_FALLBACKS: dict[str, str] = {
+    "SWARM_S8_ARTIFACT_ROOT": "SWARM_F2_ARTIFACT_ROOT",
+    "SWARM_S8_ARTIFACT_RETENTION_DAYS": "SWARM_F2_ARTIFACT_RETENTION_DAYS",
+    "SWARM_S8_EVALUATOR_ID": "SWARM_F2_EVALUATOR_ID",
+    "SWARM_S8_EVALUATOR_VERSION": "SWARM_F2_EVALUATOR_VERSION",
+    "SWARM_S8_EVALUATOR_IMPL": "SWARM_F2_EVALUATOR_IMPL",
+    "SWARM_S8_EVALUATOR_PROCEDURE": "SWARM_F2_EVALUATOR_PROCEDURE",
+}
+
+
+def _resolve_env(source: Mapping[str, str], name: str) -> str:
+    """Resolve an S8 input, falling back to its established F2 variable name."""
+    value = str(source.get(name, "")).strip()
+    if value:
+        return value
+    fallback = S8_ENV_FALLBACKS.get(name)
+    return str(source.get(fallback, "")).strip() if fallback else ""
+
 
 
 class S8ComposeError(SessionError):
@@ -145,9 +171,10 @@ def load_governance_from_env(env: Mapping[str, str] | None = None) -> Governance
     that must be provided.  Nothing is invented or defaulted.
     """
     source = os.environ if env is None else env
+    resolved = {name: _resolve_env(source, name) for name, _ in S8_GOVERNANCE_ENV}
     missing = [
         f"{name} ({label})" for name, label in S8_GOVERNANCE_ENV
-        if not str(source.get(name, "")).strip()
+        if not resolved[name]
     ]
     if missing:
         raise S8ComposeError(
@@ -156,17 +183,17 @@ def load_governance_from_env(env: Mapping[str, str] | None = None) -> Governance
             "evaluator authorization; none is fabricated."
         )
 
-    root = Path(source["SWARM_S8_ARTIFACT_ROOT"])
+    root = Path(resolved["SWARM_S8_ARTIFACT_ROOT"])
     if not root.is_absolute():
         raise S8ComposeError("SWARM_S8_ARTIFACT_ROOT must be an absolute path")
     try:
-        retention_days = int(source["SWARM_S8_ARTIFACT_RETENTION_DAYS"])
+        retention_days = int(resolved["SWARM_S8_ARTIFACT_RETENTION_DAYS"])
     except ValueError as exc:
         raise S8ComposeError(
             "SWARM_S8_ARTIFACT_RETENTION_DAYS must be an integer"
         ) from exc
 
-    impl_path = Path(source["SWARM_S8_EVALUATOR_IMPL"])
+    impl_path = Path(resolved["SWARM_S8_EVALUATOR_IMPL"])
     if not impl_path.is_file():
         raise S8ComposeError(
             f"evaluator implementation artifact not found: {impl_path}"
@@ -174,10 +201,10 @@ def load_governance_from_env(env: Mapping[str, str] | None = None) -> Governance
     implementation_bytes = impl_path.read_bytes()
 
     auth = governance.EvaluatorAuthorization(
-        evaluator_id=source["SWARM_S8_EVALUATOR_ID"],
-        version=source["SWARM_S8_EVALUATOR_VERSION"],
+        evaluator_id=resolved["SWARM_S8_EVALUATOR_ID"],
+        version=resolved["SWARM_S8_EVALUATOR_VERSION"],
         implementation_digest=_sha256(implementation_bytes),
-        procedure_id=source["SWARM_S8_EVALUATOR_PROCEDURE"],
+        procedure_id=resolved["SWARM_S8_EVALUATOR_PROCEDURE"],
         protocol_version=evaluator.PROTOCOL_VERSION,
     )
     store = governance.TrustedArtifactStore(
@@ -187,9 +214,9 @@ def load_governance_from_env(env: Mapping[str, str] | None = None) -> Governance
         store=store,
         registry=governance.EvaluatorRegistry([auth]),
         evaluator=auth,
-        environment_identity=source["SWARM_S8_ENVIRONMENT_IDENTITY"],
-        base_state_digest=source["SWARM_S8_BASE_STATE_DIGEST"],
-        gold_state_digest=source["SWARM_S8_GOLD_STATE_DIGEST"],
+        environment_identity=resolved["SWARM_S8_ENVIRONMENT_IDENTITY"],
+        base_state_digest=resolved["SWARM_S8_BASE_STATE_DIGEST"],
+        gold_state_digest=resolved["SWARM_S8_GOLD_STATE_DIGEST"],
         implementation_name=impl_path.name,
         implementation_bytes=implementation_bytes,
     )
