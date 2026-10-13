@@ -253,3 +253,60 @@ def test_serialization_round_trip_and_digest_sensitivity():
     verdict = _option_c(att, [rec, _record(att, "https"), _record(att, "tcp")])
     assert isinstance(verdict.to_dict()["baseline"], dict)
     assert verdict.to_dict()["acceptance_version"] == ha.OPTION_C_ACCEPTANCE_VERSION
+
+
+@pytest.mark.parametrize("acceptance", ["", "option-c/2", "OPTION-C-1", "bogus", None])
+def test_unknown_acceptance_version_fails_closed(acceptance):
+    """Anything other than the explicit option-c/1 string stays on the baseline:
+    the records are ignored and no dimension is attributed."""
+    att = _att()
+    v = ha.apply_host_attribution(
+        att,
+        [_record(att, d) for d in ("http", "https", "tcp")],
+        acceptance=acceptance,
+        now=_now(att),
+    )
+    assert v.acceptance_version == ha.OPTION_C_BASELINE
+    assert v.attributed_dimensions == ()
+    assert v.satisfied is False
+
+
+def test_serialized_payload_cannot_activate_option_c():
+    """Activation is an explicit function argument, never a field. A serialized
+    attestation that smuggles an `acceptance` key or a `host_drop_attribution`
+    list is parsed with those keys ignored, and the default stays baseline."""
+    att = _att()
+    blob = att.to_dict()
+    blob["acceptance"] = ha.OPTION_C_ACCEPTANCE_VERSION
+    blob["host_drop_attribution"] = [_record(att, "http")]
+    v = ha.apply_host_attribution(
+        blob,
+        [_record(att, d) for d in ("http", "https", "tcp")],
+        now=_now(att),
+    )
+    assert v.acceptance_version == ha.OPTION_C_BASELINE
+    assert v.attributed_dimensions == ()
+    assert v.satisfied is False
+
+
+def test_provenance_is_shape_only_documented_trust_gap():
+    """KNOWN TRUST GAP (documented, not fixed here): the gate validates a record's
+    SHAPE, not its ORIGIN. No artifact bytes are read or parsed, so a caller can
+    fabricate every field -- including the artifact digest and the ACL entry --
+    and be accepted. This pins that behaviour so a future provenance fix is a
+    deliberate, separately-authorized change."""
+    att = _att()
+    fabricated = [
+        _record(
+            att,
+            d,
+            capture_artifact_sha256="de" * 32,
+            acl_entry="FABRICATED",
+            acl_weight="FABRICATED",
+            pkt_group_id="FAB",
+        )
+        for d in ("http", "https", "tcp")
+    ]
+    v = _option_c(att, fabricated)
+    assert v.satisfied is True
+    assert set(v.attributed_dimensions) == {"http", "https", "tcp"}
