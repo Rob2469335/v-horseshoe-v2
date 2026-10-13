@@ -27,7 +27,9 @@ that can be done unprivileged:
 Honesty properties this module enforces
 ---------------------------------------
 * An unobserved dimension is ``unknown``, never ``denied``.
-* ``denied`` is only recorded when a probe was actually attempted and refused.
+* ``denied`` is only recorded when a probe was actually attempted and refused
+  by the network stack; a routing failure (no route) or an ambiguous reset is
+  ``unknown``, never ``denied``.
 * A missing or failing negative control invalidates the whole attestation.
 * DNS behaviour must be declared explicitly; it is never inferred.
 * If IPv6 is not configured on the host, that dimension is ``unavailable`` with a
@@ -85,6 +87,12 @@ DENIED_REQUIRED: frozenset[str] = frozenset(
 )
 PERMITTED_REQUIRED: frozenset[str] = frozenset({"loopback", "required_service"})
 
+#: The ONLY dimensions a policy assertion may satisfy. Every other dimension is
+#: observer-provable and must be measured; an assertion for it is not accepted.
+_POLICY_ASSERTABLE_DIMENSIONS: frozenset[str] = frozenset(
+    {"proxy", "alternate_interface"}
+)
+
 OUTCOME_DENIED = "denied"
 OUTCOME_PERMITTED = "permitted"
 OUTCOME_UNKNOWN = "unknown"
@@ -93,6 +101,15 @@ OUTCOME_UNAVAILABLE = "unavailable"
 #: Never treat these as evidence that egress is blocked: they prove nothing about
 #: the destination and are exactly the ambiguity a name-based probe creates.
 _PROBE_TIMEOUT_SECONDS = 2.0
+
+#: Windows socket error codes that represent a WFP/firewall REFUSAL -- the stack
+#: refused to send the packet. These, and only these, are recorded as ``denied``.
+_FIREWALL_REFUSAL_WINERRORS = frozenset({10013})  # WSAEACCES
+
+#: Windows socket error codes that mean NO ROUTE was found. The packet never left
+#: the stack and never reached any enforcement point, so these are NOT evidence
+#: of firewall enforcement -- a missing default route produces exactly this.
+_UNREACHABLE_WINERRORS = frozenset({10051, 10065})  # WSAENETUNREACH / WSAEHOSTUNREACH
 
 
 @dataclass(frozen=True)
@@ -220,13 +237,30 @@ def default_egress_probe(protocol: str, host: str, port: int) -> tuple[str, str,
         outcome = OUTCOME_DENIED
         detail = f"connection refused: {exc}"
     except socket.timeout:
-        outcome = OUTCOME_DENIED
-        detail = "timed out (silently dropped)"
+        # A timeout (silent drop) is AMBIGUOUS: it is produced by a firewall
+        # drop, an absent listener, a blackhole address, or a filtered path.
+        # It is NOT a refusal and must never establish a denial dimension.
+        outcome = "timeout"
+        detail = "timed out (silently dropped or filtered; not a refusal)"
     except OSError as exc:
-        # Windows returns 10013/10054 for a WFP/firewall block and 10051/10065
-        # for unreachable-network. Both mean the packet did not leave.
-        outcome = OUTCOME_DENIED
-        detail = f"{type(exc).__name__} (winerror={getattr(exc, 'winerror', None)}): {exc}"
+        # Only a WFP/firewall *refusal* counts as denied. A routing fault or a
+        # reset does NOT prove the enforcement mechanism refused the packet:
+        #   * WSAEACCES (10013) -- the stack refused to send: a block.
+        #   * WSAENETUNREACH (10051) / WSAEHOSTUNREACH (10065) -- no route was
+        #     found, so the packet never reached any enforcement point. This is
+        #     the signature of a MISSING ROUTE, not of a firewall.
+        #   * WSAECONNRESET (10054) and anything else -- ambiguous; a reset can
+        #     come from any peer or middlebox and does not prove this control.
+        # Unreachable/ambiguous outcomes are `unknown` (see `_classify`) and
+        # cannot satisfy a denied-required dimension.
+        winerror = getattr(exc, "winerror", None)
+        if winerror in _FIREWALL_REFUSAL_WINERRORS:
+            outcome = OUTCOME_DENIED
+        elif winerror in _UNREACHABLE_WINERRORS:
+            outcome = "unreachable"
+        else:
+            outcome = "error"
+        detail = f"{type(exc).__name__} (winerror={winerror}): {exc}"
     finally:
         if sock is not None:
             try:
@@ -246,19 +280,136 @@ def local_address_of(family: int) -> str:
     return "ipv6" if family == socket.AF_INET6 else "ipv4"
 
 
+def default_udp_probe(host: str, port: int) -> tuple[str, str, str]:
+    """Send ONE UDP datagram and report the observable result.
+
+    Unlike a UDP ``connect()`` (which only associates a peer and sends nothing),
+    this transmits a real datagram, so it can observe a local send error or an
+    ICMP-port-unreachable. It is still honest about what it CANNOT show:
+
+    * a successful ``sendto`` proves only that the datagram LEFT the stack --
+      never that any peer received it;
+    * a silent drop is indistinguishable from an absent listener, so silence is
+      ``silent`` (``unknown``), never ``denied``;
+    * an ICMP port-unreachable means the destination was REACHED and had no
+      listener -- also not evidence of a firewall denial.
+    """
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+    except socket.gaierror as exc:
+        return "dns_unresolved", f"name resolution failed: {exc}", ""
+    except Exception as exc:  # noqa: BLE001
+        return "error", f"{type(exc).__name__}: {exc}", ""
+
+    local = ""
+    sock = None
+    try:
+        family, socktype, proto, _canon, sockaddr = infos[0]
+        sock = socket.socket(family, socktype, proto)
+        sock.settimeout(_PROBE_TIMEOUT_SECONDS)
+        sock.sendto(b"", sockaddr)  # a real datagram leaves the stack
+        try:
+            local = sock.getsockname()[0]
+        except OSError:
+            local = ""
+        try:
+            sock.recvfrom(1)
+            outcome = OUTCOME_PERMITTED  # a peer actually answered
+            detail = f"received a datagram from {host}:{port}"
+        except socket.timeout:
+            outcome = "silent"
+            detail = "sent; no response (silent drop or absent listener)"
+        except ConnectionResetError as exc:
+            outcome = "icmp_unreachable"
+            detail = f"ICMP port unreachable: {exc}"
+    except ConnectionResetError as exc:
+        outcome = "icmp_unreachable"
+        detail = f"ICMP port unreachable: {exc}"
+    except OSError as exc:
+        winerror = getattr(exc, "winerror", None)
+        if winerror in _FIREWALL_REFUSAL_WINERRORS:
+            outcome = OUTCOME_DENIED
+        elif winerror in _UNREACHABLE_WINERRORS:
+            outcome = "unreachable"
+        else:
+            outcome = "error"
+        detail = f"{type(exc).__name__} (winerror={winerror}): {exc}"
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+    return outcome, detail, local
+
+
 def _classify(dimension: str, raw: str) -> str:
+    """Map a raw probe outcome to a schema outcome.
+
+    Only ``permitted``, ``denied`` and ``unavailable`` pass through. Every
+    ambiguous raw outcome -- ``dns_unresolved``, ``timeout``, ``silent``,
+    ``icmp_unreachable``, ``unreachable``, ``error`` -- is ``unknown`` and can
+    never satisfy a required-denial dimension.
+    """
     if raw in (OUTCOME_PERMITTED, OUTCOME_DENIED, OUTCOME_UNAVAILABLE):
         return raw
-    if raw == "dns_unresolved":
-        # Not evidence of a block. Keep it distinguishable.
-        return OUTCOME_UNKNOWN
     return OUTCOME_UNKNOWN
+
+
+def is_sha256_hex(value: str) -> bool:
+    """True iff ``value`` is a syntactically valid 64-character SHA-256 digest."""
+    return len(value) == 64 and all(c in "0123456789abcdefABCDEF" for c in value)
+
+
+def canonical_policy_digest(capture: Mapping[str, Any]) -> str:
+    """Deterministic SHA-256 of a policy-capture payload (repository convention).
+
+    This identifies a *configuration capture*. It does NOT, by itself, prove the
+    configuration was enforced: a caller that recomputes it over the live host
+    capture and compares it to an attestation's ``policy_sha256`` verifies the
+    *identity* of a capture, never enforcement.
+    """
+    blob = json.dumps(capture, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def policy_digest_matches(
+    att: IsolationAttestation | Mapping[str, Any],
+    capture: Mapping[str, Any],
+) -> bool:
+    """Host-side check: does the attestation name THIS policy capture?
+
+    Recomputes the canonical digest of ``capture`` and compares it to the
+    attestation's ``policy_sha256``. Establishes byte-identity of a capture --
+    NEVER that the policy was enforced, and never who produced the capture.
+    """
+    if isinstance(att, Mapping):
+        att = parse_attestation(att)
+    return bool(att.policy_sha256) and att.policy_sha256 == canonical_policy_digest(capture)
+
+
+#: Denied-required external categories, keyed by destination port. A target's
+#: port decides which acceptance dimension its observation satisfies.
+_EXTERNAL_DIM_BY_PORT = {80: "http", 443: "https"}
+
+#: Default external destinations for the denied-required TCP dimensions.
+#: LITERAL addresses only: this runner must not depend on DNS to decide whether
+#: an outbound path is blocked, because an unresolvable name proves nothing
+#: about egress (see ``default_egress_probe``). Callers override these with
+#: ``--external HOST:PORT``; the destination port selects http/https/tcp.
+DEFAULT_EXTERNAL_TARGETS: tuple[tuple[str, int], ...] = (
+    ("93.184.216.34", 80),    # http
+    ("93.184.216.34", 443),   # https
+    ("93.184.216.34", 8080),  # tcp
+)
 
 
 def run_egress_probes(
     *,
     probe: Callable[[str, str, int], tuple[str, str, str]] = default_egress_probe,
-    external_targets: Sequence[tuple[str, int]] = (("api.github.com", 443),),
+    external_targets: Sequence[tuple[str, int]] = DEFAULT_EXTERNAL_TARGETS,
+    udp_target: tuple[str, int] = ("8.8.8.8", 53),
+    udp_probe: Callable[[str, int], tuple[str, str, str]] = default_udp_probe,
     loopback_targets: Sequence[tuple[str, int]] = (("127.0.0.1", 1),),
     ipv6_target: tuple[str, int] | None = ("2606:4700:4700::1111", 443),
     required_services: Sequence[tuple[str, str, int]] = (),
@@ -295,16 +446,22 @@ def run_egress_probes(
             )
         )
 
-    # --- denied-required dimensions, probed over both a name and a literal IP ---
-    for dim, host, port in (("http", "example.com", 80), ("https", "api.github.com", 443)):
+    # --- denied-required external dimensions ---
+    # Destinations come from the caller (``--external``). They must be LITERAL
+    # addresses: this runner must not depend on DNS to decide a block, and a name
+    # that fails to resolve proves nothing about egress (see
+    # ``default_egress_probe``). The destination port selects the acceptance
+    # dimension so http / https / tcp are all represented.
+    for host, port in external_targets:
+        dim = _EXTERNAL_DIM_BY_PORT.get(port, "tcp")
         raw, detail, local = probe("tcp", host, port)
         record(dim, f"{host}:{port}", "tcp", raw, detail, local)
 
-    # A literal address removes DNS from the question: a name that fails to
-    # resolve proves nothing about egress.
-    for dim, host, port in (("tcp", "93.184.216.34", 80), ("udp", "8.8.8.8", 53)):
-        raw, detail, local = probe("tcp" if dim == "tcp" else "dns", host, port)
-        record(dim, f"{host}:{port}", "udp" if dim == "udp" else "tcp", raw, detail, local)
+    # udp: a REAL datagram (send + observe), at a literal address so no name
+    # resolution is involved. Silence is `unknown`, never a denial.
+    u_host, u_port = udp_target
+    raw, detail, local = udp_probe(u_host, u_port)
+    record("udp", f"{u_host}:{u_port}", "udp", raw, detail, local)
 
     # --- alternate interface: the bypass a single-interface rule would miss ---
     # NOTE: this dimension is NOT observer-provable unprivileged. Whether every
@@ -611,37 +768,37 @@ def verify_isolation_attestation(
     for dim in sorted(DENIED_REQUIRED | PERMITTED_REQUIRED):
         results = by_dim.get(dim, [])
         outcomes = {r.outcome for r in results}
-        observed = bool(results) and OUTCOME_UNKNOWN not in outcomes
+        want = OUTCOME_DENIED if dim in DENIED_REQUIRED else OUTCOME_PERMITTED
+        contrary = OUTCOME_PERMITTED if dim in DENIED_REQUIRED else OUTCOME_DENIED
 
-        if observed and results:
-            if dim in DENIED_REQUIRED:
-                if outcomes == {OUTCOME_DENIED}:
-                    satisfied.append(dim)
-                elif OUTCOME_PERMITTED in outcomes:
-                    failed.append(dim)
-                elif outcomes <= {OUTCOME_UNAVAILABLE}:
-                    unavailable.append(dim)
-                else:
-                    unproven.append(dim)
-            else:
-                if outcomes == {OUTCOME_PERMITTED}:
-                    satisfied.append(dim)
-                elif OUTCOME_DENIED in outcomes:
-                    failed.append(dim)
-                else:
-                    unproven.append(dim)
+        # A CONTRADICTING observation is decisive, even mixed with unknown
+        # results: a denied-required dimension that was seen permitted (or a
+        # permitted-required one seen denied) FAILS. An assertion must never
+        # erase observed reachable-egress evidence.
+        if contrary in outcomes:
+            failed.append(dim)
             continue
 
-        # Not observed. A policy assertion may satisfy it, but only if the
-        # policy is actually identified -- an anonymous assertion proves nothing.
-        assertion = asserted.get(dim)
-        want = OUTCOME_DENIED if dim in DENIED_REQUIRED else OUTCOME_PERMITTED
-        if assertion == want and att.policy_identity and att.policy_sha256:
-            declared.append(dim)
-        elif results and outcomes <= {OUTCOME_UNAVAILABLE}:
+        # Satisfied only by a clean, unanimous required outcome.
+        if results and outcomes == {want}:
+            satisfied.append(dim)
+            continue
+
+        # Not satisfied. A policy assertion may satisfy ONLY the dimensions that
+        # are genuinely NOT observer-provable -- never one with a non-unknown
+        # observation -- and only with a well-formed identified policy digest.
+        # An assertion is a declaration, never an observed network result.
+        observed_any = bool(outcomes - {OUTCOME_UNKNOWN, OUTCOME_UNAVAILABLE})
+        if dim in _POLICY_ASSERTABLE_DIMENSIONS and not observed_any:
+            assertion = asserted.get(dim)
+            if (assertion == want and att.policy_identity
+                    and is_sha256_hex(att.policy_sha256)):
+                declared.append(dim)
+                continue
+
+        if results and outcomes <= {OUTCOME_UNAVAILABLE}:
             unavailable.append(dim)
-        else:
-            unproven.append(dim)
+        unproven.append(dim)
 
     # Binding: an attestation that cannot be tied to an arm proves nothing about
     # that arm.
@@ -822,7 +979,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="a local service that MUST remain reachable (repeatable)")
     ap.add_argument("--external", action="append", default=[],
                     metavar="HOST:PORT",
-                    help="an external destination that must be denied (repeatable)")
+                    help="an external destination that must be denied (repeatable); "
+                         "use a literal address, and the port selects http(80)/"
+                         "https(443)/tcp(any other)")
+    ap.add_argument("--udp", default="8.8.8.8:53", metavar="HOST:PORT",
+                    help="the UDP destination to send one real datagram to "
+                         "(default 8.8.8.8:53); use a literal address")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
     assertions: dict[str, str] = {}
@@ -852,6 +1014,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"f2_isolation: bad --external {item!r}; expected HOST:PORT")
             return 2
 
+    try:
+        _uh, _up = args.udp.rsplit(":", 1)
+        udp_target = (_uh, int(_up))
+    except Exception:  # noqa: BLE001
+        print(f"f2_isolation: bad --udp {args.udp!r}; expected HOST:PORT")
+        return 2
+
     def dns_probe() -> tuple[str, str]:
         raw, detail, _ = default_egress_probe("dns", "8.8.8.8", 53)
         return raw, detail
@@ -865,7 +1034,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         att = run_egress_probes(
-            external_targets=tuple(externals) or (("api.github.com", 443),),
+            external_targets=tuple(externals) or DEFAULT_EXTERNAL_TARGETS,
+            udp_target=udp_target,
             loopback_targets=(("127.0.0.1", 1),),
             required_services=tuple(services),
             dns_probe=dns_probe,

@@ -295,9 +295,9 @@ class TestProvenanceReporting:
 class TestAttestationVerification:
     def _att(self):
         denied = {
-            ("tcp", "example.com", 80): (iso.OUTCOME_DENIED, "refused", ""),
-            ("tcp", "api.github.com", 443): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "93.184.216.34", 443): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "93.184.216.34", 8080): (iso.OUTCOME_DENIED, "refused", ""),
             ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
             ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "ok", "127.0.0.1"),
@@ -308,7 +308,9 @@ class TestAttestationVerification:
             return denied.get((p, h, pt), (iso.OUTCOME_UNKNOWN, "np", ""))
 
         return iso.run_egress_probes(
-            probe=probe, loopback_targets=(("127.0.0.1", 1),),
+            probe=probe,
+            udp_probe=lambda h, pt: denied.get(("dns", h, pt), (iso.OUTCOME_UNKNOWN, "np", "")),
+            loopback_targets=(("127.0.0.1", 1),),
             required_services=(("backend", "127.0.0.1", 8000),),
             dns_probe=lambda: (iso.OUTCOME_DENIED, "refused"),
             ipv6_available=lambda: True,
@@ -316,7 +318,108 @@ class TestAttestationVerification:
             policy_identity="fw", policy_sha256="ab" * 32,
             policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
             arm_id="a", rollout_id="r", workspace="w",
+            # The enforcement identity is part of THE SAME contract the consuming
+            # gate applies (qwen_train.f2_readiness._check_no_egress): a
+            # satisfied verdict alone is unattributable. Preflight reconciles the
+            # two Q9 gates against that contract, so a fully-valid attestation
+            # carries it.
+            enforcement_scope="vm",
+            executing_user="F2VM\\user",
+            interpreter_path=r"C:\f2\python.exe",
+            interpreter_sha256="cd" * 32,
         )
+
+    @staticmethod
+    def _count(report, ident):
+        return sum(1 for f in report["findings"] if f["id"] == ident)
+
+    def test_q9_findings_are_emitted_exactly_once(self, tmp_path):
+        """The duplicate that made the same id both 'not_supplied' and
+        'verified' must never return."""
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(self._att()))
+        for rep in (pf.run_preflight(), pf.run_preflight(attestation=p)):
+            assert self._count(rep, "evidence.q9_attestation") == 1
+            assert self._count(rep, "host.egress_enforcement") == 1
+
+    def test_absent_attestation_blocks_both_q9_gates(self):
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert by["host.egress_enforcement"]["category"] == pf.PRIVILEGED_HOST
+        assert by["evidence.q9_attestation"]["status"] == "not_supplied"
+        assert by["evidence.q9_attestation"]["category"] == pf.EXTERNAL_EVIDENCE
+
+    def test_valid_attestation_clears_only_the_q9_gates(self, tmp_path):
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(self._att()))
+        base = pf.run_preflight()
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["host.egress_enforcement"]["status"] == "enforced"
+        assert by["host.egress_enforcement"]["category"] == pf.READY
+        assert by["evidence.q9_attestation"]["status"] == "verified"
+        assert by["evidence.q9_attestation"]["category"] == pf.READY
+
+        b0 = {f["id"]: f["status"] for f in base["findings"]}
+        b1 = {f["id"]: f["status"] for f in rep["findings"]}
+        changed = {k for k in b1 if b0.get(k) != b1.get(k)}
+        assert changed == {"host.egress_enforcement", "evidence.q9_attestation"}
+
+        # Unrelated blockers are untouched, and the two Q9 gates were the only
+        # blocking findings that cleared.
+        assert by["evidence.s8_base_gold"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["evidence.active_lesson"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["authz.population_acquisition"]["category"] == pf.AUTHORIZATION
+        assert rep["blocking_count"] == base["blocking_count"] - 2
+
+    def test_missing_enforcement_identity_does_not_verify(self, tmp_path):
+        att = self._att()
+        stripped = att.__class__(**{**att.__dict__,
+            "enforcement_scope": "", "interpreter_path": "", "interpreter_sha256": ""})
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(stripped))
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["evidence.q9_attestation"]["category"] == pf.PRIVILEGED_HOST
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert "ENFORCEMENT IDENTITY" in by["evidence.q9_attestation"]["detail"]
+
+    def test_missing_policy_binding_does_not_verify(self, tmp_path):
+        att = self._att()
+        stripped = att.__class__(**{**att.__dict__,
+            "policy_identity": "", "policy_sha256": ""})
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(stripped))
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+
+    def test_reachable_egress_does_not_verify(self, tmp_path):
+        def probe(protocol, host, port):
+            if str(host) == "127.0.0.1":
+                return (iso.OUTCOME_PERMITTED, "ok", "127.0.0.1")
+            return (iso.OUTCOME_PERMITTED, "connected", "10.0.0.5")
+
+        att = iso.run_egress_probes(
+            probe=probe, loopback_targets=(("127.0.0.1", 1),),
+            required_services=(("backend", "127.0.0.1", 8000),),
+            dns_probe=lambda: (iso.OUTCOME_DENIED, "refused"),
+            ipv6_available=lambda: True,
+            policy_identity="fw", policy_sha256="ab" * 32,
+            policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
+            arm_id="a", rollout_id="r", workspace="w",
+            enforcement_scope="vm",
+            interpreter_path=r"C:\f2\python.exe", interpreter_sha256="cd" * 32,
+        )
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(att))
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
 
     def test_verified_attestation_is_reported_ready(self, tmp_path):
         p = tmp_path / "att.json"

@@ -369,8 +369,17 @@ def _env_control_findings(
 
 
 def _evidence_findings(root: Path) -> list[Finding]:
-    """External evidence and authorization gates. Nothing here can be satisfied
-    by repository work."""
+    """External evidence and authorization gates that no repository change can
+    satisfy.
+
+    Q9 is deliberately NOT here. The privileged egress control
+    (``host.egress_enforcement``) and its observed evidence
+    (``evidence.q9_attestation``) are one requirement seen from two sides, so
+    they are emitted together and reconciled from the single supplied artifact
+    by :func:`_q9_findings`. Listing ``evidence.q9_attestation`` here as a fixed
+    ``not_supplied`` gate produced a report in which the same id appeared twice
+    -- once permanently ``not_supplied`` and once ``verified``.
+    """
     return [
         Finding(EXTERNAL_EVIDENCE, "evidence.s8_base_gold", "absent",
                 "no verified base/gold execution pair is present; S8 requires "
@@ -383,21 +392,11 @@ def _evidence_findings(root: Path) -> list[Finding]:
                 "and X cannot be derived from it",
                 "perform the authorized clean-room learning event (requires Q9 "
                 "isolation, the receipt key, and an admitted population)"),
-        Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
-                "outbound egress denial is a privileged host control; this "
-                "repository observes and verifies isolation but cannot impose it",
-                "apply a default-deny egress policy for the arm's identity, then "
-                "run the isolation probes and supply the attestation"),
         Finding(AUTHORIZATION, "authz.population_acquisition", "not_authorized",
                 "F2-IMPL-AUTH-013 explicitly does not authorize acquiring the "
                 "task population; no task may be admitted without it",
                 "record an explicit authorization, or accept that the admitted "
                 "population is zero"),
-        Finding(EXTERNAL_EVIDENCE, "evidence.q9_attestation", "not_supplied",
-                "no verified clean-room attestation was supplied to the "
-                "readiness gate",
-                "run `python -m qwen_train.f2_isolation` under the enforced "
-                "policy and pass the attestation as 'no_egress_attestation'"),
         Finding(NOT_EXECUTED, "run.q10_calibration", "not_executed",
                 "calibration (Q10) is implemented but was not executed; it is not "
                 "authorized in this repository state",
@@ -406,6 +405,103 @@ def _evidence_findings(root: Path) -> list[Finding]:
                 "confirmatory F2 (Q13) was not executed and must not be until "
                 "every gate above is satisfied",
                 "authorize Q13 only after READY=True with evidence in hand"),
+    ]
+
+
+def _q9_findings(attestation: Path | None) -> list[Finding]:
+    """The two Q9 gates, reconciled from ONE artifact and emitted exactly once.
+
+    ``host.egress_enforcement`` (the privileged control) and
+    ``evidence.q9_attestation`` (the observed evidence for it) are the same
+    requirement: the finding's own remedy is "apply a default-deny egress policy
+    for the arm's identity, then run the isolation probes and supply the
+    attestation". They therefore share a single source of truth and a single
+    acceptance test -- the SAME test the consuming gate uses
+    (``qwen_train.f2_readiness._check_no_egress``): the attestation's verdict
+    must be satisfied AND its enforcement identity must be bound. A probe records
+    THAT a connection failed, never WHICH control failed it, so an attestation
+    whose enforcement identity is unbound is not evidence that enforcement is in
+    force, and neither finding may clear.
+
+    Fail-closed and single-valued: absent evidence leaves both blocked; a
+    malformed artifact is ``invalid``; an unverified or unattributable one is
+    ``not_established``; only a satisfied-and-bound artifact yields ``verified``
+    / ``enforced``. No unrelated gate is touched.
+    """
+    if attestation is None:
+        return [
+            Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                    "outbound egress denial is a privileged host control; this "
+                    "repository observes and verifies isolation but cannot impose "
+                    "it",
+                    "apply a default-deny egress policy for the arm's identity, "
+                    "then run the isolation probes and supply the attestation"),
+            Finding(EXTERNAL_EVIDENCE, "evidence.q9_attestation", "not_supplied",
+                    "no verified clean-room attestation was supplied to the "
+                    "readiness gate",
+                    "run `python -m qwen_train.f2_isolation` under the enforced "
+                    "policy and pass the attestation as 'no_egress_attestation'"),
+        ]
+
+    try:
+        from qwen_train.f2_isolation import (
+            assess_enforcement_identity,
+            parse_attestation,
+            verify_isolation_attestation,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return [
+            Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                    f"isolation verifier unavailable, so enforcement cannot be "
+                    f"established: {exc}", "restore qwen_train/f2_isolation.py"),
+            Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "invalid",
+                    f"attestation could not be verified: {exc}",
+                    "restore qwen_train/f2_isolation.py"),
+        ]
+
+    try:
+        att = parse_attestation(attestation.read_bytes())
+        verdict = verify_isolation_attestation(att)
+        identity = assess_enforcement_identity(att)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return [
+            Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                    f"supplied attestation is unusable ({exc}), so enforcement is "
+                    "not established",
+                    "enforce egress denial and supply a valid attestation"),
+            Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "invalid",
+                    f"attestation could not be parsed or verified: {exc}",
+                    "regenerate it with qwen_train.f2_isolation"),
+        ]
+
+    if verdict.satisfied and identity.bound:
+        return [
+            Finding(READY, "host.egress_enforcement", "enforced",
+                    f"egress enforcement observed and independently verified "
+                    f"under enforcement scope {identity.scope_model!r}", ""),
+            Finding(READY, "evidence.q9_attestation", "verified",
+                    f"{verdict.detail}; enforcement identity bound via "
+                    f"{identity.scope_model}", ""),
+        ]
+
+    if not verdict.satisfied:
+        reason = verdict.detail
+        remedy = "enforce egress denial, then re-run the attestation probes"
+    else:
+        reason = (
+            "isolation probes satisfied but the ENFORCEMENT IDENTITY is not "
+            "bound: " + ", ".join(identity.missing)
+        )
+        remedy = (
+            "re-run f2_isolation with --enforcement-scope, --interpreter-path and "
+            "--interpreter-sha256 (and --spawn-image per spawned image)"
+        )
+    return [
+        Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                f"attestation supplied but enforcement is not established: {reason}",
+                remedy),
+        Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "not_established",
+                reason, remedy),
     ]
 
 
@@ -470,27 +566,9 @@ def run_preflight(
     findings += _env_findings()
     findings += _env_control_findings(repo, adapter_controls=adapter_controls)
     findings += _evidence_findings(repo)
-
-    # Q9 attestation, when supplied, is VERIFIED here rather than trusted.
-    if attestation is not None:
-        try:
-            from qwen_train.f2_isolation import (
-                parse_attestation, verify_isolation_attestation,
-            )
-            v = verify_isolation_attestation(parse_attestation(attestation.read_bytes()))
-            findings.append(
-                Finding(READY if v.satisfied else PRIVILEGED_HOST,
-                        "evidence.q9_attestation",
-                        "verified" if v.satisfied else "not_established",
-                        v.detail, "" if v.satisfied else "enforce egress denial")
-            )
-        except Exception as exc:  # noqa: BLE001
-            findings.append(
-                Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "invalid",
-                        f"attestation could not be verified: {exc}",
-                        "regenerate it with qwen_train.f2_isolation")
-            )
-
+    # Q9: the privileged control and its attestation evidence are one gate,
+    # VERIFIED (never trusted) from the single supplied artifact.
+    findings += _q9_findings(attestation)
     findings += _provenance_findings(repo)
 
     for f in findings:

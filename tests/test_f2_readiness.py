@@ -99,9 +99,9 @@ def _clean_attestation():
     from qwen_train import f2_isolation as iso
 
     denied = {
-        ("tcp", "example.com", 80): (iso.OUTCOME_DENIED, "refused", ""),
-        ("tcp", "api.github.com", 443): (iso.OUTCOME_DENIED, "refused", ""),
-        ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "winerror=10013", ""),
+    ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "refused", ""),
+    ("tcp", "93.184.216.34", 443): (iso.OUTCOME_DENIED, "refused", ""),
+    ("tcp", "93.184.216.34", 8080): (iso.OUTCOME_DENIED, "winerror=10013", ""),
         ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
         ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
         ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
@@ -113,6 +113,7 @@ def _clean_attestation():
 
     return iso.run_egress_probes(
         probe=probe,
+        udp_probe=lambda h, p: denied.get(("dns", h, p), (iso.OUTCOME_UNKNOWN, "np", "")),
         loopback_targets=(("127.0.0.1", 1),),
         required_services=(("backend", "127.0.0.1", 8000),),
         dns_probe=lambda: (iso.OUTCOME_DENIED, "resolver refused"),
@@ -515,9 +516,9 @@ class TestIsolationAttestationIntegration:
         from qwen_train import f2_isolation as iso
 
         denied = {
-            ("tcp", "example.com", 80): (iso.OUTCOME_DENIED, "refused", ""),
-            ("tcp", "api.github.com", 443): (iso.OUTCOME_DENIED, "refused", ""),
-            ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "winerror=10013", ""),
+            ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "93.184.216.34", 443): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "93.184.216.34", 8080): (iso.OUTCOME_DENIED, "winerror=10013", ""),
             ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
             ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
@@ -529,6 +530,7 @@ class TestIsolationAttestationIntegration:
 
         kwargs = dict(
             probe=probe,
+            udp_probe=lambda h, p: denied.get(("dns", h, p), (iso.OUTCOME_UNKNOWN, "np", "")),
             loopback_targets=(("127.0.0.1", 1),),
             required_services=(("backend", "127.0.0.1", 8000),),
             dns_probe=lambda: (iso.OUTCOME_DENIED, "resolver refused"),
@@ -560,7 +562,7 @@ class TestIsolationAttestationIntegration:
         from qwen_train.f2_readiness import _check_no_egress
 
         from qwen_train import f2_isolation as iso
-        denied = {("tcp", "api.github.com", 443): (iso.OUTCOME_PERMITTED, "connected", "10.0.0.5")}
+        denied = {("tcp", "93.184.216.34", 443): (iso.OUTCOME_PERMITTED, "connected", "10.0.0.5")}
         att = self._att(probe=lambda p, h, pt: denied.get(
             (p, h, pt), (iso.OUTCOME_DENIED, "refused", "")))
         ok, detail, _ = _check_no_egress({"no_egress_attestation": att.to_dict()})
@@ -575,7 +577,7 @@ class TestIsolationAttestationIntegration:
 
         att = self._att(probe=lambda p, h, pt: (
             (iso.OUTCOME_PERMITTED, "connected", "10.0.0.5")
-            if (p, h, pt) == ("tcp", "api.github.com", 443)
+            if (p, h, pt) == ("tcp", "93.184.216.34", 443)
             else (iso.OUTCOME_DENIED, "refused", "")
         ))
         supplied = {
