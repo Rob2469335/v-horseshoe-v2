@@ -165,20 +165,72 @@ fabricate a connection, or reclassify a refusal.
 |---|---|---|---|---|---|---|
 | 1 | Q9 in-guest attestation of `F2-Isolation-VM` | **REQUIRES AUTHORIZATION** | `EXPERIMENT_J_F2_VM_ISOLATION.md` §4; `Q9_OWNER_RUN_CARD.md` | host-side enforcement prepared; attestation absent | owner console session + guest credential + in-guest tooling + a listener on `127.0.0.1:1` | run `Q9_OWNER_RUN_CARD.md` at VMConnect; hand back `f2_q9_attestation.json` |
 | 2 | Host egress enforcement | **PRIVILEGED HOST ACTION** | `OPERATOR_HANDOFF.md` step F; preflight `host.egress_enforcement` | `not_enforced` | default-deny egress policy for the arm identity | apply the policy, then run the probes |
-| 3 | S8 host→guest channel | **APPROVED (D5) for `F2-S8-VM1`** | `WORK_LOG.md` D5 | PSDirect worked (1.7 s); GSI enabled | concrete transport + guest executor (**not implemented**) | none host-side; repository work + guest tooling |
-| 4 | S8 base/gold execution | **REQUIRES AUTHORIZATION** | `F2_S8_EXECUTION_AND_PILOT_PACKAGE.md` §8; preflight `evidence.s8_base_gold` | 0 pairs | explicit grant to execute base/gold | authorize the S8 execution in `F2-S8-VM1` |
+| 3 | S8 host→guest channel | **APPROVED (D5) for `F2-S8-VM1`** | `WORK_LOG.md` D5 | transport + guest executor implemented (`173fcffc`); PSDirect worked (1.7 s); GSI enabled | a real guest run (NOT ESTABLISHED) + guest tooling | none host-side |
+| 4 | S8 base/gold execution | **REQUIRES AUTHORIZATION** | `WORK_LOG.md` 2026-10-09 grant (*"Run 1 grants nothing for a live VM cycle; Run 2 requires a separate explicit grant"*); `F2_S8_EXECUTION_AND_PILOT_PACKAGE.md` §8 | 0 pairs; no Run-2 grant recorded | the explicit Run-2 / pilot grant | record the §8 pilot authorization |
+| 4b | S8 execution-environment isolation assurance | **GOVERNANCE GAP** | SAP §4c (*"Who is authorized to produce S8 evidence … is not yet named in authority"*); `F2_S8_EXECUTION_AND_PILOT_PACKAGE.md` §1/§8 (proposed) | isolation of `F2-S8-VM1` **not demonstrated** | the owner must name the assurance | decide the assurance (see §7a) |
 | 5 | Trusted store + evaluator identity | **GOVERNANCE GAP** (values decided, not bound) | `OPERATOR_HANDOFF.md` step J; `WORK_LOG.md` D3 | `SWARM_F2_*` unset at runtime | process-scoped `SWARM_F2_*` env binding | set the `SWARM_F2_*` variables for the run |
 | 6 | Confirmatory F2 (Q13) | **REQUIRES AUTHORIZATION** | `EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md`; SAP §6 | not executed | scientific authorization | out of scope here |
 
-**S8 environment role:** whether S8 base/gold requires a Q9-style isolation
-attestation of `F2-S8-VM1` (the session-4 S8 network validation is **not** the
-`f2_isolation` attestation), or whether the D4/D5-approved environment suffices,
-is **not resolved by any committed authority**. This is a **`REQUIRES
-AUTHORIZATION`** decision for the operator. It does **not** require, and must not
-be satisfied by, a Q9 attestation of `F2-Isolation-VM`.
+**S8 assurance resolution (read-only, 2026-10-13).** The S8 package defines the
+S8 execution boundary itself and is explicit that it is **not** the F2 clean room:
+
+> Acquisition/build: *"disposable, no secrets, no experimental network"*, internet
+> *"only if separately authorized"*, route to `10.72.0.0/24` **prohibited**.
+> Offline evaluation: *"no internet, no secrets, pinned inputs only"*, route to
+> `10.72.0.0/24` **prohibited**, no writable host shares. — `F2_S8_EXECUTION_AND_PILOT_PACKAGE.md` §1
+
+> *"The existing F2 internal network (`10.72.0.0/24`) and the existing
+> `F2-Isolation-VM` are **not** part of this design."* — ibid.
+
+> Requested pilot authorization: *"a disposable isolated environment that has no
+> route to `10.72.0.0/24` and no host secrets, using only the pinned inputs at the
+> recorded digests"*; stop condition *"isolation cannot be demonstrated"*. — ibid. §8
+
+Consequences, each independently established:
+
+- **The Q9 `f2_isolation` attestation is not the S8 gate.** It binds an arm /
+  rollout / workspace identity *inside `F2-Isolation-VM`* and is verified against
+  that clean room; no authority applies it to `F2-S8-VM1`. A Q9 attestation of
+  `F2-Isolation-VM` therefore **cannot** be used to qualify `F2-S8-VM1`.
+- **The required assurance for `F2-S8-VM1` is not established by frozen
+  authority.** The S8 package *proposes* it but is itself `PROPOSED — NOT
+  EXECUTED — REQUIRES ROB'S AUTHORIZATION` (§3), and SAP §4c records *"who is
+  authorized to produce S8 evidence"* as an outstanding governance item. This is
+  a **`GOVERNANCE GAP`**, not a measurement that has been taken.
+- **`F2-S8-VM1`'s current configuration does not satisfy the offline-evaluation
+  boundary.** It has internet reachability through `F2-S8-NAT` (session-4
+  evidence: `1.1.1.1:443` CONNECTED, `example.com` HTTP 200), which matches the
+  **acquisition/build** boundary, not the **offline evaluation** boundary
+  (`internet: none`). Isolation is `NOT ESTABLISHED` under the S8 package's own
+  rule (*"A VM is not secure because it is a VM"*), and a timeout on the
+  `10.72.0.0/24` paths is *consistent with* but **not proof of** enforcement.
+- **A Q9-style attestation of `F2-S8-VM1` is not required by any committed
+  authority**, and none is defined for it. Whether one is required is part of the
+  `GOVERNANCE GAP` in §7a.
 
 `SWARM_RECEIPT_KEY` presence (preflight `env.receipt_key`) is **not**
 authorization to use it and is irrelevant to S8 admission.
+
+---
+
+## 7a. PROPOSED decision record — REQUIRES AUTHORIZATION (not granted here)
+
+This section is a **proposal**. It does not grant authorization, does not modify
+frozen policy, and is not authority. It answers the resolution questions so the
+owner decision is narrow and unambiguous.
+
+| Question | Resolution |
+|---|---|
+| Intended S8 execution target | **`F2-S8-VM1`** (operator decisions D4/D5; S8 package §1 excludes `F2-Isolation-VM`) |
+| Assurance applying to that VM | **Not established by frozen authority (`GOVERNANCE GAP`).** The S8 package proposes: disposable; no route to `10.72.0.0/24`; no host secrets; **no internet during offline evaluation**; pinned inputs only; no writable host shares; isolation **demonstrated** before execution |
+| Exact evidence required before execution | (a) a demonstrated isolation result for the execution guest (measured, not asserted); (b) guest tooling present (real Python + git + executor — re-verify); (c) the `SWARM_F2_*` trusted-store/evaluator binding; (d) the Run-2/pilot grant recorded |
+| Who must authorize the remaining action | The experiment owner (Rob) — a single recorded grant |
+| First permitted operational action after that grant | The five-task feasibility pilot of `F2_S8_EXECUTION_AND_PILOT_PACKAGE.md` §8, in the isolated execution guest, base = FAIL / gold = PASS |
+| Independent gates that remain | Q9 of `F2-Isolation-VM` (§7 gate 1); host egress enforcement (gate 2); trusted-store binding (gate 5); confirmatory F2 (gate 6) |
+| What stays prohibited until those gates pass | Confirmatory F2 / Q10 / Q12 / Q13; receipt-key use; any expansion beyond the authorized pilot; using a `F2-Isolation-VM` attestation to qualify `F2-S8-VM1` |
+
+**The single indispensable owner decision** is recorded verbatim in §9 step 1.
+
 
 ---
 
@@ -203,16 +255,28 @@ double-count. `analyzable` remains 0 until the later T/X phase.
 
 ---
 
-## 9. Exact next owner actions (in order)
+## 9. The single indispensable owner decision
 
-1. **Decide the S8 execution guest and whether Q9 is a prerequisite** (§7 note).
-   Until this is recorded, S8 execution must not begin.
-2. **If S8 proceeds in `F2-S8-VM1` (the documented default):** complete guest
-   tooling (real Python + git + the executor; the session-3 guest had only a
-   Python Store shim and no git — re-verify current state), then authorize the
-   S8 base/gold run and bind the `SWARM_F2_*` store/evaluator env.
-3. **Independently (not on the S8 path):** complete the Q9 attestation of
-   `F2-Isolation-VM` per §6, using a loopback listener on `127.0.0.1:1`.
+**One narrow decision is requested — not a menu.** Everything else is either
+already authorized (D4/D5 channel) or independently gated (§7 gates 1, 2, 5, 6).
+
+> **Decision requested.** Authorize the S8 execution run (the "Run 2" the
+> 2026-10-09 grant reserved) by recording the `F2_S8_EXECUTION_AND_PILOT_PACKAGE.md`
+> §8 pilot authorization — naming **`F2-S8-VM1`** as the execution guest and the
+> **offline-evaluation isolation** it must hold (no internet, no route to
+> `10.72.0.0/24`, no host secrets, pinned inputs, no writable host shares,
+> isolation demonstrated before execution), for the five named tasks only, with no
+> confirmatory F2 and no automatic expansion.
+
+After that single grant, the first permitted operational action is the five-task
+feasibility pilot in the isolated execution guest; base = FAIL / gold = PASS.
+Q9 of `F2-Isolation-VM` (§7 gate 1) is **independent** and is **not** a
+prerequisite for, nor evidence about, `F2-S8-VM1`.
+
+Until the grant is recorded: **no S8 task execution, no base/gold run, no VM
+lifecycle change for execution, no guest tooling delivery.** Guest tooling
+(real Python + git + executor) may be *prepared* only as authorized separately.
+
 
 ---
 
