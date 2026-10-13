@@ -32,7 +32,7 @@ ALL_DENIED = {
     ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "refused", ""),
     ("tcp", "93.184.216.34", 443): (iso.OUTCOME_DENIED, "refused", ""),
     ("tcp", "93.184.216.34", 8080): (iso.OUTCOME_DENIED, "winerror=10013", ""),
-    ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
+    ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "winerror=10013", ""),
     ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
     ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
     ("tcp", "127.0.0.1", 8000): (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1"),
@@ -336,6 +336,39 @@ class TestStrictDenialContract:
         v = iso.verify_isolation_attestation(att)
         assert not v.satisfied
         assert "udp" in v.unproven_dimensions
+
+    def test_udp_icmp_port_unreachable_is_not_denied(self, monkeypatch):
+        """ICMP port-unreachable means the destination was REACHED and had no
+        listener -- it is not evidence of firewall enforcement."""
+        self._patch(monkeypatch, self._FakeSock(recvfrom=ConnectionResetError("sim")))
+        raw, _d, _l = iso.default_udp_probe("10.0.0.1", 53)
+        assert raw == "icmp_unreachable"
+        assert iso._classify("udp", raw) == iso.OUTCOME_UNKNOWN
+
+    def test_udp_answer_fails_a_denied_dimension(self):
+        """A received datagram demonstrates reachability, so a denied-required
+        UDP dimension must FAIL rather than pass."""
+        att = build(udp_probe=lambda h, p: (iso.OUTCOME_PERMITTED, "received", ""))
+        v = iso.verify_isolation_attestation(att)
+        assert "udp" in v.failed_dimensions
+        assert not v.satisfied
+
+    def test_ambiguous_labels_never_classify_as_denied(self):
+        for label in ("timed out", "timeout", "silent", "unreachable",
+                      "icmp_unreachable", "error"):
+            assert iso._classify("udp", label) == iso.OUTCOME_UNKNOWN
+            assert iso._classify("tcp", label) == iso.OUTCOME_UNKNOWN
+
+    def test_clean_fixture_udp_denial_is_a_refusal_not_a_timeout(self):
+        """Guard the fixture itself: the clean 'satisfied' attestation may only
+        record the UDP denial as a genuine local send refusal (WSAEACCES 10013),
+        never as a timeout or a silent drop."""
+        att = build()
+        udp = next(p for p in att.probes if p.dimension == "udp")
+        assert udp.outcome == iso.OUTCOME_DENIED
+        detail = udp.detail.lower()
+        assert "timed out" not in detail and "timeout" not in detail
+        assert "10013" in detail
 
     # -- Defect 4: negative control ----------------------------------------
     def test_negative_control_absent_listener_is_not_permitted(self):

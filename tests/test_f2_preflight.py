@@ -298,7 +298,7 @@ class TestAttestationVerification:
             ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "93.184.216.34", 443): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "93.184.216.34", 8080): (iso.OUTCOME_DENIED, "refused", ""),
-            ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
+            ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "winerror=10013", ""),
             ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "ok", "127.0.0.1"),
             ("tcp", "127.0.0.1", 8000): (iso.OUTCOME_PERMITTED, "ok", "127.0.0.1"),
