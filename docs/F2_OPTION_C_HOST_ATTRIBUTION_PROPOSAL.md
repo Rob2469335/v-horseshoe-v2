@@ -43,13 +43,44 @@ qualifying records (ambiguous); missing fields; malformed records; and any recor
 would override an observed `permitted` result. If no record qualifies, the dimension
 stays `unproven` and Q9 stays `NOT ESTABLISHED`.
 
-## Documented evidence limitation (not worked around)
+## Observed event-131 payload contract (read-only provider metadata, 2026-10-12)
 
-The event exists in the provider manifest, but the exact payload field names — and
-whether the emitted event carries the full 5-tuple — are **NOT ESTABLISHED** without a
-capture. The implementation therefore **requires** those fields and fails closed when
-they are absent; it does not synthesise or infer them. Confirming the payload requires a
-separately-authorized capture.
+Extracted from the provider manifest template via `Get-WinEvent -ListProvider` (no
+capture). Event 131, channel `Microsoft-Windows-Hyper-V-VmSwitch-Diagnostic-Traffic`
+(currently **disabled**), keywords `ut:Dropped` + `VmsDataPath`, level Warning. Data
+fields:
+
+`PortName`, `PortFName`, `SwitchName`, `SwitchFName`, `Direction` (UInt32), `Weight`
+(UInt32) — each string preceded by its `*Len` length field.
+
+- **PROVEN present:** port name + friendly name, switch name + friendly name, direction, weight.
+- **PROVEN absent:** source/destination IP, source/destination port, protocol, and any
+  packet/flow/correlation identifier. (Compare the Port-ACL event **36**, whose template
+  *does* carry an `AclName` field — event 131 has none.)
+- **NOT ESTABLISHED:** an explicit "extended port ACL entry" field. The message reads
+  "%9 extended port ACL entry with weight %10", but the template exposes only `Direction`
+  and `Weight`; the ACL is identifiable (at most) by `Weight`. On the live F2 adapter the
+  default-deny outbound rule has **Weight 1** and the gateway allow **Weight 100**.
+
+**Consequence — a correlation gap, not just a trust gap.** Event 131 cannot bind a drop
+to the exact probe **flow** (no 5-tuple), and carries **no ACL-name/entry field**. The
+`host_drop_attribution` gate as implemented requires an `acl_entry` and a flow match
+(`ip_dst:port_dst == probe.target`); a real event 131 supplies **neither**, so the gate is
+**inert (fails closed)** and cannot qualify a real drop. Flow correlation would have to
+rest on `(switch, port, direction, weight, tight window)` only — a **rule change requiring
+owner authorization** — and even then event 131 alone cannot identify the destination.
+
+Confirming whether a live emitted event carries more than this template, and whether the
+`%9` ACL entry resolves at all, requires a capture. Generating event 131 in turn requires a
+packet dropped by the extended ACL on the F2 port — i.e. an authorized guest probe under an
+ETW session; that probe is **not** authorized here.
+
+## Evidence limitation (trust, separately)
+
+Even if the payload carried the needed fields, a digest alone is not authentication: the
+current gate validates record **shape**, not **origin** (no artifact bytes are parsed), so a
+caller can construct an accepted record. A trusted-producer boundary or an owner-held
+HMAC/signature trust anchor is required and is currently undefined.
 
 ## Separation from the frozen contract
 
