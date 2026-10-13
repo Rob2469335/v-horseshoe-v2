@@ -130,3 +130,24 @@ result. If nothing qualifies, the dimension stays `unproven` and Q9 stays `NOT E
 
 Files: `qwen_train/f2_evidence_ingestion.py`, `qwen_train/f2_host_attribution.py`,
 `tests/test_f2_evidence_ingestion.py`, `tests/test_f2_host_attribution.py`.
+
+## Owner decisions — status OPEN (no authorization implied)
+
+Two decisions are required before Option C could ever be activated; both are currently
+unauthorized (`GOVERNANCE GAP`). Full package (outside the repo):
+`C:\Users\rober\F2_EVIDENCE\Q9_OPTION_C_OWNER_DECISION_RECORD.md`.
+
+- **A — correlation rule (`option-c-correlation/1`).** Event 131 carries no 5-tuple, no
+  packet id, and no ACL-entry field; the flow source's reason is generic. Two-source
+  evidence can therefore support at most a `CORRELATED_CANDIDATE` by default; accepting
+  `ACCEPTED_ATTRIBUTION` requires an owner rule (named component/weight, a unique in-window
+  flow match, `AMBIGUOUS` otherwise) and is **correlation, not causation**. Owner judgment:
+  is that sufficient, or is an intrinsic ACL-entry identifier required?
+- **B — producer trust anchor.** Options: trusted parser over bytes only (integrity, not
+  authenticity); owner-controlled HMAC (authenticates the producer; needs key custody);
+  digital signature (authentication + non-repudiation; needs PKI). Recommended default:
+  owner-controlled HMAC with run-binding. Owner judgment: producer identity, key custody,
+  and whether non-repudiation is required. **No key is created here.**
+
+Until both are authorized **and** the anchor is provisioned, this rule stays inactive and the
+frozen baseline remains the default. Q9 remains NOT ESTABLISHED.
