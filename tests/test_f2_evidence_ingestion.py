@@ -262,3 +262,116 @@ def test_accept_ambiguous_does_not_accept():
     )
     assert out.status == ing.STATUS_AMBIGUOUS
     assert out.attribution is None
+
+
+# ---------------------------------------------------------------- security gate
+def _attempt(*, acl_observations, flow_observations, artifacts, policy=None, rule=None):
+    return ing.accept_attribution(
+        dimension="http", probe_protocol="tcp", probe_target="93.184.216.34:80",
+        probe_at=1000.5,
+        acl_observations=acl_observations,
+        flow_observations=flow_observations,
+        artifacts=artifacts,
+        rule=rule if rule is not None else _rule(authorized=True),
+        trust_policy=policy,
+        run_arm_id="arm-1", run_rollout_id="roll-1",
+    )
+
+
+class _SelectiveTrust:
+    def __init__(self, allow):
+        self.allow = allow
+
+    def verify(self, art):
+        ok = art.sha256 in self.allow
+        return ing.ProducerVerdict(ok, "p1" if ok else "", "selective")
+
+
+class _PathProducerTrust:
+    def verify(self, art):
+        return ing.ProducerVerdict(True, art.source.path, "per-path")
+
+
+def test_fabricated_verdict_cannot_authorize():
+    acl, flow = _vmswitch_artifact(), _pktmon_artifact()
+    with pytest.raises(TypeError):
+        ing.accept_attribution(
+            dimension="http", probe_protocol="tcp", probe_target="93.184.216.34:80",
+            probe_at=1000.5, acl_observations=_obs(acl), flow_observations=_obs(flow),
+            artifacts=[acl, flow], rule=_rule(), trust=ing.ProducerVerdict(True, "forged"),
+        )
+    # A bare verdict is not a policy (it has no .verify), so it cannot authenticate.
+    with pytest.raises(AttributeError):
+        ing.accept_attribution(
+            dimension="http", probe_protocol="tcp", probe_target="93.184.216.34:80",
+            probe_at=1000.5, acl_observations=_obs(acl), flow_observations=_obs(flow),
+            artifacts=[acl, flow], rule=_rule(), trust_policy=ing.ProducerVerdict(True, "forged"),
+        )
+
+
+def test_policy_authenticating_only_one_artifact_is_rejected():
+    acl, flow = _vmswitch_artifact(), _pktmon_artifact()
+    out = _attempt(
+        acl_observations=_obs(acl), flow_observations=_obs(flow),
+        artifacts=[acl, flow], policy=_SelectiveTrust({acl.sha256}),
+    )
+    assert out.status == ing.STATUS_UNTRUSTED
+    assert out.attribution is None
+
+
+def test_different_producers_are_rejected():
+    acl, flow = _vmswitch_artifact(), _pktmon_artifact()
+    out = _attempt(
+        acl_observations=_obs(acl), flow_observations=_obs(flow),
+        artifacts=[acl, flow], policy=_PathProducerTrust(),
+    )
+    assert out.status == ing.STATUS_UNTRUSTED
+    assert out.attribution is None
+
+
+def test_observation_from_other_artifact_is_rejected():
+    acl = _vmswitch_artifact()
+    other = _vmswitch_artifact(port_name="OtherPort")
+    flow = _pktmon_artifact()
+    out = _attempt(
+        acl_observations=_obs(acl), flow_observations=_obs(flow),
+        artifacts=[other, flow], policy=_FakeTrust(True),
+    )
+    assert out.status == ing.STATUS_UNTRUSTED
+    assert out.attribution is None
+
+
+def test_tampered_bytes_are_rejected():
+    acl, flow = _vmswitch_artifact(), _pktmon_artifact()
+    tampered = ing.OriginalArtifact.from_bytes(acl.data + b" ", path=acl.source.path)
+    out = _attempt(
+        acl_observations=_obs(acl), flow_observations=_obs(flow),
+        artifacts=[tampered, flow], policy=_FakeTrust(True),
+    )
+    assert out.status == ing.STATUS_UNTRUSTED
+    assert out.attribution is None
+
+
+def test_ambiguous_event131_never_establishes_attribution():
+    acl1 = _vmswitch_artifact()
+    acl2 = _vmswitch_artifact(port_name="OtherPort")
+    flow = _pktmon_artifact()
+    out = _attempt(
+        acl_observations=_obs(acl1, acl2), flow_observations=_obs(flow),
+        artifacts=[acl1, acl2, flow], policy=_FakeTrust(True),
+    )
+    assert out.status == ing.STATUS_AMBIGUOUS
+    assert out.attribution is None
+
+
+def test_default_policy_and_default_rule_fail_closed():
+    acl, flow = _vmswitch_artifact(), _pktmon_artifact()
+    # default trust policy (NullTrustPolicy) -> UNTRUSTED
+    out = _attempt(acl_observations=_obs(acl), flow_observations=_obs(flow), artifacts=[acl, flow])
+    assert out.status == ing.STATUS_UNTRUSTED and out.attribution is None
+    # default (unauthorized) rule -> UNTRUSTED even with an authenticated producer
+    out2 = _attempt(
+        acl_observations=_obs(acl), flow_observations=_obs(flow),
+        artifacts=[acl, flow], policy=_FakeTrust(True), rule=ing.CorrelationRule(),
+    )
+    assert out2.status == ing.STATUS_UNTRUSTED and out2.attribution is None

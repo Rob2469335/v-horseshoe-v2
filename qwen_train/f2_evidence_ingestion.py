@@ -426,7 +426,7 @@ def accept_attribution(
         return AcceptOutcome(STATUS_UNTRUSTED, None, f"correlation rule {rule.version!r} is not authorized")
 
     authenticated: set[str] = set()
-    producer = ""
+    producers: set[str] = set()
     if rule.require_authenticated_producer:
         policy = trust_policy if trust_policy is not None else NullTrustPolicy()
         if not artifacts:
@@ -435,8 +435,14 @@ def accept_attribution(
             verdict = policy.verify(art)
             if not verdict.authenticated:
                 return AcceptOutcome(STATUS_UNTRUSTED, None, f"artifact not authenticated: {verdict.detail}")
+            if not verdict.producer:
+                return AcceptOutcome(STATUS_UNTRUSTED, None, "authenticated artifact has no producer identity")
             authenticated.add(art.sha256)
-            producer = verdict.producer or producer
+            producers.add(verdict.producer)
+        # Same-producer policy: every contributing artifact must be authenticated as
+        # the SAME, identified producer -- a mismatch is never accepted.
+        if len(producers) != 1:
+            return AcceptOutcome(STATUS_UNTRUSTED, None, "contributing artifacts authenticated as different producers")
 
     outcome = correlate(
         dimension=dimension,
@@ -451,8 +457,11 @@ def accept_attribution(
         return AcceptOutcome(outcome.status, None, outcome.detail)
     candidate = outcome.candidate
     if rule.require_authenticated_producer:
+        # Binding: each observation used for correlation must have been produced from
+        # the exact artifact bytes that authenticated -- matched by computed digest.
         if candidate.artifact_sha256 not in authenticated or candidate.flow_artifact_sha256 not in authenticated:
-            return AcceptOutcome(STATUS_UNTRUSTED, None, "contributing artifact was not authenticated")
+            return AcceptOutcome(STATUS_UNTRUSTED, None, "a contributing observation was not derived from an authenticated artifact")
+    producer = next(iter(producers), "")
     return AcceptOutcome(
         STATUS_ACCEPTED_ATTRIBUTION,
         AcceptedAttribution(

@@ -65,8 +65,10 @@ a sealed type, and cannot supply a self-computed digest.
 
 `accept_attribution` takes a `TrustPolicy` and authenticates the **actual artifacts**
 (both the ACL and flow sources) before accepting anything; trust is never read from a
-caller-supplied verdict. The default is `NullTrustPolicy`, which authenticates **nothing**,
-so without an owner anchor every accept attempt returns `UNTRUSTED`.
+caller-supplied verdict. Every contributing artifact must authenticate as the **same,
+identified producer** — a mismatched producer, or an authenticated artifact with no
+producer identity, is rejected. The default is `NullTrustPolicy`, which authenticates
+**nothing**, so without an owner anchor every accept attempt returns `UNTRUSTED`.
 
 - A digest proves bytes match a digest. It does **not** prove who produced them.
 - A self-signed artifact or a caller-supplied key is **not** a trusted producer.
