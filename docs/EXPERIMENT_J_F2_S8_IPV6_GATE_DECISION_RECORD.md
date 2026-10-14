@@ -121,6 +121,24 @@ existing authority grants it.
 The claim matches the capture the host holds, so the enforcement binding is
 intact. No dimension `failed`: nothing was observed reachable.
 
+### 4a. Re-verification (2026-10-14)
+
+Every fact in §4 was re-derived from the live host and the preserved artifacts
+the following day, not recalled:
+
+| Check | Result |
+|---|---|
+| Live ACL read-back | 12 rules; `w=350 Outbound Deny 0.0.0.0/0` present, effective order unchanged |
+| VM identity / switch / NAT | `c5d294f5-…-ddc70dd94fed`, `F2-S8-NAT` (Internal), `10.73.0.0/24`; both VMs `Off` |
+| Attestation claim vs live capture digest | **match** (`94373017…`) |
+| Verifier verdict | **unchanged**: `satisfied=false`, `unproven=["ipv6"]`, `failed=[]` |
+| Host global IPv6 | still not observed |
+| `w=350` rule | preserved, not weakened, not removed |
+
+The verdict is therefore as fresh as this record, and nothing in the intervening
+day moved it. The decision below is required on current evidence, not on
+stale evidence.
+
 ---
 
 ## 5. The three paths
