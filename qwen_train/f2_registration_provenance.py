@@ -31,6 +31,18 @@ regenerates the registration, and never touches the population. Changing either
 side would alter the registered experimental population, which requires
 explicit authorization; this only reports whether the two sides still agree.
 
+Two further properties are checked, because the per-file digests alone cannot
+see them: ``first_30`` must literally be the head of
+``full_ordered_metadata``, and ``registration_content_sha256`` must be
+re-derivable with the registrar's own ``registration_artifacts`` over the rows
+on disk and the manifest's pinned ``inputs``. That digest had been left
+``NOT ESTABLISHED`` because a re-typed reconstruction of the content dict could
+not reproduce it -- the dict inside the registrar carries
+``f2_task_plan.SCHEMA_VERSION`` (``f2_task_order_v1``), which is NOT the
+manifest's own top-level ``schema_version`` (``f2_registration_v1``). Calling
+the registrar's function instead of retyping its dict reproduces the recorded
+digest exactly, and this check keeps it reproduced.
+
 Exit status is fail-closed: any mismatch, missing artifact, or unreadable file
 returns a non-zero code, so it can gate a pipeline.
 """
@@ -141,6 +153,100 @@ def _json_len(path: Path) -> int:
     return len(payload) if isinstance(payload, list) else -1
 
 
+def _consistency_checks(
+    manifest: dict[str, Any], reg: Path, report: ProvenanceReport
+) -> None:
+    """Cross-file and content-digest properties the per-file digests cannot see.
+
+    Two properties, both read-only:
+
+    * ``first_30`` must literally be the first ``len(first_30)`` rows of
+      ``full_ordered_metadata``. Each file's digest is bound separately, so two
+      internally consistent but mutually inconsistent artifacts would still
+      hash "correctly"; only a cross-file comparison catches that.
+    * ``registration_content_sha256`` must be re-derivable with the registrar's
+      OWN function (``f2_task_plan.registration_artifacts``) over the rows on
+      disk and the manifest's pinned ``inputs``. This closes the one item that
+      had been left ``NOT ESTABLISHED``: the digest looked unresolvable only
+      because the content dict inside the registrar carries
+      ``f2_task_plan.SCHEMA_VERSION`` (``f2_task_order_v1``), which is NOT the
+      manifest's own top-level ``schema_version``
+      (``f2_registration_v1``). Recomputing with the registrar's function, not
+      with a re-typed dict, reproduces the recorded digest exactly.
+    """
+    full = reg / _ARTIFACT_FILES["full_ordered_metadata"]
+    first = reg / _ARTIFACT_FILES["first_30"]
+    excl = reg / _ARTIFACT_FILES["excluded"]
+
+    ordered: Any = None
+    excluded: Any = None
+    head: Any = None
+    lists_ok = full.is_file() and first.is_file() and excl.is_file()
+    if lists_ok:
+        try:
+            ordered = json.loads(full.read_text(encoding="utf-8"))
+            excluded = json.loads(excl.read_text(encoding="utf-8"))
+            head = json.loads(first.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            report.errors.append(f"consistency check unreadable: {exc}")
+            lists_ok = False
+
+    if lists_ok:
+        if isinstance(ordered, list) and isinstance(head, list):
+            match = bool(head) and head == ordered[: len(head)]
+            detail = "" if match else "first_30 is not the head of full_ordered_metadata"
+            actual = "prefix" if match else "not a prefix"
+        else:
+            match, actual = False, "not a list"
+            detail = "an artifact is not a list"
+        report.checks.append(ArtifactCheck(
+            key="first_30_prefix", path=str(first),
+            recorded=f"first {len(head)} of {len(ordered)}"
+                     if isinstance(head, list) and isinstance(ordered, list)
+                     else "n/a",
+            actual=actual, match=match, detail=detail,
+        ))
+
+    recorded = str(manifest.get("registration_content_sha256") or "")
+    if not lists_ok:
+        return  # the per-artifact checks already reported the missing file
+    if not recorded:
+        report.checks.append(ArtifactCheck(
+            key="registration_content_sha256", path=str(full),
+            recorded="", actual="", match=True,
+            detail="manifest records no content digest; artifact digests "
+                   "still verified",
+        ))
+        return
+    if not (isinstance(ordered, list) and isinstance(excluded, list)):
+        report.checks.append(ArtifactCheck(
+            key="registration_content_sha256", path=str(full),
+            recorded=recorded, actual="", match=False,
+            detail="an artifact is not a list; content digest not recomputable",
+        ))
+        return
+    try:
+        from qwen_train.f2_task_plan import registration_artifacts
+
+        top_n = len(head)
+        arts = registration_artifacts(
+            ordered,
+            excluded,
+            inputs=manifest.get("inputs") or {},
+            top_n=top_n,
+            generated_at=manifest.get("generated_at"),
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed, never raise
+        report.errors.append(f"content digest could not be recomputed: {exc}")
+        return
+    actual = str(arts.get("content_sha256") or "")
+    report.checks.append(ArtifactCheck(
+        key="registration_content_sha256", path=str(full),
+        recorded=recorded, actual=actual, match=recorded == actual,
+        detail="" if recorded == actual else "content digest drift",
+    ))
+
+
 def verify_registration(
     registration_dir: Path | str = DEFAULT_REGISTRATION_DIR,
     manifest_path: Path | str = DEFAULT_MANIFEST_PATH,
@@ -203,6 +309,7 @@ def verify_registration(
             detail="" if str(counts["excluded"]) == str(actual_n)
             else "entry count differs",
         ))
+    _consistency_checks(manifest, reg, report)
     return report
 
 

@@ -59,6 +59,15 @@ def _row_digest(payload) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _content_sha(first, full, excluded, inputs=None) -> str:
+    """The registrar's OWN content digest, not a re-typed copy of its dict."""
+    from qwen_train.f2_task_plan import registration_artifacts
+
+    return registration_artifacts(
+        full, excluded, inputs=inputs or {}, top_n=len(first)
+    )["content_sha256"]
+
+
 def _write_fixture(root: Path, *, first_30, full, excluded, **manifest_over) -> Path:
     """Write a registration directory plus a matching manifest.
 
@@ -102,7 +111,12 @@ class TestBoundRegistration:
         assert report.bound is True
         assert report.operative is True
         assert report.registration_id == "fixture_v1"
-        assert len(report.checks) == 3
+        # three artifact digests + the two cross-file/content properties
+        assert len(report.checks) == 5
+        assert {c.key for c in report.checks} == {
+            "first_30", "full_ordered_metadata", "excluded",
+            "first_30_prefix", "registration_content_sha256",
+        }
         assert all(c.match for c in report.checks)
         assert report.errors == []
 
@@ -124,7 +138,9 @@ class TestDriftIsDetected:
         report = verify_registration(reg, man)
         assert report.bound is False
         failed = [c for c in report.checks if not c.match]
-        assert [c.key for c in failed] == ["first_30"]
+        # the artifact's own digest AND the cross-file prefix property both
+        # fail: the rewritten file is no longer the head of the ordered list.
+        assert [c.key for c in failed] == ["first_30", "first_30_prefix"]
         assert failed[0].detail == "canonical row digest drift"
 
     def test_serialization_only_difference_is_NOT_drift(self, tmp_path):
@@ -149,11 +165,14 @@ class TestDriftIsDetected:
         """Only a change in the ROWS themselves is drift -- as it should be."""
         man = _write_fixture(tmp_path, first_30=FIRST, full=FULL, excluded=[])
         reg = tmp_path / "registration"
-        (reg / "first_30.json").write_bytes(_canon([{"instance_id": "z__z-9"}]))
+        # Change the ORDERED population itself, canonically serialized.
+        (reg / "full_ordered_metadata.json").write_bytes(
+            _canon([{"instance_id": "z__z-9", "source": "s"}]))
         report = verify_registration(reg, man)
         assert report.bound is False
         failed = [c for c in report.checks if not c.match]
-        assert [c.key for c in failed] == ["first_30"]
+        assert [c.key for c in failed] == [
+            "full_ordered_metadata", "first_30_prefix"]
         assert failed[0].detail == "canonical row digest drift"
 
     def test_every_artifact_drifting_fails(self, tmp_path):
@@ -163,7 +182,98 @@ class TestDriftIsDetected:
             (reg / name).write_bytes(_canon(["altered"]))
         report = verify_registration(reg, man)
         assert report.bound is False
-        assert all(not c.match for c in report.checks)
+        by_key = {c.key: c.match for c in report.checks}
+        for key in ("first_30", "full_ordered_metadata", "excluded"):
+            assert by_key[key] is False
+        # The cross-file prefix property can legitimately still hold here (all
+        # three files now carry the same single row) and the fixture records no
+        # content digest -- neither may rescue the failed artifact digests.
+        assert by_key["first_30_prefix"] is True
+
+
+class TestContentDigestAndPrefix:
+    """The two properties the per-file digests cannot see.
+
+    ``registration_content_sha256`` had been left ``NOT ESTABLISHED`` because a
+    re-typed reconstruction of the registrar's content dict could not reproduce
+    it: the dict carries ``f2_task_plan.SCHEMA_VERSION`` (``f2_task_order_v1``),
+    NOT the manifest's top-level ``schema_version``
+    (``f2_registration_v1``). Calling the registrar's own function reproduces
+    it exactly -- against the live registration the recomputed value is
+    ``5f3c9f47eb622d7d983cfdcb6ebd3d240f6936087a049781c741ba37e237f042``,
+    which is what the manifest records. These tests pin that check so the digest
+    can never again be reported unresolvable, and so a real content change is
+    caught even when every artifact digest has been re-recorded to match.
+    """
+
+    def test_recorded_content_digest_is_enforced(self, tmp_path):
+        man = _write_fixture(
+            tmp_path, first_30=FIRST, full=FULL, excluded=[],
+            registration_content_sha256=_content_sha(FIRST, FULL, []),
+            inputs={},
+        )
+        report = verify_registration(tmp_path / "registration", man)
+        assert report.bound is True
+        assert [c for c in report.checks
+                if c.key == "registration_content_sha256"][0].match is True
+
+    def test_content_change_survives_re_recorded_artifact_digests(self, tmp_path):
+        """The strongest form: rows change AND every artifact digest is
+        re-recorded to match the new rows. Only the content digest, which the
+        manifest also pins, still refuses."""
+        man = _write_fixture(
+            tmp_path, first_30=FIRST, full=FULL, excluded=[],
+            registration_content_sha256=_content_sha(FIRST, FULL, []),
+            inputs={},
+        )
+        reg = tmp_path / "registration"
+        new_first = [{"instance_id": "z__z-9", "source": "s"}]
+        new_full = new_first + [{"instance_id": "y__y-8", "source": "s"}]
+        for key, payload in (("first_30", new_first),
+                             ("full_ordered_metadata", new_full)):
+            (reg / f"{key}.json").write_bytes(_canon(payload))
+        # Re-record the artifact digests so the per-file checks agree with the
+        # substituted rows: this must NOT be enough.
+        recorded = json.loads(man.read_text(encoding="utf-8"))
+        recorded["artifacts_sha256"]["first_30"] = _row_digest(new_first)
+        recorded["artifacts_sha256"]["full_ordered_metadata"] = _row_digest(new_full)
+        man.write_text(json.dumps(recorded, indent=1, sort_keys=True),
+                       encoding="utf-8")
+
+        report = verify_registration(reg, man)
+        assert report.bound is False
+        failed = [c.key for c in report.checks if not c.match]
+        assert failed == ["registration_content_sha256"]
+
+    def test_first_30_must_be_the_head_even_when_every_digest_matches(
+        self, tmp_path
+    ):
+        """Two artifacts can each be internally consistent and still disagree;
+        only the cross-file comparison sees it."""
+        tail = FULL[1:]
+        man = _write_fixture(
+            tmp_path, first_30=tail, full=FULL, excluded=[],
+            registration_content_sha256=_content_sha(tail, FULL, []),
+            inputs={},
+        )
+        report = verify_registration(tmp_path / "registration", man)
+        assert report.bound is False
+        failed = [c for c in report.checks if not c.match]
+        assert [c.key for c in failed] == ["first_30_prefix"]
+
+    def test_an_unrecomputable_content_digest_fails_closed(self, tmp_path):
+        """Duplicate instance_ids make the registrar refuse (PlanError); the
+        verifier must report that as an error and never return bound."""
+        dup = FULL + [FULL[0]]
+        man = _write_fixture(
+            tmp_path, first_30=FIRST, full=dup, excluded=[],
+            registration_content_sha256="0" * 64, inputs={},
+            counts={"registered": 3, "excluded": 0},
+        )
+        report = verify_registration(tmp_path / "registration", man)
+        assert report.bound is False
+        assert any("content digest could not be recomputed" in e
+                   for e in report.errors), report.to_dict()
 
 
 class TestCountsAreCompared:
