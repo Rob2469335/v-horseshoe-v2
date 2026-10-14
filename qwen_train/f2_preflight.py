@@ -43,6 +43,11 @@ Usage
 ``python -m qwen_train.f2_preflight --json``     JSON only
 ``python -m qwen_train.f2_preflight --attestation PATH``
                                                    verify a supplied Q9 attestation
+``python -m qwen_train.f2_preflight --attestation PATH
+                                  --enforcement-capture PATH``
+                                                   verify it the way the consuming gate
+                                                   does, with the host capture that makes
+                                                   a silently-dropping control visible
 ``python -m qwen_train.f2_preflight --provenance``
                                                    print the conversion-chain verdict
 """
@@ -410,7 +415,10 @@ def _evidence_findings(root: Path) -> list[Finding]:
     ]
 
 
-def _q9_findings(attestation: Path | None) -> list[Finding]:
+def _q9_findings(
+    attestation: Path | None,
+    enforcement_capture: Path | None = None,
+) -> list[Finding]:
     """The two Q9 gates, reconciled from ONE artifact and emitted exactly once.
 
     ``host.egress_enforcement`` (the privileged control) and
@@ -429,6 +437,17 @@ def _q9_findings(attestation: Path | None) -> list[Finding]:
     malformed artifact is ``invalid``; an unverified or unattributable one is
     ``not_established``; only a satisfied-and-bound artifact yields ``verified``
     / ``enforced``. No unrelated gate is touched.
+
+    ``enforcement_capture`` is the HOST-side capture the consuming gate already
+    accepts (``qwen_train.f2_readiness._check_no_egress``, threaded there for
+    exactly this reason): a control that silently drops in the vSwitch produces
+    a timeout no observer can tell from a blackhole, so without the capture this
+    gate would report the S8 architecture's own enforcement as unproven. It is
+    verified, never trusted -- the verifier still requires the capture to hash to
+    the digest the attestation claims, its effective highest-weight rule to
+    derive an explicit ``Deny`` for each literal target, and the negative control
+    to be observed ``permitted``. A capture that cannot be read is reported
+    loudly and leaves both gates blocked rather than being silently ignored.
     """
     if attestation is None:
         return [
@@ -442,7 +461,8 @@ def _q9_findings(attestation: Path | None) -> list[Finding]:
                     "no verified clean-room attestation was supplied to the "
                     "readiness gate",
                     "run `python -m qwen_train.f2_isolation` under the enforced "
-                    "policy and pass the attestation as 'no_egress_attestation'"),
+                    "policy, then pass the result with '--attestation PATH' and "
+                    "the host capture with '--enforcement-capture PATH'"),
         ]
 
     try:
@@ -461,9 +481,33 @@ def _q9_findings(attestation: Path | None) -> list[Finding]:
                     "restore qwen_train/f2_isolation.py"),
         ]
 
+    # The host capture is an EXPLICIT input. If the operator named one and it
+    # cannot be read, that must be reported as its own reason -- silently
+    # falling back to the capture-less contract would hand back a verdict whose
+    # provenance the operator cannot tell from one that used their input.
+    capture_bytes: bytes | None = None
+    if enforcement_capture is not None:
+        try:
+            capture_bytes = Path(enforcement_capture).read_bytes()
+        except OSError as exc:  # noqa: BLE001 - fail closed
+            return [
+                Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                        f"the supplied enforcement capture could not be read "
+                        f"({exc}), so enforcement cannot be established",
+                        "pass the host-side capture with "
+                        "'--enforcement-capture PATH'"),
+                Finding(PRIVILEGED_HOST, "evidence.q9_attestation",
+                        "not_established",
+                        f"enforcement capture unusable: {exc}",
+                        "regenerate the host-side capture for this arm and pass "
+                        "its path with '--enforcement-capture PATH'"),
+            ]
+
     try:
         att = parse_attestation(attestation.read_bytes())
-        verdict = verify_isolation_attestation(att)
+        verdict = verify_isolation_attestation(
+            att, enforcement_capture=capture_bytes
+        )
         identity = assess_enforcement_identity(att)
     except Exception as exc:  # noqa: BLE001 - fail closed
         return [
@@ -547,10 +591,16 @@ def run_preflight(
     *,
     root: Path | None = None,
     attestation: Path | None = None,
+    enforcement_capture: Path | None = None,
     env: dict[str, str] | None = None,
     adapter_controls: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run every preflight check and return a deterministic report.
+
+    ``enforcement_capture`` is the host-side enforcement capture that belongs to
+    ``attestation``. It reaches only the Q9 gate, and only the same way the
+    consuming gate takes it (``qwen_train.f2_readiness``); supplying it can
+    shrink the unproven set, never grow the satisfied one.
 
     ``adapter_controls`` overrides the adapter-forced control values that
     ``env.controls`` resolves against. Like ``env`` it exists so a test can
@@ -569,8 +619,9 @@ def run_preflight(
     findings += _env_control_findings(repo, adapter_controls=adapter_controls)
     findings += _evidence_findings(repo)
     # Q9: the privileged control and its attestation evidence are one gate,
-    # VERIFIED (never trusted) from the single supplied artifact.
-    findings += _q9_findings(attestation)
+    # VERIFIED (never trusted) from the single supplied artifact, with the host
+    # capture the consuming gate also takes.
+    findings += _q9_findings(attestation, enforcement_capture)
     findings += _provenance_findings(repo)
 
     for f in findings:
@@ -692,13 +743,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="emit JSON only")
     ap.add_argument("--attestation", default=None,
                     help="path to a clean-room attestation to verify")
+    ap.add_argument("--enforcement-capture", default=None,
+                    help="host-side enforcement capture that belongs to the "
+                         "supplied attestation (requires --attestation)")
     ap.add_argument("--provenance", action="store_true",
                     help="print only the conversion-chain verdict")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
+    if args.enforcement_capture and not args.attestation:
+        print(
+            "error: --enforcement-capture requires --attestation: a capture is "
+            "binding evidence for one attestation, not a standalone input",
+            file=sys.stderr,
+        )
+        return 2
+
     root = Path(__file__).resolve().parents[1]
     _load_operator_env(root)
     att = Path(args.attestation) if args.attestation else None
+    cap = Path(args.enforcement_capture) if args.enforcement_capture else None
 
     if args.provenance:
         for f in _provenance_findings(root):
@@ -707,7 +770,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"             ACTION: {f.action}")
         return 0
 
-    report = run_preflight(root=root, attestation=att)
+    report = run_preflight(root=root, attestation=att,
+                           enforcement_capture=cap)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

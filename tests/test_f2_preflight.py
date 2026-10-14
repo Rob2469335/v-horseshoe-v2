@@ -458,6 +458,176 @@ class TestAttestationVerification:
         assert by["evidence.q9_attestation"]["status"] == "invalid"
 
 
+class TestEnforcementCapturePassThrough:
+    """Preflight must verify Q9 exactly the way the consuming gate does.
+
+    `qwen_train.f2_readiness._check_no_egress` takes the HOST enforcement
+    capture, because a silently-dropping control (a Hyper-V extended ACL drops
+    in the vSwitch) produces a timeout no observer can tell from a blackhole.
+    `_q9_findings` never passed it, so the command the operator handoff tells
+    the operator to run reported `http/https/tcp/udp` as `unproven` for an
+    attestation whose real verdict has only `ipv6` unproven -- the
+    documentation-vs-implementation contradiction on the gate that decides
+    readiness.
+
+    The capture changes no contract: it must still hash to the digest the
+    attestation claims, its effective highest-weight rule must still derive an
+    explicit `Deny`, the enforcement identity must still be bound, and the gate
+    still cannot clear while any dimension is unproven.
+    """
+
+    @staticmethod
+    def _attestation_and_capture():
+        from qwen_train import f2_isolation as iso
+
+        capture = {
+            "schema": iso.ENFORCEMENT_CAPTURE_SCHEMA,
+            "kind": "hyper-v-extended-acl",
+            "subject": {"vm_name": "F2-S8-VM1", "vm_id": "c" * 32,
+                        "adapter_mac": "00155D56D603"},
+            "captured_at": "2026-10-14T00:00:00Z",
+            "rules": [
+                {"direction": "outbound", "action": "deny", "remote_ip": "0.0.0.0/0",
+                 "protocol": "any", "weight": 350, "stateful": False},
+                {"direction": "outbound", "action": "deny", "remote_ip": "ANY",
+                 "protocol": "any", "weight": 1, "stateful": False},
+            ],
+        }
+
+        def probe(protocol, host, port):
+            if str(host) == "127.0.0.1":
+                return (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1")
+            return ("timeout", "timed out (silently dropped)", "")
+
+        att = iso.run_egress_probes(
+            probe=probe,
+            udp_probe=lambda h, p: ("silent", "sent; no response", ""),
+            loopback_targets=(("127.0.0.1", 1),),
+            required_services=(("channel", "127.0.0.1", 2179),),
+            dns_probe=lambda: ("timeout", "timed out"),
+            interface_inventory=("Ethernet 2",),
+            policy_identity="hyper-v-extended-acl:F2-S8-VM1",
+            policy_sha256="ab" * 32,
+            policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
+            external_targets=(("1.1.1.1", 443), ("93.184.216.34", 80),
+                              ("93.184.216.34", 8080)),
+            udp_target=("8.8.8.8", 53),
+            arm_id="s8-f2-vm1",
+            rollout_id="s8-pilot",
+            workspace="C:/f2_s8",
+            # The real S8 guest: link-local IPv6 only, so the dimension is
+            # `unavailable` and stays unproven -- the one thing the capture
+            # cannot and must not stand in for.
+            ipv6_available=lambda: False,
+            enforcement_scope="vm",
+            executing_user="DESKTOP-H6A0HQS\\rob3",
+            interpreter_path=r"C:\f2_tooling\python\python.exe",
+            interpreter_sha256="cd" * 32,
+            enforcement_capture_sha256=iso.canonical_enforcement_digest(capture),
+        )
+        return att, capture
+
+    def _paths(self, tmp_path):
+        att, capture = self._attestation_and_capture()
+        att_path = tmp_path / "att.json"
+        att_path.write_bytes(iso.render_attestation(att))
+        capture_path = tmp_path / "capture.json"
+        capture_path.write_text(json.dumps(capture), encoding="utf-8")
+        return att_path, capture_path
+
+    @staticmethod
+    def _by_id(report):
+        return {f["id"]: f for f in report["findings"]}
+
+    def _unproven(self, report):
+        import re
+
+        detail = self._by_id(report)["evidence.q9_attestation"]["detail"]
+        m = re.search(r"UNPROVEN: \[([^\]]*)\]", detail)
+        assert m, detail
+        return m.group(1).replace("'", "").split(", ")
+
+    def test_without_the_capture_the_drop_dimensions_stay_unproven(self, tmp_path):
+        """The defect this wiring fixes, pinned as a regression."""
+        att_path, _ = self._paths(tmp_path)
+        rep = pf.run_preflight(attestation=att_path)
+        assert {"http", "https", "tcp", "udp"} <= set(self._unproven(rep))
+
+    def test_with_the_capture_only_ipv6_remains_and_the_gate_still_blocks(
+        self, tmp_path
+    ):
+        att_path, capture_path = self._paths(tmp_path)
+        rep = pf.run_preflight(attestation=att_path,
+                               enforcement_capture=capture_path)
+        by = self._by_id(rep)
+        detail = by["evidence.q9_attestation"]["detail"]
+        # The unproven set shrinks to the one thing only an owner decision can
+        # resolve; the capture itself is verified, not assumed.
+        assert self._unproven(rep) == ["ipv6"]
+        assert "enforcement capture accepted" in detail
+        # Narrowing the REASON must not clear the gate: no dimension may stay
+        # unproven, so both Q9 findings remain blocking.
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["evidence.q9_attestation"]["category"] == pf.PRIVILEGED_HOST
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert by["host.egress_enforcement"]["category"] == pf.PRIVILEGED_HOST
+        assert rep["result"] == "BLOCKED"
+
+    def test_only_the_two_q9_findings_are_affected(self, tmp_path):
+        att_path, capture_path = self._paths(tmp_path)
+        without = self._by_id(pf.run_preflight(attestation=att_path))
+        with_cap = self._by_id(
+            pf.run_preflight(attestation=att_path, enforcement_capture=capture_path)
+        )
+        changed = {k for k in with_cap if with_cap[k] != without.get(k)}
+        assert changed <= {"host.egress_enforcement", "evidence.q9_attestation"}
+        # Every other gate keeps its own status and category.
+        for k in set(without) - {"host.egress_enforcement",
+                                 "evidence.q9_attestation"}:
+            assert with_cap[k] == without[k]
+
+    def test_a_capture_that_does_not_match_the_claim_changes_nothing(self, tmp_path):
+        """A substituted capture must not be able to unlock the gate."""
+        att, capture = self._attestation_and_capture()
+        att_path = tmp_path / "att.json"
+        att_path.write_bytes(iso.render_attestation(att))
+        other = dict(capture, rules=[{"direction": "outbound", "action": "allow",
+                                      "remote_ip": "0.0.0.0/0", "protocol": "any",
+                                      "weight": 999, "stateful": True}])
+        capture_path = tmp_path / "other.json"
+        capture_path.write_text(json.dumps(other), encoding="utf-8")
+        rep = pf.run_preflight(attestation=att_path, enforcement_capture=capture_path)
+        assert {"http", "https", "tcp", "udp"} <= set(self._unproven(rep))
+        by = self._by_id(rep)
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+
+    def test_an_unreadable_capture_is_reported_not_silently_ignored(self, tmp_path):
+        att_path, _ = self._paths(tmp_path)
+        missing = tmp_path / "never-written.json"
+        rep = pf.run_preflight(attestation=att_path, enforcement_capture=missing)
+        by = self._by_id(rep)
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert "could not be read" in by["host.egress_enforcement"]["detail"]
+        assert "capture unusable" in by["evidence.q9_attestation"]["detail"]
+        # An input the operator named must not be silently downgraded to
+        # "no capture given": the attestation itself is fine here.
+        assert by["evidence.q9_attestation"]["status"] != "invalid"
+
+    def test_a_capture_without_an_attestation_is_a_usage_error(self, capsys):
+        assert pf.main(["--enforcement-capture", "capture.json"]) == 2
+        assert "--enforcement-capture requires --attestation" in capsys.readouterr().err
+
+    def test_capture_without_attestation_leaves_the_absent_evidence_block(
+        self, tmp_path
+    ):
+        _, capture_path = self._paths(tmp_path)
+        rep = pf.run_preflight(enforcement_capture=capture_path)
+        by = self._by_id(rep)
+        assert by["evidence.q9_attestation"]["status"] == "not_supplied"
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+
+
 class TestRendering:
     def test_render_includes_every_finding(self, clean_env):
         rep = pf.run_preflight()
