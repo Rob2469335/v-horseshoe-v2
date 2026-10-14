@@ -1,10 +1,10 @@
 # F2 / S8 — Offline-Evaluation Isolation: Finding, Smallest Remediation, Verification Plan
 
-**Status: READ-ONLY INVESTIGATION + IMPLEMENTATION PLAN — NOT APPLIED.**
-No VM, NAT, switch, firewall, ACL, route, integration service, credential, or
-experimental state was changed. No VM was started; no guest session was opened; no
-network probe was repeated. This document does not grant authorization and does
-not treat the reconciliation document as authority.
+**Status: APPLIED (ACL) + VERIFIED (controls) — 2026-10-13.** The additive
+outbound deny of §6 was authorized and applied by the operator; the §7 procedure
+was executed. See §10 for what was measured, what is established, and what
+remains. Sections 1–9 are retained unchanged as the record of the read-only
+investigation that preceded the change.
 
 **Prepared:** 2026-10-13 from live read-only host inspection plus existing
 recorded evidence.
@@ -187,3 +187,53 @@ No VM lifecycle change; no ACL/NAT/firewall/route/switch/forwarding change; no
 guest session; no credential use; no tooling delivery; no network probe; no Q9
 attestation; no S8 base/gold execution; no Q10/Q12/Q13; no confirmatory F2; no
 receipt-key operation. Every such action is `REQUIRES AUTHORIZATION`.
+
+---
+
+## 10. Results (2026-10-13, applied and measured)
+
+**ACL change (§6), applied exactly as recommended.** One additive rule only:
+
+    Outbound | Deny | RemoteIPAddress 0.0.0.0/0 | Protocol ANY | Weight 350 | Stateful False
+
+Read back twice: 12 rules. Diff against the 11-rule baseline: **1 added,
+0 removed, 0 modified**, weight 350 sitting between the public allows (300/301)
+and the gateway allows (900/901), so the deny outranks the public allow while
+`10.73.0.1` is preserved. NAT, switch, routes, forwarding, host firewall
+profiles and integration services compared field-by-field before/after: all
+unchanged. Hashes in
+`C:\Users\rober\F2_EVIDENCE\s8\offline_iso_2026-10-13\`.
+
+**Procedure (§7), executed.** Positive control: PowerShell Direct opened,
+guest principal `DESKTOP-H6A0HQS\rob3`. Mandatory loopback control: a real
+`TcpListener` bound to `127.0.0.1:1` for the whole run — `permitted`. Negative
+controls: `1.1.1.1:443`, `8.8.8.8:443`, `93.184.216.34:80`, `93.184.216.34:8080`
+all `timeout`; UDP `8.8.8.8:53` `silent` (one real datagram); DNS declared but
+not used as proof. Host independently still reaches `1.1.1.1:443` and
+`8.8.8.8:443`, so the guest's timeouts are guest-specific.
+
+**Verifier reconciliation.** A silently-dropping ACL produces `timeout`, which
+the frozen contract classifies `unknown` and can never satisfy — the §7
+"expected `satisfied=true`" was unreachable by construction for this enforcement
+mechanism. Fixed additively (§4 of the owner's 2026-10-13 instruction): a
+denied-required dimension observed only as `timeout`/`silent` is satisfied only
+when the HOST supplies the live ACL capture, it hashes to the digest the
+attestation claims, its effective rule for the literal target is an explicit
+`Deny`, and the negative control is `permitted`. Such dimensions are reported in
+`enforcement_backed_dimensions`, never in `satisfied_dimensions`. See
+`tests/test_f2_isolation_enforcement_backed.py` (40 tests).
+
+**Outcome.** `http`/`https`/`tcp`/`udp` = enforcement-backed; `proxy` and
+`alternate_interface` = policy-asserted under the identified Hyper-V ACL;
+`loopback` and `required_service` = observed `permitted`; **no dimension failed**.
+`ipv6` is `unavailable` — the guest holds only link-local `fe80::/64` and has no
+IPv6 default route (the host has no global IPv6 either), so there is no IPv6
+channel to test. All seven `ACCEPTANCE` criteria of
+`EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md` §NETWORK are met.
+
+**Limitation.** The frozen verifier still returns `satisfied=false`, because it
+counts `unavailable` as `unproven`, while that authority states a dimension with
+no global IPv6 is *"vacuously satisfied, but visibly not proven"*. The verifier
+was **not** changed to close this gap: altering a fail-closed control to make a
+gate pass is prohibited by the governing instruction. Recorded as an open policy
+decision, not resolved unilaterally.

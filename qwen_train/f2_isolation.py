@@ -34,10 +34,39 @@ Honesty properties this module enforces
 * DNS behaviour must be declared explicitly; it is never inferred.
 * If IPv6 is not configured on the host, that dimension is ``unavailable`` with a
   reason -- it is not silently counted as ``denied``.
+
+Enforcement-backed denial (added 2026-10-13)
+--------------------------------------------
+A packet filter that DROPs rather than REJECTs is a legitimate denial
+mechanism, and the probe observer cannot tell a dropped SYN from a blackhole
+address: both look like a timeout.  Until 2026-10-13 the contract therefore
+demanded a ``WSAEACCES``/RST refusal that a Hyper-V VM extended ACL (which
+silently drops in the vSwitch) can never produce, so an *correctly enforced*
+ACL boundary could never be attested.  That was a defect in the procedure, not
+in the enforcement.
+
+The fix is deliberately NOT "a timeout is a denial".  Three things must all
+hold before a timed-out denied-required dimension is satisfied:
+
+1. the attestation claims a digest (``enforcement_capture_sha256``) of the
+   enforcement artifact the observation was made under;
+2. the HOST-side verifier is handed that capture independently and it hashes to
+   the claimed digest -- a guest can never supply its own enforcement;
+3. the capture's own rules *derive* the denial: the highest-weight matching
+   outbound rule for the dimension's literal target must be an explicit
+   ``Deny``.  A deny buried beneath a higher-weight allow does not count.
+
+A dimension satisfied this way is reported in
+``VerificationVerdict.enforcement_backed_dimensions`` -- never in
+``satisfied_dimensions`` -- so an observer of the verdict can always tell an
+observed refusal from an enforcement-attributed drop.  The mandatory
+negative control (a real loopback listener) must still be observed ``permitted``,
+which proves the probe harness can see a reachable path.
 """
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import platform
 import socket
@@ -54,6 +83,7 @@ __all__ = [
     "OUTCOME_UNAVAILABLE",
     "DENIED_REQUIRED",
     "PERMITTED_REQUIRED",
+    "ENFORCEMENT_CAPTURE_SCHEMA",
     "IsolationAttestation",
     "ProbeResult",
     "VerificationVerdict",
@@ -64,6 +94,10 @@ __all__ = [
     "render_attestation",
     "parse_attestation",
     "attestation_digest",
+    "canonical_enforcement_digest",
+    "parse_enforcement_capture",
+    "effective_outbound_rule",
+    "enforcement_denies",
 ]
 
 #: Every dimension the F2 clean-room contract must speak to. ``denied_required``
@@ -114,7 +148,16 @@ _UNREACHABLE_WINERRORS = frozenset({10051, 10065})  # WSAENETUNREACH / WSAEHOSTU
 
 @dataclass(frozen=True)
 class ProbeResult:
-    """One observed connectivity attempt."""
+    """One observed connectivity attempt.
+
+    ``outcome`` is the *classified* result (``permitted`` / ``denied`` /
+    ``unknown`` / ``unavailable``).  ``raw_outcome`` preserves what the probe
+    actually saw before classification -- ``timeout``, ``silent``,
+    ``unreachable``, ``icmp_unreachable``, ``dns_unresolved``, ``error`` --
+    so the evidence can distinguish a silent packet drop from an unexecuted
+    control, an absent route, and a name-resolution failure.  A verifier that
+    looked only at ``outcome`` could not.
+    """
 
     dimension: str
     target: str
@@ -125,6 +168,7 @@ class ProbeResult:
     elapsed_ms: int = 0
     pid: int = 0
     at: float = 0.0
+    raw_outcome: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -137,6 +181,7 @@ class ProbeResult:
             "elapsed_ms": self.elapsed_ms,
             "pid": self.pid,
             "at": round(float(self.at), 3),
+            "raw_outcome": self.raw_outcome,
         }
 
 
@@ -169,6 +214,14 @@ class IsolationAttestation:
     interpreter_sha256: str = ""
     spawn_image_inventory: tuple[str, ...] = ()
     enforcement_scope: str = ""
+    # --- enforcement-backed denial (added 2026-10-13) ---------------------
+    # A claim, not evidence: the SHA-256 of the HOST-captured enforcement
+    # artifact (see ``ENFORCEMENT_CAPTURE_SCHEMA``) this observation was made
+    # under.  Empty means no enforcement artifact was bound, and the verifier
+    # then falls back to the strict observed-refusal contract.  The guest
+    # cannot supply the capture itself -- only this digest -- so it can never
+    # assert its own enforcement.
+    enforcement_capture_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,6 +241,7 @@ class IsolationAttestation:
             "interpreter_sha256": self.interpreter_sha256,
             "spawn_image_inventory": list(self.spawn_image_inventory),
             "enforcement_scope": self.enforcement_scope,
+            "enforcement_capture_sha256": self.enforcement_capture_sha256,
             "policy_assertions": [
                 {"dimension": d, "assertion": a, "source": "enforced_policy"}
                 for d, a in self.policy_assertions
@@ -197,7 +251,20 @@ class IsolationAttestation:
         }
 
 
+#: The schema string this module emits.  It is deliberately UNCHANGED by the
+#: 2026-10-13 additions: every new field is optional with a default, so an
+#: older artifact still parses (and an older parser still reads a newer
+#: artifact, ignoring the fields it does not know).
 SCHEMA = "f2_isolation_attestation_v1"
+
+#: Schema of the host-captured enforcement artifact that can back a silent
+#: drop.  Supplied by the HOST-side verifier, never by the probed guest.
+ENFORCEMENT_CAPTURE_SCHEMA = "f2_enforcement_capture_v1"
+
+#: Kinds of enforcement capture this repository knows how to *derive coverage
+#: from*.  An unrecognised kind is rejected: coverage must be re-derived from
+#: real rules, never trusted from a label.
+SUPPORTED_ENFORCEMENT_KINDS = ("hyper-v-extended-acl",)
 
 
 def default_egress_probe(protocol: str, host: str, port: int) -> tuple[str, str, str]:
@@ -388,6 +455,176 @@ def policy_digest_matches(
     return bool(att.policy_sha256) and att.policy_sha256 == canonical_policy_digest(capture)
 
 
+# --------------------------------------------------------------------------
+# Enforcement capture: host-side artifact whose OWN rules derive a denial.
+# --------------------------------------------------------------------------
+def canonical_enforcement_digest(capture: Mapping[str, Any]) -> str:
+    """Deterministic SHA-256 of an enforcement capture, same convention as
+    :func:`canonical_policy_digest`.
+
+    Identifies a *capture*; says nothing about whether it was enforced.  The
+    enforcement claim is only accepted when the verifier is handed the capture
+    itself and re-derives coverage from its rules.
+    """
+    blob = json.dumps(capture, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
+
+
+def parse_enforcement_capture(capture: Mapping[str, Any] | bytes) -> dict[str, Any]:
+    """Validate an enforcement capture.  Raises ``ValueError`` on anything
+    that could not be used to *derive* coverage -- a label is never enough."""
+    if isinstance(capture, (bytes, bytearray)):
+        try:
+            capture = json.loads(bytes(capture).decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            raise ValueError(f"enforcement capture is not valid JSON: {exc}") from exc
+    if not isinstance(capture, Mapping):
+        raise ValueError("enforcement capture must be a JSON object")
+    if capture.get("schema") != ENFORCEMENT_CAPTURE_SCHEMA:
+        raise ValueError(
+            f"enforcement capture schema {capture.get('schema')!r} != "
+            f"{ENFORCEMENT_CAPTURE_SCHEMA!r}"
+        )
+    kind = str(capture.get("kind") or "")
+    if kind not in SUPPORTED_ENFORCEMENT_KINDS:
+        raise ValueError(
+            f"enforcement kind {kind!r} is not one this repository can derive "
+            f"coverage from: {SUPPORTED_ENFORCEMENT_KINDS}"
+        )
+    subject = capture.get("subject")
+    if not isinstance(subject, Mapping):
+        raise ValueError("enforcement capture is missing its subject")
+    for field in ("vm_name", "vm_id", "adapter_mac"):
+        if not str(subject.get(field) or "").strip():
+            raise ValueError(f"enforcement capture subject.{field} is required")
+    rules = capture.get("rules")
+    if not isinstance(rules, list) or not rules:
+        raise ValueError("enforcement capture carries no rules")
+    normalised: list[dict[str, Any]] = []
+    for index, rule in enumerate(rules):
+        if not isinstance(rule, Mapping):
+            raise ValueError(f"enforcement rule {index} is not an object")
+        try:
+            weight = int(rule["weight"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"enforcement rule {index} has no integer weight") from exc
+        direction = str(rule.get("direction") or "").strip().lower()
+        action = str(rule.get("action") or "").strip().lower()
+        remote = str(rule.get("remote_ip") or "").strip()
+        if direction not in ("inbound", "outbound"):
+            raise ValueError(f"enforcement rule {index} has direction {direction!r}")
+        if action not in ("allow", "deny"):
+            raise ValueError(f"enforcement rule {index} has action {action!r}")
+        if not remote:
+            raise ValueError(f"enforcement rule {index} has no remote_ip")
+        normalised.append(
+            {
+                "direction": direction,
+                "action": action,
+                "remote_ip": remote,
+                "protocol": str(rule.get("protocol") or "any").strip().lower(),
+                "weight": weight,
+                "stateful": bool(rule.get("stateful")),
+            }
+        )
+    # The subject is carried through VERBATIM (beyond the three required
+    # fields) so that informative extras -- adapter name, switch -- survive.
+    # Coverage is derived from the normalised rules, never from the extras.
+    return {
+        "schema": ENFORCEMENT_CAPTURE_SCHEMA,
+        "kind": kind,
+        "subject": {k: str(v) for k, v in subject.items()},
+        "captured_at": str(capture.get("captured_at") or ""),
+        "rules": normalised,
+    }
+
+
+def _ip_in_spec(spec: str, address: "ipaddress._BaseAddress") -> bool:
+    """Does a rule's remote-address spec cover ``address``?
+
+    Understands ``ANY`` (every address), a host address, a CIDR subnet, and
+    the ``0.0.0.0/0`` / ``::/0`` all-address forms.  An unparsable spec covers
+    nothing -- an unreadable rule must never be counted as coverage.
+    """
+    text = str(spec or "").strip()
+    if not text:
+        return False
+    if text.upper() == "ANY":
+        return True
+    try:
+        if "/" in text:
+            return address in ipaddress.ip_network(text, strict=False)
+        return address == ipaddress.ip_address(text)
+    except ValueError:
+        return False
+
+
+#: Raw probe outcomes that mean "the packet produced no observable answer".
+#: These are the ONLY outcomes an enforcement-backed denial may replace, and
+#: only when they are the dimension's sole outcome.
+_AMBIGUOUS_RAW_OUTCOMES = frozenset({"timeout", "silent"})
+
+
+def effective_outbound_rule(
+    capture: Mapping[str, Any], address: str, protocol: str
+) -> dict[str, Any] | None:
+    """The single highest-weight outbound rule matching ``address``/``protocol``.
+
+    Returns ``None`` when nothing matches or when two matching rules tie on
+    weight -- an ambiguous ordering cannot establish what wins, so it must not
+    be used to attribute a denial.
+    """
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    proto = str(protocol or "tcp").strip().lower()
+    matched = [
+        rule
+        for rule in capture["rules"]
+        if rule["direction"] == "outbound"
+        and _ip_in_spec(rule["remote_ip"], parsed)
+        and rule["protocol"] in ("any", proto)
+    ]
+    if not matched:
+        return None
+    best = max(r["weight"] for r in matched)
+    winners = [r for r in matched if r["weight"] == best]
+    return winners[0] if len(winners) == 1 else None
+
+
+def enforcement_denies(
+    capture: Mapping[str, Any], address: str, protocol: str
+) -> bool:
+    """True iff the capture's EFFECTIVE rule for this target is an explicit
+    ``Deny``.  A deny that a higher-weight allow outranks is not coverage."""
+    rule = effective_outbound_rule(capture, address, protocol)
+    return bool(rule and rule["action"] == "deny")
+
+
+def _dimension_targets_addressed(results: Sequence[ProbeResult], dim: str) -> list[tuple[str, str]]:
+    """Literal ``(address, protocol)`` pairs a dimension was probed with.
+
+    A target that is not a literal address (a DNS name) cannot be matched
+    against a rule, so it makes the dimension un-backable -- correctly, since
+    name-dependent evidence is exactly what this contract refuses to trust.
+    """
+    pairs: list[tuple[str, str]] = []
+    for probe in results:
+        if probe.dimension != dim:
+            continue
+        target = str(probe.target)
+        address = target.rsplit(":", 1)[0] if ":" in target else target
+        address = address.strip("[]")
+        try:
+            ipaddress.ip_address(address)
+        except ValueError:
+            return []
+        proto = "tcp" if str(probe.protocol).lower() in ("tcp", "tcp6", "http", "https") else "udp"
+        pairs.append((address, proto))
+    return pairs
+
+
 #: Denied-required external categories, keyed by destination port. A target's
 #: port decides which acceptance dimension its observation satisfies.
 _EXTERNAL_DIM_BY_PORT = {80: "http", 443: "https"}
@@ -427,6 +664,7 @@ def run_egress_probes(
     interpreter_sha256: str = "",
     spawn_image_inventory: Sequence[str] = (),
     enforcement_scope: str = "",
+    enforcement_capture_sha256: str = "",
 ) -> IsolationAttestation:
     """Observe every required dimension and build the attestation record.
 
@@ -442,7 +680,7 @@ def run_egress_probes(
             ProbeResult(
                 dimension=dim, target=target, protocol=proto,
                 outcome=_classify(dim, raw), detail=detail, local_address=local,
-                pid=pid, at=time.time(),
+                pid=pid, at=time.time(), raw_outcome=raw,
             )
         )
 
@@ -552,6 +790,7 @@ def run_egress_probes(
         interpreter_sha256=interpreter_sha256,
         spawn_image_inventory=tuple(spawn_image_inventory),
         enforcement_scope=enforcement_scope,
+        enforcement_capture_sha256=str(enforcement_capture_sha256 or ""),
         policy_assertions=tuple(
             sorted((str(k), str(v)) for k, v in (policy_assertions or {}).items())
         ),
@@ -595,6 +834,12 @@ class VerificationVerdict:
     unavailable_dimensions: tuple[str, ...]
     detail: str
     attestation_digest: str = ""
+    # Dimensions whose ONLY observation was an ambiguous drop, satisfied by
+    # re-deriving an explicit Deny from a host-supplied enforcement capture.
+    # Kept apart from ``satisfied_dimensions`` so a reader can always tell an
+    # observed refusal from an enforcement-attributed silent drop.
+    enforcement_backed_dimensions: tuple[str, ...] = ()
+    enforcement_capture_digest: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -604,6 +849,8 @@ class VerificationVerdict:
             "unproven_dimensions": list(self.unproven_dimensions),
             "failed_dimensions": list(self.failed_dimensions),
             "unavailable_dimensions": list(self.unavailable_dimensions),
+            "enforcement_backed_dimensions": list(self.enforcement_backed_dimensions),
+            "enforcement_capture_digest": self.enforcement_capture_digest,
             "detail": self.detail,
             "attestation_digest": self.attestation_digest,
         }
@@ -611,14 +858,24 @@ class VerificationVerdict:
     def as_readiness_mapping(self) -> dict[str, str]:
         """Project onto the readiness checker's seven-string contract.
 
-        Only genuinely ``denied`` dimensions become ``"denied"``. Anything
+        Only genuinely ``denied`` dimensions become ``"denied"``.  Anything
         unobserved or unavailable becomes ``"unknown"``, which the readiness
         checker already treats as a failure -- so an incomplete observation can
         never be laundered into a pass.
+
+        Enforcement-backed dimensions also project to ``"denied"``, because the
+        capture derived an explicit Deny for them.  They are NOT silent about
+        it: ``enforcement_backed_dimensions`` names them separately, and a
+        caller that must distinguish the two kinds of evidence reads that list
+        rather than this lossy projection.
         """
         out: dict[str, str] = {}
         for dim in ("http", "https", "tcp", "udp", "ipv6", "proxy"):
-            if dim in self.satisfied_dimensions or dim in self.policy_declared_dimensions:
+            if (
+                dim in self.satisfied_dimensions
+                or dim in self.policy_declared_dimensions
+                or dim in self.enforcement_backed_dimensions
+            ):
                 out[dim] = OUTCOME_DENIED
             elif dim in self.unavailable_dimensions:
                 out[dim] = OUTCOME_UNAVAILABLE
@@ -628,6 +885,7 @@ class VerificationVerdict:
             OUTCOME_PERMITTED if "loopback" in self.satisfied_dimensions else OUTCOME_UNKNOWN
         )
         return out
+
 
 
 def _digest_of(att: IsolationAttestation) -> str:
@@ -739,12 +997,23 @@ def verify_isolation_attestation(
     att: IsolationAttestation | Mapping[str, Any],
     *,
     required_services: Sequence[str] = (),
+    enforcement_capture: Mapping[str, Any] | bytes | None = None,
 ) -> VerificationVerdict:
     """Recompute the isolation verdict from the recorded evidence.
 
-    Fails closed. A dimension is ``satisfied`` only when a probe for it was
-    actually recorded with the required outcome. Absence is ``unproven``, never
+    Fails closed.  A dimension is ``satisfied`` only when a probe for it was
+    actually recorded with the required outcome.  Absence is ``unproven``, never
     ``denied``.
+
+    ``enforcement_capture`` is HOST-side evidence, supplied by the caller that
+    independently read the enforcement artifact (never by the probed guest).
+    When present and well-formed, a denied-required dimension whose sole
+    observation is an ambiguous drop (``timeout``/``silent``) is satisfied only
+    if the capture's own highest-weight matching outbound rule is an explicit
+    ``Deny`` for that dimension's literal target, the attestation claims this
+    exact capture's digest, and the capture is bound to a recognised ``vm``
+    scope.  Such dimensions are reported in
+    ``enforcement_backed_dimensions`` and never in ``satisfied_dimensions``.
     """
     if isinstance(att, Mapping):
         att = parse_attestation(att)
@@ -759,11 +1028,74 @@ def verify_isolation_attestation(
     unproven: list[str] = []
     failed: list[str] = []
     unavailable: list[str] = []
+    enforcement_backed: list[str] = []
+    enforcement_digest = ""
 
     # Assertions carried by the ENFORCED policy. These are recorded distinctly
     # from probe observations so a reader can always tell which dimensions were
     # measured and which were asserted by the control that enforces the boundary.
     asserted = dict(att.policy_assertions)
+
+    # Enforcement-backed denial: accepted only when the HOST hands over the
+    # capture, the capture hashes to the digest the attestation CLAIMED, and
+    # the capture is bound to a recognised vm scope. A guest that supplied its
+    # own capture (impossible through this API) or that claimed a digest that
+    # does not match gets the strict contract instead.
+    enforcement: dict[str, Any] | None = None
+    if enforcement_capture is not None:
+        # The digest must bind the capture EXACTLY as the host supplied it --
+        # not a normalised copy -- or a legitimate capture carrying informative
+        # extras (adapter name, switch) would never match its own claim.
+        if isinstance(enforcement_capture, (bytes, bytearray)):
+            try:
+                supplied: Any = json.loads(bytes(enforcement_capture).decode("utf-8"))
+            except Exception:  # noqa: BLE001 - parse_enforcement_capture reports it
+                supplied = enforcement_capture
+        else:
+            supplied = enforcement_capture
+        try:
+            parsed_capture = parse_enforcement_capture(enforcement_capture)
+        except ValueError as exc:
+            unproven.append("enforcement_capture")
+            enforced_reason = f"enforcement capture rejected: {exc}"
+        else:
+            claimed = str(att.enforcement_capture_sha256 or "")
+            recomputed = (
+                canonical_enforcement_digest(supplied)
+                if isinstance(supplied, Mapping)
+                else ""
+            )
+            if not claimed:
+                enforced_reason = (
+                    "attestation claims no enforcement capture digest, so a "
+                    "host-supplied capture cannot be attributed to this observation"
+                )
+                unproven.append("enforcement_capture")
+            elif claimed != recomputed:
+                enforced_reason = (
+                    f"attestation claims enforcement digest {claimed[:12]}... but the "
+                    f"supplied capture hashes to {recomputed[:12]}..."
+                )
+                unproven.append("enforcement_capture")
+            elif att.enforcement_scope.strip() != "vm":
+                enforced_reason = (
+                    f"enforcement_scope {att.enforcement_scope!r} is not 'vm'; a "
+                    "drop-attributed denial requires a vm-scoped control"
+                )
+                unproven.append("enforcement_capture")
+            else:
+                enforcement = parsed_capture
+                enforcement_digest = recomputed
+                enforced_reason = (
+                    f"enforcement capture accepted ({parsed_capture['kind']}, "
+                    f"{len(parsed_capture['rules'])} rules, subject "
+                    f"{parsed_capture['subject']['vm_name']})"
+                )
+    else:
+        enforced_reason = (
+            "no host-supplied enforcement capture; a denied-required dimension "
+            "must be observed as a refusal"
+        )
 
     for dim in sorted(DENIED_REQUIRED | PERMITTED_REQUIRED):
         results = by_dim.get(dim, [])
@@ -796,6 +1128,31 @@ def verify_isolation_attestation(
                 declared.append(dim)
                 continue
 
+        # Enforcement-backed denial. Permitted only for a denied-required
+        # dimension whose SOLE observation is an ambiguous drop, and only when
+        # the capture's own rules derive an explicit Deny for every literal
+        # target that dimension was probed with.
+        if (
+            dim in DENIED_REQUIRED
+            and enforcement is not None
+            and not observed_any
+            and results
+            and outcomes == {OUTCOME_UNKNOWN}
+            # Only a DROP-SHAPED observation may be attributed to enforcement.
+            # ``unreachable`` has a specific non-enforcement explanation (no
+            # route: the packet never reached an enforcement point), and
+            # ``dns_unresolved``/``error`` name their own alternatives, so none
+            # of them may be laundered into an enforcement-attributed denial.
+            and {p.raw_outcome for p in results} <= _AMBIGUOUS_RAW_OUTCOMES
+            and all(p.raw_outcome for p in results)
+        ):
+            pairs = _dimension_targets_addressed(results, dim)
+            if pairs and all(
+                enforcement_denies(enforcement, address, proto) for address, proto in pairs
+            ):
+                enforcement_backed.append(dim)
+                continue
+
         if results and outcomes <= {OUTCOME_UNAVAILABLE}:
             unavailable.append(dim)
         unproven.append(dim)
@@ -807,6 +1164,8 @@ def verify_isolation_attestation(
 
     # Negative control: if the probe methodology cannot demonstrate a reachable
     # destination, a "denied" reading is indistinguishable from a broken probe.
+    # This gate is UNAFFECTED by enforcement-backed denial: a capture can never
+    # stand in for evidence that the probe harness still works.
     if att.negative_control != OUTCOME_PERMITTED:
         unproven.append("negative_control")
 
@@ -819,17 +1178,30 @@ def verify_isolation_attestation(
 
     ok = not unproven and not failed
     if ok:
-        detail = (
-            f"{len(satisfied)} required dimensions observed and satisfied, "
-            f"{len(declared)} asserted by the identified enforced policy; "
-            f"negative control reachable; bound to {att.arm_id}/{att.rollout_id}"
-        )
+        parts = [
+            f"{len(satisfied)} required dimensions observed and satisfied",
+            f"{len(declared)} asserted by the identified enforced policy",
+        ]
+        if enforcement_backed:
+            parts.append(
+                f"{len(enforcement_backed)} satisfied by enforcement-backed silent "
+                f"drop ({enforcement_reason_short(enforcement_backed)}; "
+                f"capture {enforcement_digest[:12]}...)"
+            )
+        parts.append("negative control reachable")
+        parts.append(f"bound to {att.arm_id}/{att.rollout_id}")
+        detail = ", ".join(parts)
     else:
         parts = []
         if failed:
             parts.append(f"FAILED (egress reachable): {failed}")
         if unproven:
             parts.append(f"UNPROVEN: {unproven}")
+        if enforcement_backed:
+            parts.append(
+                f"policy-enforced silent drop (not observed): {enforcement_backed} "
+                f"-- {enforced_reason}"
+            )
         if declared:
             parts.append(f"policy-asserted (not observed): {declared}")
         if unavailable:
@@ -843,12 +1215,20 @@ def verify_isolation_attestation(
         unproven_dimensions=tuple(unproven),
         failed_dimensions=tuple(failed),
         unavailable_dimensions=tuple(unavailable),
+        enforcement_backed_dimensions=tuple(enforcement_backed),
+        enforcement_capture_digest=enforcement_digest,
         detail=detail,
         attestation_digest=digest,
     )
 
 
+def enforcement_reason_short(dims: Sequence[str]) -> str:
+    """Names the raw observation class behind an enforcement-backed dimension."""
+    return f"{', '.join(sorted(dims))} observed only as timeout/silent"
+
+
 def build_attestation(**kwargs: Any) -> IsolationAttestation:
+
     return run_egress_probes(**kwargs)
 
 
@@ -881,6 +1261,7 @@ def parse_attestation(data: Mapping[str, Any] | bytes) -> IsolationAttestation:
                 elapsed_ms=int(p.get("elapsed_ms", 0)),
                 pid=int(p.get("pid", 0)),
                 at=float(p.get("at", 0.0)),
+                raw_outcome=str(p.get("raw_outcome", "")),
             )
             for p in data.get("probes", [])
         )
@@ -904,6 +1285,7 @@ def parse_attestation(data: Mapping[str, Any] | bytes) -> IsolationAttestation:
         interpreter_sha256=str(data.get("interpreter_sha256", "")),
         spawn_image_inventory=tuple(data.get("spawn_image_inventory", ())),
         enforcement_scope=str(data.get("enforcement_scope", "")),
+        enforcement_capture_sha256=str(data.get("enforcement_capture_sha256", "")),
         policy_assertions=tuple(
             (str(a["dimension"]), str(a["assertion"]))
             for a in data.get("policy_assertions", ())
@@ -985,6 +1367,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--udp", default="8.8.8.8:53", metavar="HOST:PORT",
                     help="the UDP destination to send one real datagram to "
                          "(default 8.8.8.8:53); use a literal address")
+    ap.add_argument("--enforcement-digest", default="", metavar="SHA256",
+                    help="SHA-256 of the HOST-captured enforcement artifact this "
+                         "observation is made under. It is a CLAIM recorded in the "
+                         "attestation; only the host-side verifier, which holds the "
+                         "capture itself, can turn it into an enforcement-backed "
+                         "denial. Omit to keep the strict observed-refusal contract.")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
     assertions: dict[str, str] = {}
@@ -1022,15 +1410,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     def dns_probe() -> tuple[str, str]:
-        raw, detail, _ = default_egress_probe("dns", "8.8.8.8", 53)
-        return raw, detail
+        # NOT ``default_egress_probe``: a UDP ``connect()`` only assigns a
+        # default peer and transmits nothing, so it reports ``permitted`` for
+        # any routable address even when every datagram is dropped.  That
+        # recorded a DNS reachability the probe never demonstrated.  A real
+        # datagram is the only honest observation.
+        return default_udp_probe("8.8.8.8", 53)[:2]
 
     def ipv6_available() -> bool:
+        # NOT ``getaddrinfo`` on a literal: that succeeds whether or not this
+        # host has any IPv6 path, so it reported "IPv6 available" on a guest
+        # holding only a link-local address and no default route, and the probe
+        # then recorded a misleading ``unreachable``.  The dimension is about a
+        # configured global IPv6 ADDRESS -- the thing an egress leak would
+        # actually leave through.  Absent one, the dimension is `unavailable`,
+        # which the contract already refuses to count as `denied`.
+        from ipaddress import IPv6Address
+
         try:
-            infos = socket.getaddrinfo("2606:4700:4700::1111", 443, socket.AF_INET6)
-        except Exception:  # noqa: BLE001
+            infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET6)
+        except Exception:  # noqa: BLE001 - fail closed: no IPv6 path we can see
             return False
-        return bool(infos)
+        for info in infos:
+            try:
+                ip = IPv6Address(str(info[4][0]).split("%", 1)[0])
+            except ValueError:  # noqa: BLE001 - skip anything unparsable
+                continue
+            if not (ip.is_link_local or ip.is_loopback or ip.is_unspecified):
+                return True
+        return False
 
     try:
         att = run_egress_probes(
@@ -1052,6 +1460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             interpreter_sha256=args.interpreter_sha256,
             spawn_image_inventory=tuple(args.spawn_image),
             enforcement_scope=args.enforcement_scope,
+            enforcement_capture_sha256=args.enforcement_digest,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"f2_isolation: probe run failed: {type(exc).__name__}: {exc}")
@@ -1070,8 +1479,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(_json.dumps(verdict.to_dict(), sort_keys=True, indent=2))
     print(f"\nattestation written: {out}")
     print(f"attestation digest : {verdict.attestation_digest}")
+    if args.enforcement_digest:
+        print(
+            "enforcement claim  : recorded as a claim only. This run holds no "
+            "enforcement capture, so the verdict above is the strict "
+            "observed-refusal verdict; the host-side verifier that holds the "
+            "capture decides whether the claim is backed."
+        )
+    if verdict.enforcement_backed_dimensions:
+        print(
+            "NOTE: enforcement-backed dimensions are NOT counted as "
+            "satisfied_dimensions and never stand in for the negative control."
+        )
     if not verdict.satisfied:
-        print(f"NOT ESTABLISHED: {verdict.detail}")
+        print(f"NOT ESTABLISHED (guest-side, strict contract): {verdict.detail}")
         return 1
     return 0
 
