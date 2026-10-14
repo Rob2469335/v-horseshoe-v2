@@ -935,3 +935,115 @@ class TestPopulationCountedQuantity:
         ok, detail, _ = _check_population({"population": bad})
         assert ok is False
         assert "verification" in detail
+
+
+class TestNoEgressEnforcementCapturePassThrough:
+    """The readiness gate must be able to accept enforcement-backed denial.
+
+    `_check_no_egress` re-derives the verdict from the attestation, but for a
+    SILENTLY-DROPPING control (a Hyper-V extended ACL drops in the vSwitch) the
+    observer records a timeout it cannot tell from a blackhole. Without the
+    host-supplied enforcement capture, this gate could never accept the S8
+    architecture's own enforcement -- http/https/tcp/udp stayed `unproven` here
+    even though every other dimension was satisfied. That is a wiring gap, not a
+    weaker contract: the capture must still hash to the digest the attestation
+    claims, its effective rule must still derive an explicit Deny, and the
+    negative control must still be observed `permitted`.
+    """
+
+    @staticmethod
+    def _attestation_and_capture():
+        from qwen_train import f2_isolation as iso
+
+        capture = {
+            "schema": iso.ENFORCEMENT_CAPTURE_SCHEMA,
+            "kind": "hyper-v-extended-acl",
+            "subject": {"vm_name": "F2-S8-VM1", "vm_id": "c" * 32,
+                        "adapter_mac": "00155D56D603"},
+            "captured_at": "2026-10-14T00:00:00Z",
+            "rules": [
+                {"direction": "outbound", "action": "deny", "remote_ip": "0.0.0.0/0",
+                 "protocol": "any", "weight": 350, "stateful": False},
+                {"direction": "outbound", "action": "deny", "remote_ip": "ANY",
+                 "protocol": "any", "weight": 1, "stateful": False},
+            ],
+        }
+
+        def probe(protocol, host, port):
+            if str(host) == "127.0.0.1":
+                return (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1")
+            return ("timeout", "timed out (silently dropped)", "")
+
+        att = iso.run_egress_probes(
+            probe=probe,
+            udp_probe=lambda h, p: ("silent", "sent; no response", ""),
+            loopback_targets=(("127.0.0.1", 1),),
+            required_services=(("channel", "127.0.0.1", 2179),),
+            dns_probe=lambda: ("timeout", "timed out"),
+            interface_inventory=("Ethernet 2",),
+            policy_identity="hyper-v-extended-acl:F2-S8-VM1",
+
+            policy_sha256="ab" * 32,
+            policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
+            external_targets=(("1.1.1.1", 443), ("93.184.216.34", 80), ("93.184.216.34", 8080)),
+            udp_target=("8.8.8.8", 53),
+            arm_id="s8-f2-vm1",
+            rollout_id="s8-pilot",
+            workspace="C:/f2_s8",
+            # Mirror the real S8 guest: link-local IPv6 only, so the dimension
+            # is `unavailable` and stays unproven -- the one thing the capture
+            # cannot and must not stand in for.
+            ipv6_available=lambda: False,
+            enforcement_scope="vm",
+
+            executing_user="DESKTOP-H6A0HQS\\rob3",
+            interpreter_path=r"C:\f2_tooling\python\python.exe",
+            interpreter_sha256="cd" * 32,
+            enforcement_capture_sha256=iso.canonical_enforcement_digest(capture),
+        )
+        return att, capture
+
+    def test_without_the_capture_the_drop_dimensions_stay_unproven(self):
+        from qwen_train.f2_readiness import _check_no_egress
+
+        att, _ = self._attestation_and_capture()
+        ok, detail, _ = _check_no_egress({"no_egress_attestation": att})
+        assert ok is False
+        # the silently-dropped dimensions are exactly what cannot be accepted
+        for dim in ("http", "https", "tcp", "udp"):
+            assert dim in detail
+
+    def test_with_the_capture_only_ipv6_remains(self):
+        from qwen_train.f2_readiness import _check_no_egress
+
+        att, capture = self._attestation_and_capture()
+        ok, detail, _ = _check_no_egress({
+            "no_egress_attestation": att,
+            "no_egress_enforcement_capture": capture,
+        })
+        assert ok is False          # ipv6 is still unproven; not a pass
+        # The UNPROVEN set must have shrunk to ipv6 alone. The detail still
+        # NAMES the backed dimensions (as "policy-enforced silent drop"), so
+        # assert on the UNPROVEN clause rather than on raw substring absence.
+        import re
+        m = re.search(r"UNPROVEN: \[([^\]]*)\]", detail)
+        assert m, detail
+        assert m.group(1).replace("'", "").split(", ") == ["ipv6"]
+        assert "enforcement capture accepted" in detail
+
+
+    def test_a_capture_that_does_not_match_the_claim_changes_nothing(self):
+        """A substituted capture must not be able to unlock the gate."""
+        from qwen_train.f2_readiness import _check_no_egress
+
+        att, capture = self._attestation_and_capture()
+        other = dict(capture, rules=[{"direction": "outbound", "action": "allow",
+                                      "remote_ip": "0.0.0.0/0", "protocol": "any",
+                                      "weight": 999, "stateful": True}])
+        ok, detail, _ = _check_no_egress({
+            "no_egress_attestation": att,
+            "no_egress_enforcement_capture": other,
+        })
+        assert ok is False
+        for dim in ("http", "https", "tcp", "udp"):
+            assert dim in detail
