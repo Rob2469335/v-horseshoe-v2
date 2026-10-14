@@ -1,22 +1,28 @@
 """Verify that the operative registration manifest still binds its artifacts.
 
-The problem this closes
------------------------
+The binding being checked
+-------------------------
 ``qwen_train/curriculum/f2_registration/registration_manifest.json`` is the
 git-tracked, ``operative: true`` record of what is registered. It carries an
-``artifacts_sha256`` map over the three files that ``data/f2_population/registration/``
-holds (git-ignored, so their bytes live only on disk).
+``artifacts_sha256`` map over the three files that
+``data/f2_population/registration/`` holds (git-ignored, so their bytes live
+only on disk).
 
-Nothing previously re-checked that binding. On 2026-10-14 this module found
-that all three digests had drifted: the files on disk were already in the
-canonical serialization the registrar writes (``indent=2``, ``sort_keys``,
-trailing ``\\n``), so the drift is a **content** change, not a formatting one.
-The registration the manifest describes and the registration on disk are not
-the same registration, and nothing said so.
+Which bytes, exactly, matters. ``registration_artifacts`` records the digest of
+the **canonical row form** -- ``json.dumps(rows, sort_keys=True,
+separators=(",", ":"), ensure_ascii=False)`` -- while the registrar *writes*
+those same rows to disk **indented** (``indent=2`` plus a trailing newline). The
+two are different serializations of identical content, so their file hashes
+naturally differ. A verifier that hashed file bytes would report drift for a
+perfectly bound registration.
 
-That breaks S8 admission evidence: an admission would be bound to a manifest
-whose digests describe files that no longer exist. Detecting it silently, at a
-boundary nobody checks, is exactly how a provenance gap survives.
+That is not hypothetical: the first version of this module did exactly that, and
+on 2026-10-14 reported all three artifacts as drifted when in fact **all three
+bound correctly**. The on-disk rows were shown to be identical to a fresh
+deterministic recomputation from the pinned inputs -- same instance_ids, same
+order, zero differing fields -- and the registrar's own row digests matched the
+manifest. The false alarm had to be corrected before it could be trusted to
+detect a real one.
 
 What this module does and does not do
 -------------------------------------
@@ -108,8 +114,26 @@ class ProvenanceReport:
         }
 
 
-def _sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _row_digest(path: Path) -> str:
+    """The digest the registrar actually binds: the CANONICAL ROW FORM.
+
+    ``registration_artifacts`` records ``_digest(rows)``, i.e.
+    ``json.dumps(rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False)``.
+    The registrar *writes* the same rows to disk in indented form
+    (``indent=2`` + trailing newline), so the file bytes are a different
+    serialization of identical content and must NOT be hashed directly.
+
+    Hashing file bytes here was a defect in the first version of this verifier:
+    it reported "digest drift" for a perfectly bound registration, because the
+    two serializations naturally hash differently. A binding check that does not
+    reproduce the binder's own semantics is not a check -- it is a false alarm,
+    and a false alarm that blocks an admission pipeline is as damaging as a
+    missed one.
+    """
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    blob = json.dumps(rows, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _json_len(path: Path) -> int:
@@ -150,11 +174,11 @@ def verify_registration(
                 match=False, detail="artifact missing",
             ))
             continue
-        actual = _sha256_file(path)
+        actual = _row_digest(path)
         report.checks.append(ArtifactCheck(
             key=key, path=str(path), recorded=want, actual=actual,
             match=bool(want) and want == actual,
-            detail="" if want == actual else "digest drift",
+            detail="" if want == actual else "canonical row digest drift",
         ))
 
     # Counts: the manifest's own numbers must match what is on disk.
