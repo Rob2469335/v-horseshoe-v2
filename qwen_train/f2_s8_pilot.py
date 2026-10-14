@@ -44,6 +44,8 @@ __all__ = [
     "PilotError",
     "GuestChannel",
     "PilotTaskResult",
+    "INFRASTRUCTURE_REASONS",
+    "classify_side_failure",
     "run_pilot_task",
     "pilot_totals",
 ]
@@ -86,6 +88,8 @@ class PilotTaskResult:
     base_junit_sha256: str = ""
     gold_junit_sha256: str = ""
     failure_class: str = ""
+    #: F0 §12 exclusion rule this failure falls under (``INFRASTRUCTURE_REASONS``).
+    reason_code: str = ""
     detail: str = ""
     ledger_record: Mapping[str, Any] = field(default_factory=dict)
 
@@ -103,6 +107,69 @@ def _require_gates(gates: Mapping[str, Any]) -> None:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+#: Why a side failed, in the vocabulary F0 §12 pre-registers for exclusions.
+#:
+#: F0 §12 requires that an excluded run is "logged with reason" and lists
+#: *worker crash* and *worker timeout* as **infrastructure failure**. The raw
+#: ``failure_class`` strings say what the channel observed; these say which
+#: §12 rule applies. They are recorded separately so a run that could not
+#: complete its evaluation can never be read as a base-FAIL/gold-PASS
+#: observation, and so an operator can tell a crashed run from a lost artifact.
+INFRASTRUCTURE_REASONS = (
+    "worker_crash",           # F0 §12 "Trigger failure (worker crash)"
+    "worker_timeout",         # F0 §12 "Worker timeout"
+    "artifact_missing",       # evidence missing/invalid, not a scientific result
+    "artifact_digest_mismatch",
+    "transport_invalid",
+    "evaluator_rejected",
+    "side_not_executable",
+)
+
+
+def classify_side_failure(
+    failure_class: str,
+    *,
+    provenance: Mapping[str, Any] | None = None,
+) -> str:
+    """Map an observed failure to its F0 §12 reason.
+
+    The guest executor's ``provenance`` is what makes this possible: it records
+    whether pytest actually wrote a JUnit and what exit status the child
+    returned. A suite that dies before writing an artifact is a *worker crash*
+    regardless of what the channel then reports about a file it never saw --
+    conflating the two would record an unevaluatable run as a mere transfer
+    problem, which is exactly how a task that cannot be evaluated on this
+    platform risks being read as a valid observation.
+
+    Fail closed: an unmapped failure is never silently promoted to a reason
+    that implies less than what was observed.
+    """
+    prov = provenance or {}
+    if failure_class.startswith("guest_exit_"):
+        # The executor itself never returned, so no provenance exists to read.
+        return "side_not_executable"
+    if failure_class.startswith("transport_"):
+        return "transport_invalid"
+    if failure_class.startswith("evaluator_refused_"):
+        return "evaluator_rejected"
+    if failure_class == "artifact_digest_mismatch":
+        return "artifact_digest_mismatch"
+
+    # Provenance-aware cases. ``junit_present is False`` with a non-zero child
+    # exit is the F0 §12 worker crash: the run died and produced no evidence.
+    junit_present = prov.get("junit_present")
+    exit_status = prov.get("exit_status")
+    timed_out = bool(prov.get("timed_out"))
+    if timed_out:
+        return "worker_timeout"
+    if junit_present is False and exit_status not in (None, 0):
+        return "worker_crash"
+    if junit_present is False:
+        # No artifact and no crash signal: the evidence is simply absent.
+        return "artifact_missing"
+    return "artifact_missing"
 
 
 def stage_spec_for_guest(
@@ -165,6 +232,7 @@ def run_pilot_task(
     sides: dict[str, GuestEvidence] = {}
     junit_hashes: dict[str, str] = {}
     failure_class = ""
+    provenance: dict[str, Any] = {}
 
     for side in ("base", "gold"):
         job_id = f"{spec.task_id}#{side}#{job_nonce or int(time.time())}"
@@ -219,6 +287,10 @@ def run_pilot_task(
             failure_class = "transport_" + "_".join(verdict.reason_codes)
             break
         payload = verdict.payload
+        # The guest executor's provenance is what lets a failed side be
+        # attributed to an F0 §12 rule rather than to the channel artifact it
+        # happened to leave behind.
+        provenance = dict(payload.get("provenance") or {})
         artifact = payload.get("artifact") or {}
         if not artifact.get("sha256"):
             failure_class = "no_artifact_reported"
@@ -256,6 +328,10 @@ def run_pilot_task(
     # rather than the infrastructure failure it is.
     if failure_class or len(sides) < 2:
         reason = failure_class or "a side produced no usable evidence"
+        # F0 §12: "exclusion decision logged with reason". The §12 rule is
+        # recorded alongside the channel's own failure string, so a reader can
+        # tell WHY this run is excluded without re-deriving it from prose.
+        reason_code = classify_side_failure(failure_class, provenance=provenance)
         record = ledger.append({
             "task_id": spec.task_id,
             "registration_id": str(spec.payload["registration_id"]),
@@ -266,6 +342,7 @@ def run_pilot_task(
             "admitted": False,
             "attempt": len(ledger.attempts(spec.task_id)) + 1,
             "reason": reason,
+            "reason_code": reason_code,
         })
         return PilotTaskResult(
             task_id=spec.task_id, admitted=False,
@@ -273,6 +350,7 @@ def run_pilot_task(
             base_junit_sha256=junit_hashes.get("base", ""),
             gold_junit_sha256=junit_hashes.get("gold", ""),
             failure_class=failure_class or "side_not_executable",
+            reason_code=reason_code,
             detail=reason, ledger_record=record,
         )
 
@@ -299,6 +377,9 @@ def run_pilot_task(
         base_junit_sha256=junit_hashes.get("base", ""),
         gold_junit_sha256=junit_hashes.get("gold", ""),
         failure_class=failure_class,
+        # Propagate the F0 §12 rule when the session itself recorded one;
+        # an admitted or scientifically-rejected run has no exclusion rule.
+        reason_code=str(record.get("reason_code") or ""),
         detail=str(record.get("reason") or failure_class or ""),
         ledger_record=record,
     )

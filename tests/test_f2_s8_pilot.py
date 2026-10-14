@@ -22,9 +22,11 @@ from qwen_train import f2_governance as governance
 from qwen_train.f2_s8_compose import GovernanceInputs
 from qwen_train.f2_s8_factory import AppendOnlyLedger
 from qwen_train.f2_s8_pilot import (
+    INFRASTRUCTURE_REASONS,
     GuestChannel,
     PilotError,
     build_spec_for_task,
+    classify_side_failure,
     pilot_totals,
     run_pilot_task,
 )
@@ -372,3 +374,147 @@ class TestSpecValidation:
                 test_cmd="pytest -q", fail_to_pass=[], pass_to_pass=[],
                 registration_id="reg", registration_sha256=REG_SHA,
             )
+
+
+class CrashingChannel(FakeChannel):
+    """Guest executor whose CHILD died before writing any JUnit.
+
+    This is the shape `stanfordnlp__dspy-8739` produces on Windows: its suite
+    calls ``os.kill(os.getpid(), signal.SIGINT)``, which CPython documents as
+    ``TerminateProcess(self, 2)`` -- the interpreter dies mid-run, pytest never
+    finalises, and no JUnit exists. The envelope is still valid, so the failure
+    only surfaces as a missing artifact unless provenance is read.
+    """
+
+    def __init__(self, **kw):
+        self.exit_status = kw.pop("exit_status", 2)
+        super().__init__(**kw)
+
+    def get(self, remote, local):
+        if str(remote).endswith(".rec"):
+            payload = build_result_payload(
+                task_id=self.task_id, job_id=f"{self.task_id}#base",
+                source="swe-bench-live",
+                provenance={
+                    "producer": "fake_guest",
+                    "junit_present": False,
+                    "junit_bytes": 0,
+                    "exit_status": self.exit_status,
+                    "timed_out": False,
+                },
+                artifact_name=f"{self.task_id}.base.junit.xml",
+                artifact_sha256=hashlib.sha256(b"").hexdigest(),
+                artifact_size=0, created_at="t0",
+            )
+            Path(local).parent.mkdir(parents=True, exist_ok=True)
+            Path(local).write_bytes(encode_record(payload))
+            return None
+        # No JUnit file was ever written: report it as absent.
+        if Path(local).exists():
+            Path(local).unlink()
+
+
+class TestOutcomeTaxonomy:
+    """The five outcome classes must stay distinguishable.
+
+    F0 §12 pre-registers "Trigger failure (worker crash)" and "Worker timeout"
+    as infrastructure failure and requires that an exclusion is "logged with
+    reason". A task that cannot complete its evaluation must therefore never be
+    representable as a valid base-FAIL/gold-PASS observation.
+    """
+
+    def test_worker_crash_is_classified_from_provenance(self):
+        # junit_present False + non-zero child exit == F0 12 worker crash.
+        assert classify_side_failure(
+            "artifact_not_retrievable",
+            provenance={"junit_present": False, "exit_status": 2, "timed_out": False},
+        ) == "worker_crash"
+
+    def test_worker_timeout_is_classified(self):
+        # The executor process itself failing is its own rule: there is no
+        # provenance to read, so the crash/timeout distinction cannot be made
+        # and must not be guessed.
+        assert classify_side_failure(
+            "guest_exit_124",
+            provenance={"junit_present": False, "exit_status": None, "timed_out": True},
+        ) == "side_not_executable"
+        # With provenance, a timeout the guest actually observed is a timeout.
+        assert classify_side_failure(
+            "artifact_not_retrievable",
+            provenance={"junit_present": False, "exit_status": 124, "timed_out": True},
+        ) == "worker_timeout"
+
+    def test_clean_run_with_no_artifact_is_missing_not_crash(self):
+        # No artifact and no crash signal: the evidence is absent, not a crash.
+        assert classify_side_failure(
+            "artifact_not_retrievable",
+            provenance={"junit_present": False, "exit_status": 0, "timed_out": False},
+        ) == "artifact_missing"
+
+    def test_channel_and_evaluator_failures_keep_their_own_rules(self):
+        assert classify_side_failure("transport_BAD_MAGIC") == "transport_invalid"
+        assert classify_side_failure("evaluator_refused_base_ValueError") == "evaluator_rejected"
+        assert classify_side_failure("artifact_digest_mismatch") == "artifact_digest_mismatch"
+        assert classify_side_failure("guest_exit_1") == "side_not_executable"
+
+    def test_every_returned_reason_is_in_the_frozen_vocabulary(self):
+        samples = [
+            classify_side_failure("artifact_not_retrievable",
+                                  provenance={"junit_present": False, "exit_status": 2}),
+            classify_side_failure("artifact_not_retrievable",
+                                  provenance={"junit_present": False, "exit_status": 0}),
+            classify_side_failure("transport_x"),
+            classify_side_failure("evaluator_refused_y"),
+            classify_side_failure("guest_exit_9"),
+            classify_side_failure("artifact_digest_mismatch"),
+            classify_side_failure("side_not_executable"),
+        ]
+        assert all(code in INFRASTRUCTURE_REASONS for code in samples), samples
+
+    def test_a_crashed_side_is_recorded_as_infrastructure_with_a_reason(self, tmp_path):
+        spec = _spec()
+        ledger = AppendOnlyLedger(tmp_path / "ledger.jsonl")
+        result = run_pilot_task(
+            spec=spec, channel=CrashingChannel(), inputs=_inputs(tmp_path),
+            ledger=ledger, gates=GATES, guest_dir=str(tmp_path),
+            registration_sha256=REG_SHA, job_nonce="crash-1",
+        )
+        assert result.admitted is False
+        assert result.outcome_class == "infrastructure"
+        assert result.reason_code == "worker_crash"
+        row = ledger.records()[0]
+        assert row["outcome_class"] == "infrastructure"
+        assert row["admitted"] is False
+        assert row["reason_code"] == "worker_crash"
+        # The exclusion decision carries the F0 12 rule, not just a channel string.
+        assert row["reason"]
+
+    def test_a_crashed_side_is_never_a_base_fail_gold_pass_observation(self, tmp_path):
+        spec = _spec()
+        result = run_pilot_task(
+            spec=spec, channel=CrashingChannel(), inputs=_inputs(tmp_path),
+            ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
+            guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="crash-2",
+        )
+        assert result.outcome == "infrastructure_failure"
+        assert result.outcome != "base_fail_gold_pass"
+        assert result.base_junit_sha256 == ""
+        assert result.evidence_sha256 == ""
+
+    def test_admitted_and_scientific_runs_carry_no_exclusion_reason(self, tmp_path):
+        admitted = run_pilot_task(
+            spec=_spec(), channel=FakeChannel(), inputs=_inputs(tmp_path),
+            ledger=AppendOnlyLedger(tmp_path / "a.jsonl"), gates=GATES,
+            guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="ok-1",
+        )
+        assert admitted.admitted is True
+        assert admitted.reason_code == ""
+
+        rejected = run_pilot_task(
+            spec=_spec(), channel=FakeChannel(gold=JUNIT_BASE),
+            inputs=_inputs(tmp_path), ledger=AppendOnlyLedger(tmp_path / "r.jsonl"),
+            gates=GATES, guest_dir=str(tmp_path), registration_sha256=REG_SHA,
+            job_nonce="rej-1",
+        )
+        assert rejected.outcome_class == "scientific"
+        assert rejected.reason_code == ""
