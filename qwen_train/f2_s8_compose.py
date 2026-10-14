@@ -465,8 +465,15 @@ def _result_from_bundles(
     spec: TaskSpec,
     base_bundle: governance.ExecutionBundle,
     gold_bundle: governance.ExecutionBundle,
+    attempt: int = 1,
 ) -> ExecutionResult:
-    """A transport-level ExecutionResult summarising the assembled bundles."""
+    """A transport-level ExecutionResult summarising the assembled bundles.
+
+    ``attempt`` is threaded from the session rather than assumed to be 1:
+    ``run_once`` compares the attempt the runner reports against the attempt it
+    is actually on, and raises ``FactoryError`` on a mismatch, so a retried task
+    would have been refused admission no matter how sound its evidence was.
+    """
     admitted = (
         base_bundle.declared_result == evidence.RESULT_FAIL
         and gold_bundle.declared_result == evidence.RESULT_PASS
@@ -478,15 +485,15 @@ def _result_from_bundles(
             else "gold_fail"
         )
         return ExecutionResult(
-            task_id=spec.task_id, outcome=outcome, attempt=1,
-            attempt_id=f"{spec.task_id}#1", reason="S8 contract not satisfied",
+            task_id=spec.task_id, outcome=outcome, attempt=int(attempt),
+            attempt_id=f"{spec.task_id}#{attempt}", reason="S8 contract not satisfied",
         )
     ref = gold_bundle.test_output
     return ExecutionResult(
         task_id=spec.task_id,
         outcome=ADMITTED_OUTCOME,
-        attempt=1,
-        attempt_id=f"{spec.task_id}#1",
+        attempt=int(attempt),
+        attempt_id=f"{spec.task_id}#{attempt}",
         disk_id=f"{spec.task_id}-diff",
         evidence_name=ref.name,
         evidence_sha256=ref.digest,
@@ -535,7 +542,11 @@ def produce_governed_task(
     gold_bundle = assemble_governed_bundle(
         spec=spec, side="gold", guest=execute(spec, "gold"), inputs=inputs
     )
-    result = _result_from_bundles(spec, base_bundle, gold_bundle)
+    # The attempt this session is on. ``run_session`` increments the ledger's
+    # attempt count itself and ``run_once`` refuses a runner that reports a
+    # different number, so the result must carry the same one.
+    attempt = len(ledger.attempts(spec.task_id)) + 1
+    result = _result_from_bundles(spec, base_bundle, gold_bundle, attempt=attempt)
     evaluate, verify_evidence, verify_pair = build_governed_verifiers(
         spec=spec, inputs=inputs, base_bundle=base_bundle, gold_bundle=gold_bundle
     )

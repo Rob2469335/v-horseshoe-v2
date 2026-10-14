@@ -147,3 +147,83 @@ class TestExecuteInGuest:
             run_command=timeout_run, clock=lambda: "T",
         )
         assert payload["provenance"]["timed_out"] is True
+
+
+class TestWorkingDirectory:
+    """Regression for the defect that made real-task execution impossible:
+    every declared ``test_cmd`` in the pinned population is REPO-RELATIVE, but
+    the executor ran it with ``cwd=junit_dir``.  ``pytest -rA`` at an empty
+    junit directory collects nothing, writes a JUnit with zero tests, and the
+    FAIL_TO_PASS nodes are then ``missing`` -- so a correct environment would
+    have been recorded as a scientific failure.  The command must run at the
+    repository root; ``--junitxml`` is absolute, so the artifact still lands in
+    ``junit_dir``."""
+
+    def test_command_runs_at_the_supplied_workdir(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "tests").mkdir()
+        (repo / "tests" / "test_x.py").write_text(
+            "def test_a():\n    assert True\n", encoding="utf-8"
+        )
+        junit_dir = tmp_path / "junit"
+        spec = _spec(test_cmd="pytest -q tests/test_x.py")
+        spec_path = tmp_path / "spec.json"
+        _write_spec(spec_path, spec)
+        request_path = _request(tmp_path, spec)
+
+        seen: dict[str, str] = {}
+
+        def run(command, *, cwd, timeout_seconds):
+            seen["cwd"] = cwd
+            seen["command"] = command
+            target = Path(re.search(r"--junitxml=(\S+)", command).group(1))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(JUNIT, encoding="utf-8")
+            return CommandResult(exit_status=0, stdout=b"", stderr=b"")
+
+        execute_in_guest(
+            spec_path=spec_path, request_path=request_path,
+            result_path=tmp_path / "r.rec", junit_dir=junit_dir,
+            workdir=repo, run_command=run, clock=lambda: "T",
+        )
+        assert seen["cwd"] == str(repo)
+        # The artifact is still written into junit_dir, by absolute path.
+        assert str(junit_dir) in seen["command"]
+        assert (junit_dir / f"{spec.task_id}.junit.xml").is_file()
+
+    def test_default_workdir_is_the_junit_dir_for_backcompat(self, tmp_path):
+        """No --workdir keeps the old behaviour, so existing fixtures and the
+        disk-channel tests continue to pass unchanged."""
+        spec = _spec()
+        spec_path = tmp_path / "spec.json"
+        _write_spec(spec_path, spec)
+        request_path = _request(tmp_path, spec)
+        junit_dir = tmp_path / "j"
+        seen: dict[str, str] = {}
+
+        def run(command, *, cwd, timeout_seconds):
+            seen["cwd"] = cwd
+            target = Path(re.search(r"--junitxml=(\S+)", command).group(1))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(JUNIT, encoding="utf-8")
+            return CommandResult(exit_status=0, stdout=b"", stderr=b"")
+
+        execute_in_guest(
+            spec_path=spec_path, request_path=request_path,
+            result_path=tmp_path / "r.rec", junit_dir=junit_dir,
+            run_command=run, clock=lambda: "T",
+        )
+        assert seen["cwd"] == str(junit_dir)
+
+    def test_absent_workdir_fails_closed(self, tmp_path):
+        spec = _spec()
+        spec_path = tmp_path / "spec.json"
+        _write_spec(spec_path, spec)
+        request_path = _request(tmp_path, spec)
+        with pytest.raises(GuestExecutorError, match="working directory"):
+            execute_in_guest(
+                spec_path=spec_path, request_path=request_path,
+                result_path=tmp_path / "r.rec", junit_dir=tmp_path / "j",
+                workdir=tmp_path / "nope", run_command=_ok_run(),
+            )

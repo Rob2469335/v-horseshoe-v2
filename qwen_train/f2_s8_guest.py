@@ -126,6 +126,7 @@ def execute_in_guest(
     request_path: Path | str,
     result_path: Path | str,
     junit_dir: Path | str,
+    workdir: Path | str | None = None,
     run_command: Callable[..., CommandResult] | None = None,
     clock: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
@@ -135,6 +136,14 @@ def execute_in_guest(
     malformed, replayed, or bound to a different task, and on a command that
     produces no JUnit artifact (the runner then records an infrastructure
     failure — a missing artifact is never a pass).
+
+    ``workdir`` is the directory the declared test command runs in.  Every
+    declared ``test_cmd`` in the pinned population is REPO-RELATIVE (node ids
+    such as ``tests/test_x.py::test_y``, directories such as
+    ``hypothesis-python/tests/cover/``), so it must run at the repository root.
+    Running it at ``junit_dir`` resolved nothing and produced no JUnit at all.
+    ``--junitxml`` is always an absolute path, so the artifact still lands in
+    ``junit_dir`` whatever the working directory is.
     """
     spec = load_spec(spec_path)
     verdict = read_channel_file(request_path, expected_task_id=spec.task_id)
@@ -148,6 +157,9 @@ def execute_in_guest(
 
     junit_path = Path(junit_dir) / f"{spec.task_id}.junit.xml"
     Path(junit_dir).mkdir(parents=True, exist_ok=True)
+    run_cwd = Path(workdir) if workdir is not None else Path(junit_dir)
+    if not run_cwd.is_dir():
+        raise GuestExecutorError(f"working directory does not exist: {run_cwd}")
     try:
         command = augment_test_command(str(spec.payload["test_cmd"]), str(junit_path))
     except EvaluatorError as exc:
@@ -155,7 +167,7 @@ def execute_in_guest(
 
     run = run_command or _default_run_command
     outcome = run(
-        command, cwd=str(junit_dir), timeout_seconds=int(spec.payload["timeout_seconds"])
+        command, cwd=str(run_cwd), timeout_seconds=int(spec.payload["timeout_seconds"])
     )
     if not isinstance(outcome, CommandResult):
         raise GuestExecutorError("run_command must return a CommandResult")
@@ -191,12 +203,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--request", required=True)
     parser.add_argument("--result", required=True)
     parser.add_argument("--junit-dir", required=True)
+    parser.add_argument(
+        "--workdir", default=None,
+        help="directory the declared test command runs in (the repository root). "
+             "Defaults to --junit-dir for backwards compatibility with fixtures.",
+    )
     args = parser.parse_args(argv)
     execute_in_guest(
         spec_path=args.spec,
         request_path=args.request,
         result_path=args.result,
         junit_dir=args.junit_dir,
+        workdir=args.workdir,
     )
     return 0
 
