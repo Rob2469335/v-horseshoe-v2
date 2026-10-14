@@ -237,3 +237,44 @@ no global IPv6 is *"vacuously satisfied, but visibly not proven"*. The verifier
 was **not** changed to close this gap: altering a fail-closed control to make a
 gate pass is prohibited by the governing instruction. Recorded as an open policy
 decision, not resolved unilaterally.
+
+### 10a. Owner ruling (2026-10-13): HOLD
+
+Asked to resolve the discrepancy, the owner ruled that the pilot **holds**:
+
+> Option 2 is the correct decision: hold the five-task pilot until the IPv6
+> policy discrepancy is formally resolved. The current verifier must remain
+> unchanged, and no F2 task should execute while the applicable §6 gate remains
+> unsatisfied.
+
+The ruling states the reasoning explicitly, and it rejects the inference this
+document's §10 could otherwise invite:
+
+* **An unavailable IPv6 channel is not evidence that IPv6 traffic is blocked.**
+  The guest having no global IPv6 address and no IPv6 default route shows there
+  is no *path*; it does not show that a path would be *denied*.
+* A policy that permits a condition to be treated as vacuously satisfied does
+  **not** automatically override a verifier that reports failure.
+* The policy, the verifier, and the authorization record must agree on the
+  permitted action before execution resumes.
+
+Consequences, all in force:
+
+1. **Evidence preserved** — the frozen verifier, the capture, the attestation
+   and the control results are retained unchanged under
+   `C:\Users\rober\F2_EVIDENCE\s8\`.
+2. **Discrepancy recorded** — IPv6 is `unavailable`; denial of IPv6
+   connectivity is `NOT ESTABLISHED`; the host also lacks global IPv6.
+3. **An explicit owner decision is required** — either that the existing
+   authority language permits proceeding despite `satisfied=false`, or a
+   narrowly scoped waiver, or a formally authorized verifier change.
+4. **The gate is enforced** — the five-task pilot does **not** run. Resume only
+   after that decision is recorded and §6 is demonstrably satisfied.
+
+**Status: HOLD — five-task pilot not authorized to proceed under the current
+unresolved gate.**
+
+The conflict itself is isolated, quoted verbatim, and offered as three mutually
+exclusive paths in **`docs/EXPERIMENT_J_F2_S8_IPV6_GATE_DECISION_RECORD.md`**
+(draft, awaiting the operator). That record is the single artifact the owner
+needs; this document no longer carries the analysis.
