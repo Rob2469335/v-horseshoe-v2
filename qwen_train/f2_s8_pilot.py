@@ -122,10 +122,24 @@ INFRASTRUCTURE_REASONS = (
     "worker_timeout",         # F0 §12 "Worker timeout"
     "artifact_missing",       # evidence missing/invalid, not a scientific result
     "artifact_digest_mismatch",
+    # The guest reported an artifact the host then could not obtain, or an
+    # envelope with no digest to bind it. The two observations disagree, so the
+    # evidence's provenance is in question -- distinct from an artifact that was
+    # simply never produced, and distinct from a digest that was obtained and
+    # then failed to match.
+    "provenance_contradiction",
     "transport_invalid",
     "evaluator_rejected",
     "side_not_executable",
 )
+
+#: Failures whose meaning depends on whether the guest reported an artifact.
+#: With ``junit_present`` true they contradict the observation; without it the
+#: evidence is merely absent.
+_PROVENANCE_SENSITIVE_FAILURES = frozenset({
+    "artifact_not_retrievable",
+    "no_artifact_reported",
+})
 
 
 def classify_side_failure(
@@ -166,6 +180,12 @@ def classify_side_failure(
         return "worker_timeout"
     if junit_present is False and exit_status not in (None, 0):
         return "worker_crash"
+    if junit_present is True and failure_class in _PROVENANCE_SENSITIVE_FAILURES:
+        # The guest says it wrote the artifact; the host could not obtain it
+        # (or the envelope carried no digest to bind it). Recording this as
+        # "artifact missing" would hide the disagreement, which is exactly the
+        # signal an operator needs to suspect the channel or the guest FS.
+        return "provenance_contradiction"
     if junit_present is False:
         # No artifact and no crash signal: the evidence is simply absent.
         return "artifact_missing"

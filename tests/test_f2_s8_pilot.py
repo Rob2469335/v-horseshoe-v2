@@ -518,3 +518,53 @@ class TestOutcomeTaxonomy:
         )
         assert rejected.outcome_class == "scientific"
         assert rejected.reason_code == ""
+
+
+    def test_contradictory_provenance_is_named_not_hidden(self):
+        """The guest reported an artifact the host could not obtain.
+
+        Recording this as `artifact_missing` would hide the disagreement --
+        the exact signal that suggests a broken channel or guest filesystem
+        rather than a run that never produced evidence.
+        """
+        assert classify_side_failure(
+            "artifact_not_retrievable",
+            provenance={"junit_present": True, "exit_status": 0, "timed_out": False},
+        ) == "provenance_contradiction"
+        assert classify_side_failure(
+            "no_artifact_reported",
+            provenance={"junit_present": True, "exit_status": 0, "timed_out": False},
+        ) == "provenance_contradiction"
+
+    def test_absent_provenance_still_reads_as_missing_not_contradiction(self):
+        """No provenance at all is absence of evidence, not a disagreement."""
+        for failure in ("artifact_not_retrievable", "no_artifact_reported"):
+            assert classify_side_failure(failure) == "artifact_missing"
+            assert classify_side_failure(
+                failure, provenance={"junit_present": False}
+            ) == "artifact_missing"
+            # Provenance present but silent on the question: same conclusion.
+            assert classify_side_failure(
+                failure, provenance={"exit_status": 1}
+            ) == "artifact_missing"
+
+    def test_contradiction_is_in_the_closed_vocabulary(self):
+        assert "provenance_contradiction" in INFRASTRUCTURE_REASONS
+        assert classify_side_failure(
+            "no_artifact_reported", provenance={"junit_present": True}
+        ) in INFRASTRUCTURE_REASONS
+
+    def test_a_nonzero_exit_alongside_a_written_junit_is_not_a_crash(self):
+        """pytest exits 1 on ordinary test failures, with JUnit written.
+
+        Treating that as a worker crash would mislabel the commonest outcome
+        in the whole pipeline as an infrastructure failure.
+        """
+        assert classify_side_failure(
+            "artifact_not_retrievable",
+            provenance={"junit_present": True, "exit_status": 1, "timed_out": False},
+        ) == "provenance_contradiction"
+        assert classify_side_failure(
+            "artifact_not_retrievable",
+            provenance={"junit_present": False, "exit_status": 1, "timed_out": False},
+        ) == "worker_crash"
