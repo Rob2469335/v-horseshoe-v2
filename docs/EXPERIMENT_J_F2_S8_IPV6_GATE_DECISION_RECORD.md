@@ -16,12 +16,15 @@ re-deriving the conflict. Selecting a path and signing it is an owner action.
 
 ## 1. The single unresolved question
 
-> **Does the existing authority permit the five-task S8 pilot to execute while
+> **Does the existing authority permit the S8 offline evaluation isolation-attestation
+> requirement to be treated as administratively satisfied or waived while
 > `verify_isolation_attestation` returns `satisfied=false` because the `ipv6`
 > dimension is `unavailable`?**
 
 Everything else on the isolation gate is settled. This is the only item that
-requires an owner decision.
+requires an owner decision. *(Standing authorization boundary: no pilot of any size
+and no task execution is authorized; this question addresses solely the isolation-
+attestation requirement, not task execution.)*
 
 ---
 
@@ -82,12 +85,13 @@ both halves: the dimension is *vacuous* (no risk) **and** *visibly not proven*.
 The verifier implements the second half. So 2.1 does not, by itself, override
 2.3.
 
-What is **missing** is a fourth statement: text granting permission to execute
-while the overall verdict is false.
+What is **missing** is a fourth statement: text granting permission to treat
+the isolation-attestation requirement as cleared while the overall verifier
+verdict is false.
 
-**Search result — `NOT ESTABLISHED`.** A search of `docs/*.md` for permission to
-proceed despite an unsatisfied verdict returned only this record and §10a. No
-existing authority grants it.
+**Search result — `NOT ESTABLISHED`.** A search of `docs/*.md` for authority to
+treat the gate as cleared despite an unsatisfied verdict returned only this
+record and §10a. No existing authority grants it autonomously.
 
 ---
 
@@ -146,7 +150,8 @@ stale evidence.
 ### Path A — Existing authority permits proceeding
 
 **Condition to satisfy:** identify governing text that explicitly permits
-execution while `satisfied=false`.
+the isolation-attestation requirement to be treated as satisfied while
+`satisfied=false`.
 
 **Current status: `NOT ESTABLISHED`.** The search in §3 found no such text, and
 §2.1 addresses only the dimension, not the overall verdict.
@@ -156,29 +161,33 @@ execution while `satisfied=false`.
 > _…owner to fill…_
 
 **If Path A is chosen:** record the citation, confirm the other seven gates, and
-the pilot may proceed with no waiver and no verifier change.
+the isolation-attestation requirement is cleared with no waiver and no verifier
+change (execution of any task or pilot remains separately unauthorized).
 
 **Authorized decision-maker:** Operator. **Required record:** this section,
 completed and dated.
 
 ---
 
-### Path B — Narrowly scoped waiver
+### Path B — Narrowly scoped waiver (PROPOSED — UNAPPROVED)
 
-To be filled by the owner only if Path A is unavailable.
+To be evaluated and decided by the Operator only if Path A is unavailable.
 
 | Field | Value |
 |---|---|
-| Requirement waived | §6 gate `satisfied=true` **for the `ipv6` dimension only** |
-| Scope | the five tasks of `F2_S8_EXECUTION_AND_PILOT_PACKAGE.md` §8; nothing else |
-| Rationale | the guest has no IPv6 address and no IPv6 default route, so no IPv6 egress channel exists; §2.1 calls this *vacuously satisfied*; §2.2's "IPv6 egress attempt MUST fail" is met by the attempt failing |
-| Risks | an unproven dimension is accepted as if proven; if IPv6 becomes reachable later, the waiver no longer describes reality |
-| Compensating controls | `w=350` deny retained; `deny ANY` at `w=1` already covers IPv6; re-verify the guest has no global IPv6 immediately before execution; re-run the verifier and attach it |
-| Expiry / review | single use, this pilot only; expires on any VM network change or on the confirmatory run, whichever is first |
-| Approved by | _…operator…_ |
-| Date | _…_ |
+| Requirement waived | The requirement that `verify_isolation_attestation` report `satisfied=true` regarding the `ipv6` dimension for the recorded S8 offline evaluation environment baseline (`F2-S8-VM1`). |
+| Scope | Narrowly restricted to the administrative evaluation of the recorded S8 offline evaluation isolation attestation (`attestation_in_guest_FINAL.json` digest `1E6E...` bound to host ACL capture digest `9437...`) despite the `ipv6` dimension evaluating to `unavailable` / `unproven`. Applies to no other environment, network, VM, or gate. |
+| Explicit non-authorizations & boundaries | **No pilot or task execution of any size is authorized.** This waiver:<br>• **Does not authorize a pilot or any task execution.**<br>• **Does not authorize evaluators, receipt operations, or confirmatory F2.**<br>• **Does not authorize Q10, Q12, or Q13.**<br>• **Does not change frozen scientific criteria or verifier semantics.**<br>• **Does not convert IPv6 `NOT ESTABLISHED` into `ENFORCED`.**<br>• **Does not itself make automated preflight pass.**<br>• **Does not clear any independent readiness requirement.** |
+| Distinction of states | • **Verified evidence:** IPv4 egress is denied/enforcement-backed via live ACL `w=350`; local controls are permitted; guest has link-local IPv6 only and no default route; host has no global IPv6.<br>• **Unproven enforcement:** IPv6 denial is `NOT ESTABLISHED` (no probe denial was observed and no guest IPv6 packet was filtered/dropped by proof).<br>• **Administratively waived requirement:** An administrative exception granted solely for the requirement that `verify_isolation_attestation` report `satisfied=true` on the `ipv6` dimension for this recorded S8 baseline, without treating the requirement as verified or proven. |
+| Rationale | The guest holds link-local IPv6 only (`fe80::9e4d:462d:669a:212c/64`), has no global IPv6 address, and has no default IPv6 route; the host also lacks global IPv6. `EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md:1046` states that a dimension with no global IPv6 is *"vacuously satisfied, but visibly not proven, and never laundered into denied"*. Because no global address or route exists, probes could not establish active egress denial, leaving IPv6 denial enforcement unproven (`NOT ESTABLISHED`). This rationale explicitly acknowledges that the absence of a global address and default route does **not** prove that all possible IPv6 egress is impossible (e.g., link-local paths or adjacent network structures are not proven blocked). The waiver administratively accepts this unproven dimension for the single recorded attestation without asserting that IPv6 egress is impossible or that IPv6 blocking is enforced. |
+| Risks | An unproven dimension (`NOT ESTABLISHED`) is accepted administratively; if an IPv6 route, global address, or rogue router advertisement becomes active later, no verified denial enforcement exists for IPv6 traffic. |
+| Compensating controls | Host vSwitch `F2-S8-NAT` retains default-deny `ANY` rule at `weight 1`; additive rule `weight 350` (`0.0.0.0/0`) retained; host has no global IPv6; guest link-local-only status and absence of global IPv6 route must be re-verified prior to any future authorized activity; any network configuration change invalidates the waiver. |
+| Expiry / review | Single use, applicable strictly to the recorded 2026-10-13 S8 baseline; expires immediately on any VM, network adapter, switch, route, or ACL change, and does not carry forward to any future run or confirmatory F2. |
+| Approved by | _…operator…_ (UNAPPROVED) |
+| Date | _…_ (UNAPPROVED) |
+| Authorization identifier | _…_ (UNAPPROVED) |
 
-**Not implemented. Not exercised. Requires the owner's signature.**
+**Status: PROPOSED — UNAPPROVED. Not implemented. Not exercised. Requires the Operator's explicit decision and signature.**
 
 ---
 
@@ -216,7 +225,7 @@ still cannot be satisfied by `unavailable`; round-trip/digest/schema unchanged.
   route**; the host also has no global IPv6. `PROVEN`.
 - **IPv6 denial is `NOT ESTABLISHED`.** An absent path is not a denied path.
 - The verifier's overall result is **`satisfied=false`**. `PROVEN`.
-- **The five-task pilot remains held.** No experimental task has been executed.
+- **No pilot of any size is authorized.** No experimental task has been executed; any pilot remains held under standing authorization boundaries.
 - **No experimental observations have been admitted.** `trusted_store` holds 0
   files; no ledger exists; admitted = analyzable = completed = **0**.
 - **No verifier change and no waiver has been approved by this work.**
@@ -235,5 +244,6 @@ still cannot be satisfied by `unavailable`; round-trip/digest/schema unchanged.
 Operator: ______________________________   Date: ______________
 ```
 
-Until one path is selected, recorded, and its conditions met, the five-task
-pilot stays on **HOLD**.
+Until one path is selected, recorded, and its conditions met, the S8 offline
+evaluation isolation-attestation requirement remains **UNRESOLVED / NOT SATISFIED**,
+and no pilot or task execution of any size is authorized.
