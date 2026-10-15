@@ -227,3 +227,110 @@ class TestWorkingDirectory:
                 result_path=tmp_path / "r.rec", junit_dir=tmp_path / "j",
                 workdir=tmp_path / "nope", run_command=_ok_run(),
             )
+
+
+class TestArtifactIsPerSide:
+    """REGRESSION (2026-10-15): both sides wrote ONE file, so a side that
+    produced no JUnit re-reported the other side artifact.
+
+    Observed live: hypothesis-4532 gold wrote no JUnit, the guest reported the
+    BASE file, and the host recorded a scientific ``gold_fail`` -- a FALSE
+    result. mypy gold then re-reported its base artifact too. The artifact must
+    be named per side and any stale file must be cleared before the run.
+    """
+
+    def _prep(self, tmp_path, spec, *, side):
+        spec_path = tmp_path / "spec.json"
+        _write_spec(spec_path, spec)
+        request_path = stage_request(
+            channel_dir=tmp_path, task_id=spec.task_id,
+            job_id=f"{spec.task_id}#{side}#1",
+            source=str(spec.payload["source"]),
+            provenance={"producer": "pilot", "side": side},
+        )
+        return spec_path, request_path
+
+    def test_the_artifact_name_carries_the_side(self, tmp_path):
+        spec = _spec()
+        junit_dir = tmp_path / "junit"
+        for side in ("base", "gold"):
+            spec_path, request_path = self._prep(tmp_path, spec, side=side)
+            payload = execute_in_guest(
+                spec_path=spec_path, request_path=request_path,
+                result_path=tmp_path / f"r_{side}.rec", junit_dir=junit_dir,
+                run_command=_ok_run(), clock=lambda: "T",
+            )
+            assert payload["artifact"]["name"] == f"{spec.task_id}.{side}.junit.xml"
+
+    def test_base_and_gold_write_distinct_files(self, tmp_path):
+        spec = _spec()
+        junit_dir = tmp_path / "junit"
+        names = []
+        for side in ("base", "gold"):
+            spec_path, request_path = self._prep(tmp_path, spec, side=side)
+            payload = execute_in_guest(
+                spec_path=spec_path, request_path=request_path,
+                result_path=tmp_path / f"r_{side}.rec", junit_dir=junit_dir,
+                run_command=_ok_run(), clock=lambda: "T",
+            )
+            names.append(payload["artifact"]["name"])
+        assert names[0] != names[1]
+        assert sorted(p.name for p in junit_dir.glob("*.junit.xml")) == sorted(names)
+
+    def test_a_stale_artifact_is_never_reported(self, tmp_path):
+        """The exact false-``gold_fail`` mechanism: a pre-existing file must not
+        be reported as this run's output when the command writes nothing."""
+        spec = _spec()
+        junit_dir = tmp_path / "junit"
+        junit_dir.mkdir(parents=True)
+        stale = junit_dir / f"{spec.task_id}.gold.junit.xml"
+        stale.write_text("<testsuites/>", encoding="utf-8")
+
+        def writes_nothing(command, *, cwd, timeout_seconds):
+            return CommandResult(exit_status=2, stdout=b"", stderr=b"boom")
+
+        spec_path, request_path = self._prep(tmp_path, spec, side="gold")
+        payload = execute_in_guest(
+            spec_path=spec_path, request_path=request_path,
+            result_path=tmp_path / "r.rec", junit_dir=junit_dir,
+            run_command=writes_nothing, clock=lambda: "T",
+        )
+        assert payload["provenance"]["junit_present"] is False
+        assert payload["artifact"]["size_bytes"] == 0
+        assert not stale.exists(), "the stale artifact must have been cleared"
+
+    def test_a_side_less_request_keeps_the_historical_name(self, tmp_path):
+        """A caller that carries no side is not guessed at."""
+        spec = _spec()
+        spec_path = tmp_path / "spec.json"
+        _write_spec(spec_path, spec)
+        request_path = _request(tmp_path, spec)
+        payload = execute_in_guest(
+            spec_path=spec_path, request_path=request_path,
+            result_path=tmp_path / "r.rec", junit_dir=tmp_path / "junit",
+            run_command=_ok_run(), clock=lambda: "T",
+        )
+        assert payload["artifact"]["name"] == f"{spec.task_id}.junit.xml"
+
+    def test_bounded_runner_is_non_interactive_and_bounded(self, tmp_path, monkeypatch):
+        import subprocess
+
+        from qwen_train import f2_s8_guest as G
+
+        captured = {}
+
+        class _P:
+            returncode = 0
+            stdout = b"o"
+            stderr = b"e"
+
+        def fake_run(cmd, **kw):
+            captured.update(kw)
+            return _P()
+
+        monkeypatch.setattr(G.subprocess, "run", fake_run)
+        result = G._default_run_command("echo hi", cwd=str(tmp_path), timeout_seconds=7)
+        assert result.exit_status == 0
+        assert captured["stdin"] is subprocess.DEVNULL
+        assert captured["timeout"] == 7
+        assert captured["capture_output"] is True

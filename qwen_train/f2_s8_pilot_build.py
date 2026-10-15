@@ -26,6 +26,14 @@ import stat
 import subprocess
 import time
 from pathlib import Path
+from typing import Any, Mapping
+
+from qwen_train.f2_population_build import source_to_screen_row
+from qwen_train.f2_s8_acquisition import (
+    builder_install_plan,
+    project_install_context,
+    repo_url_for,
+)
 
 GIT = r"C:\Program Files\Git\cmd\git.exe"
 INPUTS = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_inputs\full")
@@ -50,6 +58,48 @@ REPOS = {
     "openai__openai-agents-python-1633": "https://github.com/openai/openai-agents-python.git",
     "openai__openai-agents-python-1636": "https://github.com/openai/openai-agents-python.git",
 }
+
+
+def declared_test_cmd(rec: Mapping[str, Any]) -> str:
+    """The canonical declared command for a task record -- never a raw field.
+
+    A SWE-bench-Live row declares ``test_cmds`` as a LIST and the frozen
+    registration binds the canonical chain the source adapter derives from it
+    (see ``f2_s8_pilot_live.build_specs``); reading the raw list here would
+    describe a different command than the one the registration bound.
+    """
+    return str(source_to_screen_row("swe-bench-live", rec).get("test_cmd") or "")
+
+
+def uses_uv_environment(test_cmd: str) -> bool:
+    """True when the DECLARED command is driven by ``uv``.
+
+    Such a task's environment is owned by uv, which creates ``repo/.venv``
+    itself; building a second, unused pip venv for it only doubles the delivered
+    payload (see the ``uses_uv`` comment in :func:`build`).  Derived from the
+    command rather than a hand-maintained list, so a task added later is handled
+    by the same rule as the pilot's two uv tasks (their declared commands are
+    ``uv run pytest -rA``).
+    """
+    return test_cmd.strip().startswith("uv ")
+
+
+def resolve_repo_url(task_id: str, inputs: Path) -> str:
+    """The clone URL for a task: the explicit pilot mapping, else its own record.
+
+    Returns ``""`` when neither exists, which is the caller's signal to skip the
+    task -- exactly the behaviour of the hand-maintained mapping.  A record whose
+    ``repo`` is not ``owner/name`` raises (:func:`repo_url_for`), so a malformed
+    record can never be silently turned into a plausible URL.
+    """
+    explicit = REPOS.get(task_id)
+    if explicit:
+        return explicit
+    rec_path = Path(inputs) / f"{task_id}.json"
+    if not rec_path.is_file():
+        return ""
+    rec = json.loads(rec_path.read_text(encoding="utf-8"))
+    return repo_url_for(str(rec.get("repo") or ""))
 
 #: pytest pins. hypothesis at this commit reads ``Argument._long_opts``, which
 #: pytest 9 removed, so its own conftest cannot even load under 9. Pinning to a
@@ -167,8 +217,9 @@ def _rmtree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
-def build(task_id: str, url: str) -> dict:
-    rec = json.loads((INPUTS / f"{task_id}.json").read_text(encoding="utf-8"))
+def build(task_id: str, url: str, *, inputs: Path = INPUTS,
+          patches: Path = PATCHES) -> dict:
+    rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
     base_commit = rec["base_commit"]
     ws = ROOT / task_id
     repo = ws / "repo"
@@ -181,7 +232,7 @@ def build(task_id: str, url: str) -> dict:
     t0 = time.time()
     run([GIT, "clone", "--filter=blob:none", "--quiet", url, str(repo)])
     run([GIT, "checkout", "--quiet", base_commit], cwd=repo)
-    run([GIT, "apply", str(PATCHES / f"{task_id}.test_patch")], cwd=repo)
+    run([GIT, "apply", str(Path(patches) / f"{task_id}.test_patch")], cwd=repo)
 
     # Python layout differs per repository.
     sub = ""
@@ -195,11 +246,13 @@ def build(task_id: str, url: str) -> dict:
     # environment that is about to be built for it).
     shutil.copytree(repo, gold_repo, symlinks=True,
                     ignore=shutil.ignore_patterns(".venv", ".venvuv", "__pycache__"))
-    run([GIT, "apply", str(PATCHES / f"{task_id}.gold_patch")], cwd=gold_repo)
+    run([GIT, "apply", str(Path(patches) / f"{task_id}.gold_patch")], cwd=gold_repo)
 
     base_python = pick_interpreter(project)
     extra = EXTRA_DEPS.get(task_id, [])
-    uses_uv = task_id in UV_ALL_EXTRAS
+    # uv-owned tasks are identified by their DECLARED command; the pilot's
+    # explicit table stays as an override so its behaviour cannot drift.
+    uses_uv = task_id in UV_ALL_EXTRAS or uses_uv_environment(declared_test_cmd(rec))
 
     # Base and gold each get their OWN environment, editable-installed onto
     # their OWN tree. Sharing one venv would make the gold run import BASE
@@ -212,6 +265,7 @@ def build(task_id: str, url: str) -> dict:
     # them itself. Building a second, unused pip venv per tree only doubled the
     # delivered payload to no effect.
     envs: dict[str, str | None] = {"base": None, "gold": None}
+    install_plan: dict[str, Any] = {}
     if not uses_uv:
         for label, proj in (("base", project), ("gold", gold_project)):
             venv = ws / (".venv" if label == "base" else ".venv_gold")
@@ -221,7 +275,32 @@ def build(task_id: str, url: str) -> dict:
             run([str(vpy), "-m", "pip", "install", "--quiet",
                  "--disable-pip-version-check", "--upgrade", "pip"], timeout=1800)
             run([str(vpy), "-m", "pip", "install", "--quiet",
-                 "--disable-pip-version-check", PYTEST_PIN, *extra], timeout=3600)
+                 "--disable-pip-version-check", PYTEST_PIN, *extra], timeout=1800)
+            # The project's OWN declared pytest plugins (e.g. pytest-django).
+            # Without them pytest ignores DJANGO_SETTINGS_MODULE and every
+            # module that imports the framework fails COLLECTION, so the declared
+            # FAIL_TO_PASS node is absent from the JUnit and can never pass.
+            # Statically derived from the project's metadata -- never invented --
+            # and taken from the SAME function the offline classifier reads, so
+            # "what the builder installs" cannot drift from "what the classifier
+            # checks".  Full declarations (specifier and marker included) are
+            # passed through, so the project's own constraint is honoured.
+            # Extras are NOT in scope: ``pip install -e .`` installs
+            # ``[project].dependencies`` (recorded as runtime deps) but no
+            # ``[project.optional-dependencies]`` extra -- "uv does not sync
+            # extras by default" is the same rule for the uv path.
+            context = project_install_context(proj)
+            plan = builder_install_plan(
+                context["dependency_inputs"],
+                pinned=[PYTEST_PIN],
+                extra_deps=extra,
+                runtime_dependencies=context["runtime_dependencies"],
+            )
+            install_plan[label] = plan
+            if plan["plugin_requirements"]:
+                run([str(vpy), "-m", "pip", "install", "--quiet",
+                     "--disable-pip-version-check", *plan["plugin_requirements"]],
+                    timeout=3600)
             run([str(vpy), "-m", "pip", "install", "--quiet",
                  "--disable-pip-version-check", "-e", str(proj)], timeout=3600)
             envs[label] = str(vpy)
@@ -243,6 +322,9 @@ def build(task_id: str, url: str) -> dict:
         "project": str(project), "gold_project": str(gold_project),
         "base_interpreter": base_python if not uses_uv else "",
         "extra_deps": extra,
+        # Provenance: exactly which packages this build installed on each side,
+        # derived from the same source of truth the offline classifier checks.
+        "install_plan": install_plan,
         "requires_python": list(_requires_python(project)) if _requires_python(project) else None,
         "elapsed_s": int(time.time() - t0),
     }
@@ -252,22 +334,28 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("task_ids", nargs="*")
     ap.add_argument("--manifest", default=str(ROOT / "build_manifest.json"))
+    ap.add_argument("--inputs", default=str(INPUTS),
+                    help="task record directory (one <task_id>.json per task)")
+    ap.add_argument("--patches", default=str(PATCHES),
+                    help="directory holding <task_id>.test_patch / .gold_patch")
     args = ap.parse_args(argv)
 
     ids = args.task_ids or list(REPOS)
     manifest_path = Path(args.manifest)
+    inputs = Path(args.inputs)
+    patches = Path(args.patches)
     manifest = {}
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     for task_id in ids:
-        url = REPOS.get(task_id)
+        url = resolve_repo_url(task_id, inputs)
         if not url:
             print(f"SKIP {task_id}: no repository mapping", flush=True)
             continue
         print(f"BUILD {task_id} ...", flush=True)
         try:
-            entry = build(task_id, url)
+            entry = build(task_id, url, inputs=inputs, patches=patches)
         except Exception as exc:  # noqa: BLE001 - recorded, not fatal to the batch
             print(f"  FAILED: {type(exc).__name__}: {exc}", flush=True)
             manifest[task_id] = {"status": "build_failure", "detail": str(exc)[:2000]}

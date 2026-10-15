@@ -213,6 +213,20 @@ def stage_spec_for_guest(
     return remote
 
 
+def _is_safe_artifact_basename(name: str) -> bool:
+    """True only for a plain basename that cannot escape the guest artifact dir.
+
+    The name comes from the guest's result envelope, so it is untrusted input:
+    an empty name, an absolute path, a path separator, ``.``/``..`` or a drive
+    prefix must all be refused rather than joined onto the guest directory.
+    """
+    if not name or name in (".", ".."):
+        return False
+    if "\\" in name or "/" in name or ":" in name:
+        return False
+    return name == Path(name).name
+
+
 def run_pilot_task(
     *,
     spec: TaskSpec,
@@ -227,7 +241,7 @@ def run_pilot_task(
     timeout_seconds: int = 1200,
     workdirs: Mapping[str, str] | None = None,
     python_exe: str = "",
-    path_prefix: str = "",
+    path_prefix: str | Mapping[str, str] = "",
     env_extra: Mapping[str, str] | None = None,
 ) -> PilotTaskResult:
     """Drive ONE task's base/gold pair through the real guest and verifiers.
@@ -241,8 +255,10 @@ def run_pilot_task(
     ``test_cmd`` is repo-relative.  ``python_exe`` is the interpreter that runs
     the guest executor itself (the tooling runtime, not a task venv), and
     ``path_prefix`` is prepended to PATH for the inner command so a bare
-    ``pytest``/``uv`` resolves to the side's environment.  Omitting all three
-    keeps the fixture-friendly behaviour the tests rely on.
+    ``pytest``/``uv`` resolves to the side's environment; it may be a single
+    string or a ``{side: prefix}`` mapping, and it MUST be per-side when each
+    side owns a separate environment.  Omitting all three keeps the
+    fixture-friendly behaviour the tests rely on.
     """
     _require_gates(gates)
     if spec.registration_sha256 != registration_sha256:
@@ -270,7 +286,6 @@ def run_pilot_task(
         request_path = Path(guest_dir) / f"request_{side}.rec"
         channel.put(staged, str(request_path))
         result_path = Path(guest_dir) / f"result_{side}.rec"
-        junit_path = Path(guest_dir) / f"{spec.task_id}.{side}.junit.xml"
 
         # The guest executor is handed the declared test command and writes
         # JUnit itself; it reports only the artifact's identity, never a verdict.
@@ -281,8 +296,20 @@ def run_pilot_task(
         # `& '<exe>'` is the 5.1-compatible call operator.
         runner = python_exe or "python"
         script: list[str] = []
-        if path_prefix:
-            script.append(f"$env:PATH = '{path_prefix};' + $env:PATH;")
+        # ``path_prefix`` may be a single string (both sides) or a per-side
+        # mapping. It MUST be per-side whenever each side has its own
+        # environment: an editable install makes the project importable from ONE
+        # source tree (PEP 660), so running the gold command with the BASE
+        # interpreter resolves the BASE source and the gold patch cannot take
+        # effect -- the probe below confirmed exactly that (gold+gold venv: pass;
+        # gold+base venv: fail with the base's AttributeError).
+        prefix = (
+            str(path_prefix.get(side, "") or "")
+            if isinstance(path_prefix, Mapping)
+            else str(path_prefix or "")
+        )
+        if prefix:
+            script.append(f"$env:PATH = '{prefix};' + $env:PATH;")
         for key, value in (env_extra or {}).items():
             script.append(f"$env:{key} = '{value}';")
         workdir_arg = ""
@@ -312,16 +339,49 @@ def run_pilot_task(
         # happened to leave behind.
         provenance = dict(payload.get("provenance") or {})
         artifact = payload.get("artifact") or {}
-        if not artifact.get("sha256"):
+        try:
+            artifact_size = int(artifact.get("size_bytes") or 0)
+        except (TypeError, ValueError):
+            artifact_size = 0
+        # A side that wrote no JUnit must be classified from the guest's OWN
+        # provenance, never by fetching the placeholder the envelope carries.
+        # The envelope reports the SHA-256 of EMPTY bytes (e3b0c442...) with
+        # size 0 when the guest command produced nothing, so a truthy ``sha256``
+        # is not evidence an artifact exists. Fetching it anyway raised a channel
+        # fault, which recorded a real infrastructure failure as an unclassified
+        # driver error (and the task then counted as not even attempted).
+        if (
+            provenance.get("junit_present") is False
+            or artifact_size == 0
+            or not artifact.get("sha256")
+        ):
             failure_class = "no_artifact_reported"
             break
 
         local_junit = staging / f"{spec.task_id}.{side}.junit.hostcopy.xml"
-        channel.get(str(junit_path), local_junit)
+        # Fetch the artifact the guest REPORTS, never a path the host
+        # constructed. ``f2_s8_guest`` has no notion of "side" and writes
+        # ``<task_id>.junit.xml``, so a fabricated ``<task_id>.<side>.junit.xml``
+        # never exists and EVERY task faulted as an unclassified channel error
+        # (which also made a real infrastructure failure indistinguishable from
+        # a driver bug). The fetch still happens immediately after THIS side's
+        # run, before the next side overwrites the guest's single file.
+        reported = str(artifact.get("name") or "")
+        if not _is_safe_artifact_basename(reported):
+            failure_class = "artifact_name_unusable"
+            break
+        channel.get(str(Path(guest_dir) / reported), local_junit)
         if not local_junit.is_file():
             failure_class = "artifact_not_retrievable"
             break
         junit_bytes = local_junit.read_bytes()
+        # Fail closed when the retrieved bytes are not the artifact the guest
+        # reported. Size and digest are both checked because a truncating
+        # channel can leave bytes that will not re-hash, and checking the size
+        # first names that case instead of blaming the digest.
+        if len(junit_bytes) != artifact_size:
+            failure_class = "artifact_size_mismatch"
+            break
         if _sha256(junit_bytes) != str(artifact["sha256"]):
             failure_class = "artifact_digest_mismatch"
             break

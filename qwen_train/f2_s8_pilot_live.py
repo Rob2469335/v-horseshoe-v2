@@ -32,8 +32,9 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_s8_compose import load_governance_from_env
-from qwen_train.f2_s8_factory import AppendOnlyLedger
+from qwen_train.f2_s8_factory import AppendOnlyLedger, LedgerError
 from qwen_train.f2_s8_pilot import (
     GuestChannel,
     PilotTaskResult,
@@ -57,6 +58,11 @@ TOOLING_ROOT = r"C:\f2_tooling"
 POSIX_ROOT = r"C:\posix"
 UV_ROOT = r"C:\f2_tooling"
 GUEST_DIR = "C:/f2_s8"
+#: The in-guest offline wheelhouse. ``uv run`` on a uv-owned task builds the
+#: project (``build-system.requires = ["hatchling"]``), and with the network
+#: disabled uv resolves those build requirements ONLY from its cache or from
+#: ``UV_FIND_LINKS``. The wheelhouse is the delivered source for them.
+WHEELHOUSE = r"C:\f2_tooling\wheelhouse"
 
 
 class PsDirectChannel(GuestChannel):
@@ -157,9 +163,16 @@ def build_specs(manifest: dict[str, Any], inputs_dir: Path,
         if entry.get("status") != "built":
             continue
         rec = json.loads((inputs_dir / f"{task_id}.json").read_text(encoding="utf-8"))
+        # The registration binds test_cmd_sha256 over the canonical command the
+        # source adapter derives from ``test_cmds`` (the " && " chain), and the
+        # guest executes the spec's test_cmd verbatim -- so the spec is built
+        # through that adapter, never from a raw ``test_cmds[0]`` (which for a
+        # multi-entry list is a command the registration never bound).
+        source = "swe-bench-live"
+        canonical = source_to_screen_row(source, rec)
         specs.append(build_spec_for_task(
-            task_id=task_id, source="swe-bench-live", repo=rec["repo"],
-            base_commit=rec["base_commit"], test_cmd=rec["test_cmds"][0],
+            task_id=task_id, source=source, repo=rec["repo"],
+            base_commit=rec["base_commit"], test_cmd=canonical["test_cmd"],
             fail_to_pass=rec["FAIL_TO_PASS"], pass_to_pass=rec["PASS_TO_PASS"],
             registration_id=registration_id,
             registration_sha256=registration_sha256,
@@ -169,20 +182,41 @@ def build_specs(manifest: dict[str, Any], inputs_dir: Path,
 
 
 def per_task_env(task_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
-    """The workdir, PATH prefix and env one task's two sides need."""
+    """The workdir, PATH prefix and env one task's two sides need.
+
+    ``path_prefix`` is **per side**: each side owns its own environment
+    (``.venv`` / ``.venv_gold``) whose editable install points at its own source
+    tree, so a bare ``pytest`` must resolve to THAT side's ``Scripts``
+    directory. Sharing one prefix made the gold command run under the base
+    interpreter, import the base source, and score a correct fix as a failure
+    (measured in-guest 2026-10-15: gold+gold venv passes, gold+base venv fails).
+    """
     entry = manifest[task_id]
     ws = entry["workspace"]
     uses_uv = bool(entry.get("uses_uv"))
     if uses_uv:
+        # uv owns the environments and resolves them from the project tree, so
+        # the same prefix is correct for both sides.
         prefix = f"{POSIX_ROOT};{UV_ROOT}"
-        env = {"PYTHONPATH": TOOLING_ROOT, "UV_OFFLINE": "1"}
+        env = {
+            "PYTHONPATH": TOOLING_ROOT,
+            "UV_OFFLINE": "1",
+            # Offline build resolution: without this, ``uv run`` cannot satisfy
+            # ``build-system.requires = ["hatchling"]`` in the isolated build
+            # environment and fails with "No solution found ... network was
+            # disabled" (observed live).
+            "UV_FIND_LINKS": WHEELHOUSE,
+        }
+        prefixes: dict[str, str] = {"base": prefix, "gold": prefix}
     else:
-        prefix = f"{ws}\\.venv\\Scripts;{POSIX_ROOT};{UV_ROOT}"
+        base_prefix = f"{ws}\\.venv\\Scripts;{POSIX_ROOT};{UV_ROOT}"
+        gold_prefix = f"{ws}\\.venv_gold\\Scripts;{POSIX_ROOT};{UV_ROOT}"
         env = {"PYTHONPATH": TOOLING_ROOT}
+        prefixes = {"base": base_prefix, "gold": gold_prefix}
     return {
         "workdirs": {"base": str(Path(ws) / "repo"), "gold": str(Path(ws) / "repo_gold")},
         "python_exe": TOOLING_PYTHON,
-        "path_prefix": prefix,
+        "path_prefix": prefixes,
         "env_extra": env,
     }
 
@@ -222,6 +256,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.only:
         specs = [s for s in specs if s.task_id in set(args.only)]
 
+    # A run that resolves to zero specs must FAIL, not quietly succeed. Without
+    # this guard a manifest whose entries are not ``status="built"`` -- e.g. a
+    # dry-run result (``status="dryrun_complete"``) -- produced an empty run that
+    # printed "pilot: 0 tasks" and wrote a results file, which is indistinguishable
+    # from a completed pilot at the report level. Zero specs is never a valid pilot.
+    if not specs:
+        statuses = sorted(
+            {str(v.get("status")) for v in manifest.values() if isinstance(v, dict)}
+        )
+        raise SystemExit(
+            "REFUSING: the manifest resolves to zero runnable tasks "
+            f"(manifest={args.manifest!r}, entries={len(manifest)}, "
+            f"statuses={statuses}, inputs={args.inputs!r}"
+            + (f", only={sorted(set(args.only))!r}" if args.only else "")
+            + "). A run manifest's entries must have status='built'; a dry-run "
+            "result is not a run manifest, and the inputs directory must hold the "
+            "full task records (with test_cmds/FAIL_TO_PASS)."
+        )
+
     staging = Path(args.staging)
     staging.mkdir(parents=True, exist_ok=True)
     out_dir = Path(args.out)
@@ -243,6 +296,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 job_nonce=args.nonce or spec.task_id,
                 timeout_seconds=3600, **env,
             )
+        except LedgerError as exc:
+            # A DESIGNED refusal (a task that already holds a terminal scientific
+            # record may not be re-scored) is an outcome with a reason, not a
+            # channel fault. Reporting it through the generic handler recorded it
+            # as a driver bug and dropped the task from the counts entirely.
+            print(f"  {spec.task_id}: REFUSED BY LEDGER {exc}", flush=True)
+            (out_dir / f"{spec.task_id}.refused.txt").write_text(
+                str(exc), encoding="utf-8")
+            results.append(PilotTaskResult(
+                task_id=spec.task_id, admitted=False, outcome="ledger_refused",
+                outcome_class="infrastructure", failure_class="ledger_refused",
+                detail=str(exc),
+            ))
+            continue
         except Exception as exc:  # noqa: BLE001 - a channel fault, not a verdict
             print(f"  {spec.task_id}: CHANNEL/DRIVER FAULT {type(exc).__name__}: {exc}",
                   flush=True)
@@ -275,8 +342,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     out_path.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
     print(json.dumps(totals, indent=1, sort_keys=True), flush=True)
     print(f"results: {out_path}", flush=True)
-    print(f"ledger sha256: {hashlib.sha256(Path(args.ledger).read_bytes()).hexdigest()}",
-          flush=True)
+    # A run where every task faulted writes NO ledger row. Reading it
+    # unconditionally crashed AFTER the results were published, so a completed
+    # (if empty) run was reported as a failure.
+    ledger_path = Path(args.ledger)
+    print(
+        "ledger sha256: "
+        + (
+            hashlib.sha256(ledger_path.read_bytes()).hexdigest()
+            if ledger_path.is_file()
+            else f"(no ledger rows were written to {ledger_path})"
+        ),
+        flush=True,
+    )
     return 0
 
 

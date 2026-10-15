@@ -198,6 +198,24 @@ class TestRunOnce:
                      registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL,
                      policy=policy)
 
+    def test_run_once_refuses_a_terminal_task_before_invoking_the_runner(self, tmp_path):
+        """REGRESSION: the recording seam must refuse before spending execution."""
+        ledger = _ledger(tmp_path)
+        run_once(task_id="t-1", ledger=ledger,
+                 runner=_runner({("t-1", 1): _ok("t-1", 1, outcome="gold_fail",
+                                                 evidence_name="", evidence_sha256="")}),
+                 registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL)
+
+        def _explode(task_id, attempt):
+            raise AssertionError("runner must not be called for a terminally recorded task")
+
+        with pytest.raises(LedgerError, match="terminal scientific record"):
+            run_once(task_id="t-1", ledger=ledger, runner=_explode,
+                     registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL)
+        # nothing ran, nothing was written: still exactly the one seeded record
+        assert len(ledger.records()) == 1
+        assert ledger.verify()[0] is True
+
 
 class TestPlanning:
     def test_registration_digest_mismatch_blocks_selection(self, tmp_path):
@@ -233,7 +251,91 @@ class TestPlanning:
         plan = plan_run(ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
                         registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA)
         assert plan.skipped_admitted == ("t-1",)
+        assert plan.skipped_terminal == ()
         assert plan.runnable == ("t-2", "t-3")
+
+    @pytest.mark.parametrize("outcome", ["base_pass", "gold_fail", "test_not_run"])
+    def test_terminal_scientific_failure_is_never_selected_again(self, tmp_path, outcome):
+        """REGRESSION (contract invariant 5): a non-admitted scientific outcome
+        is terminal exactly like an admitted one, and the scheduler must never
+        re-select it (the ledger would refuse the resulting record)."""
+        ledger = _ledger(tmp_path)
+        run_once(task_id="t-1", ledger=ledger,
+                 runner=_runner({("t-1", 1): _ok("t-1", 1, outcome=outcome,
+                                                 evidence_name="", evidence_sha256="")}),
+                 registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL)
+        plan = plan_run(ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
+                        registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA)
+        assert plan.runnable == ("t-2", "t-3")
+        assert plan.skipped_terminal == ("t-1",)
+        assert plan.skipped_admitted == ()
+        # counts stay separate: completed counts it, admitted does not
+        assert plan.counts["completed"] == 1
+        assert plan.counts["admitted"] == 0
+
+    def test_retryable_infrastructure_failure_remains_runnable_below_the_cap(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        infra = _ok("t-1", 1, outcome="timeout", evidence_name="", evidence_sha256="")
+        run_once(task_id="t-1", ledger=ledger, runner=_runner({("t-1", 1): infra}),
+                 registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL)
+        plan = plan_run(ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
+                        registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA)
+        assert plan.runnable == ("t-1", "t-2", "t-3")
+        assert plan.skipped_terminal == ()
+        assert plan.skipped_exhausted == ()
+
+    def test_plan_never_yields_a_task_the_ledger_would_refuse(self, tmp_path):
+        """The plan's runnable set and the ledger's refusal rule must agree."""
+        ledger = _ledger(tmp_path)
+        for task, outcome in (("t-1", "gold_fail"), ("t-2", "base_pass")):
+            run_once(task_id=task, ledger=ledger,
+                     runner=_runner({(task, 1): _ok(task, 1, outcome=outcome,
+                                                    evidence_name="", evidence_sha256="")}),
+                     registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL)
+        plan = plan_run(ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
+                        registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA)
+        assert plan.runnable == ("t-3",)
+        assert all(ledger.terminal_scientific(t) is None for t in plan.runnable)
+        # the append-only guard refuses exactly the tasks the plan skipped
+        with pytest.raises(LedgerError, match="terminal scientific record"):
+            ledger.append({"task_id": "t-1", "outcome": "gold_fail",
+                           "outcome_class": "scientific", "attempt": 2})
+
+    def test_mixed_ledger_separates_runnable_from_every_skip_bucket(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        five = [f"t-{i}" for i in range(1, 6)]
+        policy = RetryPolicy(max_attempts=2)
+        run_once(task_id="t-1", ledger=ledger, runner=_runner({("t-1", 1): _ok("t-1", 1)}),
+                 registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL,
+                 policy=policy)
+        run_once(task_id="t-2", ledger=ledger,
+                 runner=_runner({("t-2", 1): _ok("t-2", 1, outcome="gold_fail",
+                                                 evidence_name="", evidence_sha256="")}),
+                 registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL,
+                 policy=policy)
+        run_once(task_id="t-3", ledger=ledger,
+                 runner=_runner({("t-3", 1): _ok("t-3", 1, outcome="build_failure",
+                                                 evidence_name="", evidence_sha256="")}),
+                 registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL,
+                 policy=policy)
+        for attempt in (1, 2):
+            run_once(task_id="t-4", ledger=ledger,
+                     runner=_runner({("t-4", attempt): _ok("t-4", attempt, outcome="timeout",
+                                                           evidence_name="", evidence_sha256="")}),
+                     registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL,
+                     policy=policy)
+        plan = plan_run(ordered_task_ids=five, ledger=ledger, registration_id="reg",
+                        registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA,
+                        policy=policy, in_flight=["t-5"])
+        assert plan.runnable == ("t-3",)
+        assert plan.skipped_admitted == ("t-1",)
+        assert plan.skipped_terminal == ("t-2",)
+        assert plan.skipped_exhausted == ("t-4",)
+        assert plan.skipped_running == ("t-5",)
+        assert plan.counts == {
+            "registered": 5, "attempted": 4, "completed": 2,
+            "admitted": 1, "analyzable": 0,
+        }
 
     def test_tasks_at_the_retry_cap_are_not_runnable(self, tmp_path):
         ledger = _ledger(tmp_path)
@@ -245,6 +347,7 @@ class TestPlanning:
                         registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA,
                         policy=policy)
         assert plan.skipped_exhausted == ("t-1",)
+        assert plan.skipped_terminal == ()
         assert plan.runnable == ("t-2", "t-3")
 
     def test_in_flight_tasks_are_skipped_for_concurrency(self, tmp_path):
@@ -253,6 +356,7 @@ class TestPlanning:
                         registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA,
                         in_flight=["t-2"])
         assert plan.skipped_running == ("t-2",)
+        assert plan.skipped_terminal == ()
         assert plan.runnable == ("t-1", "t-3")
 
     def test_concurrency_policy_rejects_a_zero_limit(self):

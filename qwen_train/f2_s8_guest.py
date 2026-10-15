@@ -100,13 +100,40 @@ def load_spec(path: Path | str) -> TaskSpec:
     return spec
 
 
+def _request_side(request: Mapping[str, Any], job_id: str) -> str:
+    """The side this request is for, or ``""`` when it cannot be established.
+
+    Taken from the request's own ``provenance.side`` first (that is where the
+    pilot puts it), then from the ``<task_id>#<side>#<nonce>`` job id. An
+    unresolvable side yields ``""`` -- never a guessed one -- so a caller that
+    does not carry a side keeps the historical single-file behaviour.
+    """
+    provenance = request.get("provenance")
+    if isinstance(provenance, Mapping):
+        side = str(provenance.get("side") or "").strip().lower()
+        if side in ("base", "gold"):
+            return side
+    parts = str(job_id).split("#")
+    if len(parts) >= 2:
+        side = parts[1].strip().lower()
+        if side in ("base", "gold"):
+            return side
+    return ""
+
+
 def _default_run_command(
     command: str, *, cwd: str, timeout_seconds: int
 ) -> CommandResult:
-    """Run ``command`` once, bounded.  A timeout is reported, never a pass."""
+    """Run ``command`` once, bounded.  A timeout is reported, never a pass.
+
+    ``stdin`` is ``DEVNULL``: without it, a test that reads stdin (or an
+    accidental interactive prompt) blocks until the full timeout, which is
+    indistinguishable from a hang and wastes the whole task budget.
+    """
     try:
         proc = subprocess.run(
-            command, shell=True, cwd=cwd, capture_output=True, timeout=timeout_seconds
+            command, shell=True, cwd=cwd, capture_output=True,
+            timeout=timeout_seconds, stdin=subprocess.DEVNULL,
         )
         return CommandResult(
             exit_status=int(proc.returncode), stdout=proc.stdout, stderr=proc.stderr
@@ -155,8 +182,24 @@ def execute_in_guest(
     job_id = str(request["job_id"])
     source = str(request["source"])
 
-    junit_path = Path(junit_dir) / f"{spec.task_id}.junit.xml"
+    # The artifact MUST be per-side. Both sides share one guest directory, and
+    # the result envelope reports whatever file is present, so a side-less name
+    # meant a gold run that produced NO JUnit re-reported the BASE artifact --
+    # the host then fetched it, the evaluator graded it, and a real
+    # infrastructure failure was recorded as the scientific outcome
+    # ``gold_fail`` (a false result, observed live on hypothesis-4532).
+    side = _request_side(request, job_id)
+    suffix = f".{side}" if side else ""
+    junit_path = Path(junit_dir) / f"{spec.task_id}{suffix}.junit.xml"
     Path(junit_dir).mkdir(parents=True, exist_ok=True)
+    # Remove any artifact left by an earlier run of this same side, so a command
+    # that produces nothing cannot have the previous run's JUnit attributed to it.
+    try:
+        junit_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:  # noqa: BLE001 - fail closed, never continue blind
+        raise GuestExecutorError(f"cannot clear stale artifact {junit_path}: {exc}") from exc
     run_cwd = Path(workdir) if workdir is not None else Path(junit_dir)
     if not run_cwd.is_dir():
         raise GuestExecutorError(f"working directory does not exist: {run_cwd}")

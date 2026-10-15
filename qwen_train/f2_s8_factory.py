@@ -241,6 +241,7 @@ class RunPlan:
     policy: RetryPolicy
     runnable: tuple[str, ...]
     skipped_admitted: tuple[str, ...]
+    skipped_terminal: tuple[str, ...]
     skipped_exhausted: tuple[str, ...]
     skipped_running: tuple[str, ...]
     counts: Mapping[str, int]
@@ -252,6 +253,7 @@ class RunPlan:
             "policy": self.policy.as_dict(),
             "runnable": list(self.runnable),
             "skipped_admitted": list(self.skipped_admitted),
+            "skipped_terminal": list(self.skipped_terminal),
             "skipped_exhausted": list(self.skipped_exhausted),
             "skipped_running": list(self.skipped_running),
             "counts": dict(self.counts),
@@ -274,9 +276,13 @@ def plan_run(
 ) -> RunPlan:
     """Select the next tasks deterministically, honoring the retry cap.
 
-    Tasks are considered in registered order.  A task is skipped when it is
-    admitted, when its retry cap is exhausted, or when it is already in flight
-    (concurrency guard).  A registration-digest mismatch raises before anything
+    Tasks are considered in registered order.  A task is skipped when it holds
+    any terminal scientific record (reported as *admitted* for
+    ``base_fail_gold_pass`` and as *terminal* for every other scientific
+    outcome), when its retry cap is exhausted, or when it is already in flight
+    (concurrency guard).  Because a terminal scientific record is never re-run,
+    the plan can never hand the ledger a task whose append the append-only
+    guard would refuse.  A registration-digest mismatch raises before anything
     is selected, so a different population can never be run by accident.
     """
     if registration_sha256 != expected_registration_sha256:
@@ -289,11 +295,15 @@ def plan_run(
 
     runnable: list[str] = []
     admitted: list[str] = []
+    terminal: list[str] = []
     exhausted: list[str] = []
     skipped_running: list[str] = []
     for task_id in ordered_task_ids:
         if ledger.admitted(task_id) is not None:
             admitted.append(task_id)
+            continue
+        if ledger.terminal_scientific(task_id) is not None:
+            terminal.append(task_id)
             continue
         if str(task_id) in running:
             skipped_running.append(task_id)
@@ -310,6 +320,7 @@ def plan_run(
         policy=policy,
         runnable=tuple(runnable),
         skipped_admitted=tuple(admitted),
+        skipped_terminal=tuple(terminal),
         skipped_exhausted=tuple(exhausted),
         skipped_running=tuple(skipped_running),
         counts={
@@ -338,12 +349,20 @@ def run_once(
 ) -> dict[str, Any]:
     """Run exactly one attempt through the injected ``runner`` and record it.
 
-    The module performs no execution itself.  Evidence identity is validated
+    The module performs no execution itself.  A task that already holds a
+    terminal scientific record is refused *before* the runner is invoked, so a
+    caller can never spend an execution the append-only guard would reject.
+    Evidence identity is validated
     before the record is written; a task whose evidence is missing is recorded
     as ``test_not_run`` rather than admitted, and an infrastructure outcome is
     recorded as infrastructure, never as a task rejection.
     """
     policy = policy or RetryPolicy()
+    if ledger.terminal_scientific(task_id) is not None:
+        raise LedgerError(
+            f"task {task_id!r} already has a terminal scientific record; "
+            "append-only history may not be rewritten"
+        )
     attempt = _attempts_used(ledger, task_id) + 1
     if attempt > policy.max_attempts:
         raise FactoryError(f"task {task_id!r} exceeded max_attempts={policy.max_attempts}")

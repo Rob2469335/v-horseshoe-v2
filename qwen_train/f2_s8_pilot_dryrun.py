@@ -19,13 +19,18 @@ import subprocess
 import time
 from pathlib import Path
 
+from qwen_train.f2_s8_pilot_build import declared_test_cmd, uses_uv_environment
+
 ROOT = Path(r"C:\f2_pilot")
 INPUTS = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_inputs\full")
 DRY = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_build\dryrun")
 
 #: Tasks whose declared command is ``uv run pytest``. uv must be told the
 #: environment is complete and the network is forbidden, or it will try to
-#: re-resolve against PyPI and fail inside the offline guest.
+#: re-resolve against PyPI and fail inside the offline guest.  This table is an
+#: OVERRIDE only; uv-ownership is derived from the DECLARED command exactly as
+#: the builder derives it (``uses_uv_environment``), so a task added later is
+#: handled by the same rule that governs its environment.
 UV_ALL_EXTRAS = ("openai__openai-agents-python-1633",
                  "openai__openai-agents-python-1636")
 
@@ -92,7 +97,14 @@ def main(argv=None) -> int:
             results[task_id] = {"status": "not_built"}
             continue
         spec = json.loads((INPUTS / f"{task_id}.json").read_text(encoding="utf-8"))
-        test_cmd = spec["test_cmds"][0]
+        # The DECLARED command the registration and the guest bind, via the same
+        # canonical helper the builder and the pilot use -- never the raw
+        # ``test_cmds[0]``.  A SWE-bench-Live row declares ``test_cmds`` as a
+        # LIST and the frozen registration binds the " && " chain the source
+        # adapter derives from it (see ``f2_s8_pilot_live.build_specs``), so a
+        # raw ``[0]`` would run a command the session never runs and make this
+        # host pre-delivery check validate a different command than the guest.
+        test_cmd = declared_test_cmd(spec)
         print(f"DRYRUN {task_id} :: {test_cmd}", flush=True)
 
         task_out: dict[str, dict] = {}
@@ -110,7 +122,11 @@ def main(argv=None) -> int:
                 task_out[side] = run_test(
                     python=python, repo=Path(entry[repo_key]), test_cmd=test_cmd,
                     junit=junit, timeout=args.timeout,
-                    uv_offline=task_id in UV_ALL_EXTRAS,
+                    # uv-ownership comes from the DECLARED command (the same
+                    # rule the builder uses); the explicit table stays as an
+                    # override so the pilot's behaviour cannot drift.
+                    uv_offline=(task_id in UV_ALL_EXTRAS
+                                or uses_uv_environment(test_cmd)),
                 )
             except subprocess.TimeoutExpired:
                 task_out[side] = {"status": "timeout", "exit_status": None,

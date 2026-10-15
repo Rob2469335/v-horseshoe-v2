@@ -8,9 +8,10 @@ deterministic :func:`qwen_train.f2_s8_factory.plan_run` selector.
 Guarantees
 ----------
 * **Resumable.** The ledger is the durable state.  Re-invoking the driver selects
-  only tasks that are not admitted and whose retry cap is not exhausted, so an
-  interrupted batch continues where it stopped.
-* **No duplicate admissions.** ``plan_run`` skips admitted tasks and
+  only tasks that hold no terminal scientific record and whose retry cap is not
+  exhausted, so an interrupted batch continues where it stopped.
+* **No duplicate admissions.** ``plan_run`` skips every task that already holds
+  a terminal scientific record (admitted or not) and
   ``AppendOnlyLedger`` refuses a second terminal scientific record for a task.
 * **Bounded retry.** A task is never selected once ``attempts >= max_attempts``.
 * **Infrastructure is not a task verdict.** A task whose callable raises is
@@ -34,6 +35,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from qwen_train.f2_s8_factory import (
+    ADMITTED_OUTCOME,
     AppendOnlyLedger,
     INFRASTRUCTURE_OUTCOMES,
     RetryPolicy,
@@ -45,6 +47,7 @@ __all__ = [
     "BatchError",
     "BatchReport",
     "drive_batch",
+    "reconcile_admissions_across_chains",
     "reconcile_counts",
 ]
 
@@ -69,6 +72,7 @@ class BatchReport:
     counts: Mapping[str, int] = field(default_factory=dict)
     progress_path: str = ""
     skipped_admitted: tuple[str, ...] = ()
+    skipped_terminal: tuple[str, ...] = ()
     skipped_exhausted: tuple[str, ...] = ()
     stopped_reason: str = ""
 
@@ -83,6 +87,7 @@ class BatchReport:
             "counts": dict(self.counts),
             "progress_path": self.progress_path,
             "skipped_admitted": list(self.skipped_admitted),
+            "skipped_terminal": list(self.skipped_terminal),
             "skipped_exhausted": list(self.skipped_exhausted),
             "stopped_reason": self.stopped_reason,
         }
@@ -115,6 +120,73 @@ def reconcile_counts(
         "completed": len(scientific),
         "admitted": len(admitted),
         "infrastructure_only": len(infra - scientific),
+    }
+
+
+def reconcile_admissions_across_chains(
+    chains: Sequence[AppendOnlyLedger | Path | str],
+    ordered_task_ids: Sequence[str],
+) -> dict[str, Any]:
+    """Credit admissions across the registered chains (owner rule, option B).
+
+    The operative chain is credited by :func:`reconcile_counts`; a separately
+    owner-sanctioned corrective chain lives outside it.  The owner chose
+    (2026-10-15) that a task counts toward the target iff it holds at least one
+    admitted scientific record in ANY registered chain, **each task exactly
+    once**.  This function implements that rule read-only.
+
+    Fail-closed: every chain is verified first, and a chain that fails
+    verification aborts the whole reconciliation -- a broken chain must never
+    silently reduce or inflate the credited total.  No ledger is mutated and no
+    admission predicate changes; a task admitted in more than one chain is
+    reported in ``credited_in_multiple_chains`` and still counted once.
+
+    ``chains`` is ordered: the first entry is the **operative** chain (the one
+    the runbook pins with ``--ledger``), whose admitted set is returned
+    separately as ``operative_admitted`` -- the code-bound canonical figure.
+    """
+    if not chains:
+        raise BatchError("cross-chain reconciliation needs at least one chain")
+    universe = set(ordered_task_ids)
+    per_chain: list[dict[str, Any]] = []
+    credited: set[str] = set()
+    in_multiple: set[str] = set()
+    unregistered: set[str] = set()
+    for chain in chains:
+        ledger = chain if isinstance(chain, AppendOnlyLedger) else AppendOnlyLedger(chain)
+        ok, reason = ledger.verify()
+        if not ok:
+            raise BatchError(f"chain {ledger.path} failed verification: {reason}")
+        # The canonical admission rule (AppendOnlyLedger.admitted): the FIRST
+        # scientific record for a task decides, and only ADMITTED_OUTCOME
+        # credits.  Computed in one pass; a test pins it to the per-task method.
+        first_scientific: dict[str, dict[str, Any]] = {}
+        for record in ledger.records():
+            task_id = str(record.get("task_id"))
+            if record.get("outcome_class") == "scientific" and task_id not in first_scientific:
+                first_scientific[task_id] = record
+        admitted_all = {
+            task_id
+            for task_id, record in first_scientific.items()
+            if record.get("outcome") == ADMITTED_OUTCOME
+        }
+        unregistered |= {t for t in admitted_all if t not in universe}
+        admitted = admitted_all & universe
+        in_multiple |= credited & admitted
+        credited |= admitted
+        per_chain.append({
+            "path": str(ledger.path),
+            "rows": len(ledger.records()),
+            "admitted": sorted(admitted),
+        })
+    return {
+        "chains": per_chain,
+        "operative_admitted": per_chain[0]["admitted"],
+        "credited_admitted": sorted(credited),
+        "credited_count": len(credited),
+        "credited_in_multiple_chains": sorted(in_multiple),
+        "unregistered_admitted": sorted(unregistered),
+        "registered": len(ordered_task_ids),
     }
 
 
@@ -221,6 +293,7 @@ def drive_batch(
         counts=reconcile_counts(ledger, ordered_task_ids),
         progress_path=str(progress_path or ""),
         skipped_admitted=plan.skipped_admitted,
+        skipped_terminal=plan.skipped_terminal,
         skipped_exhausted=plan.skipped_exhausted,
         stopped_reason=stopped_reason,
     )
