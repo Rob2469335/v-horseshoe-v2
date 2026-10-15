@@ -95,6 +95,7 @@ __all__ = [
     "parse_attestation",
     "attestation_digest",
     "canonical_enforcement_digest",
+    "canonical_rules_digest",
     "parse_enforcement_capture",
     "effective_outbound_rule",
     "enforcement_denies",
@@ -426,6 +427,49 @@ def _classify(dimension: str, raw: str) -> str:
 def is_sha256_hex(value: str) -> bool:
     """True iff ``value`` is a syntactically valid 64-character SHA-256 digest."""
     return len(value) == 64 and all(c in "0123456789abcdefABCDEF" for c in value)
+
+
+def canonical_rules_digest(capture: Mapping[str, Any]) -> str:
+    """SHA-256 over ONLY the enforcement RULES of a capture (no ``captured_at``,
+    no ``subject``).
+
+    Backward-compatible ADDITION: it changes nothing about
+    :func:`canonical_policy_digest` / :func:`canonical_enforcement_digest`, which
+    intentionally identify a *capture* (byte-identity, including
+    ``captured_at``). It answers the DISTINCT question "are these two captures
+    the SAME POLICY?" -- the same rule set -- which the capture digests cannot,
+    because a re-capture of an unchanged ACL yields a different capture digest.
+    It never replaces, and is never compared against, an attestation's
+    ``policy_sha256``; ``captured_at`` is deliberately EXCLUDED so this digest
+    can never satisfy a freshness requirement.
+    """
+    rules = capture.get("rules") if isinstance(capture, Mapping) else None
+    payload = [r for r in rules if isinstance(r, Mapping)] if isinstance(rules, (list, tuple)) else []
+
+    def _weight(r: Mapping[str, Any]) -> int:
+        w = r.get("weight", 0)
+        if isinstance(w, bool) or not isinstance(w, int):
+            try:
+                w = int(str(w).strip())
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"malformed enforcement rule: weight {w!r} is not an integer"
+                ) from exc
+        return w
+
+    def _key(r: Mapping[str, Any]) -> tuple[Any, ...]:
+        return (
+            str(r.get("direction", "")).lower(),
+            str(r.get("action", "")).lower(),
+            str(r.get("remote_ip", "")),
+            str(r.get("protocol", "any")).lower(),
+            _weight(r),
+            bool(r.get("stateful", False)),
+        )
+
+    normalized = [list(k) for k in sorted(_key(r) for r in payload)]
+    blob = json.dumps(normalized, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
 
 
 def canonical_policy_digest(capture: Mapping[str, Any]) -> str:

@@ -497,3 +497,94 @@ class TestProjectionAndSerialisation:
         assert payload["enforcement_capture_sha256"] == \
             iso.canonical_enforcement_digest(cap)
         assert all("raw_outcome" in p for p in payload["probes"])
+
+
+class TestCanonicalRulesDigest:
+    """Backward-compatible policy-equivalence digest (rules only).
+
+    `canonical_policy_digest` / `canonical_enforcement_digest` identify a
+    *capture* (they include `captured_at`), so a re-capture of an UNCHANGED ACL
+    has a different digest. `canonical_rules_digest` answers the distinct
+    question "same policy?" and must NOT be usable as a freshness/attestation
+    binding.
+    """
+
+    from qwen_train import f2_isolation as _iso
+
+    def _cap(self, ts, rules):
+        return {"schema": "f2_enforcement_capture_v1",
+                "kind": "hyper-v-extended-acl", "captured_at": ts,
+                "subject": {"vm_name": "F2-S8-VM1", "vm_id": "x", "adapter_mac": "y"},
+                "rules": rules}
+
+    R = [
+        {"direction": "outbound", "action": "deny", "remote_ip": "0.0.0.0/0",
+         "protocol": "any", "weight": 350, "stateful": False},
+        {"direction": "outbound", "action": "deny", "remote_ip": "::/0",
+         "protocol": "any", "weight": 340, "stateful": False},
+    ]
+
+    def test_same_rules_different_timestamps_have_equal_rules_digest(self):
+        from qwen_train.f2_isolation import (canonical_rules_digest,
+                                             canonical_enforcement_digest)
+        a = self._cap("2026-01-01T00:00:00Z", self.R)
+        b = self._cap("2026-12-31T23:59:59Z", self.R)
+        assert canonical_rules_digest(a) == canonical_rules_digest(b)
+        # ...but the capture digests differ (that is the point).
+        assert canonical_enforcement_digest(a) != canonical_enforcement_digest(b)
+
+    def test_rule_order_does_not_matter(self):
+        from qwen_train.f2_isolation import canonical_rules_digest
+        assert canonical_rules_digest(self._cap("t", self.R)) == \
+            canonical_rules_digest(self._cap("t", list(reversed(self.R))))
+
+    def test_a_changed_rule_changes_the_rules_digest(self):
+        from qwen_train.f2_isolation import canonical_rules_digest
+        changed = [dict(self.R[0], weight=351), self.R[1]]
+        assert canonical_rules_digest(self._cap("t", self.R)) != \
+            canonical_rules_digest(self._cap("t", changed))
+
+    def test_an_extra_rule_changes_the_rules_digest(self):
+        from qwen_train.f2_isolation import canonical_rules_digest
+        extra = self.R + [{"direction": "outbound", "action": "allow",
+                           "remote_ip": "0.0.0.0/0", "protocol": "tcp",
+                           "weight": 999, "stateful": False}]
+        assert canonical_rules_digest(self._cap("t", self.R)) != \
+            canonical_rules_digest(self._cap("t", extra))
+
+    def test_empty_rules_digest_is_stable_and_not_the_capture_digest(self):
+        from qwen_train.f2_isolation import (canonical_rules_digest,
+                                             canonical_enforcement_digest)
+        a = self._cap("t", [])
+        assert canonical_rules_digest(a) == canonical_rules_digest(self._cap("u", []))
+        assert canonical_rules_digest(a) != canonical_enforcement_digest(a)
+
+    def test_malformed_inputs_are_handled_deterministically(self):
+        from qwen_train.f2_isolation import canonical_rules_digest
+        empty = canonical_rules_digest({"schema": "x"})
+        for cap in ({"rules": None}, {"rules": "nope"}, "garbage",
+                    {"rules": [1, 2, {"direction": "outbound", "action": "deny",
+                                      "weight": 1, "remote_ip": "ANY"}]}):
+            # missing / non-list rules -> the stable empty digest; non-mapping
+            # rules are skipped, never silently doubled.
+            assert canonical_rules_digest(cap) in (empty, canonical_rules_digest(
+                {"rules": [{"direction": "outbound", "action": "deny",
+                            "weight": 1, "remote_ip": "ANY"}]}))
+
+    def test_non_integer_weight_raises_clearly_not_silently(self):
+        import pytest
+        from qwen_train.f2_isolation import canonical_rules_digest
+        for bad in ("350.5", None, "abc"):
+            with pytest.raises(ValueError, match="weight"):
+                canonical_rules_digest({"rules": [{"direction": "outbound",
+                                                    "action": "deny",
+                                                    "weight": bad,
+                                                    "remote_ip": "ANY"}]})
+
+    def test_numeric_string_weight_normalises_to_the_int(self):
+        from qwen_train.f2_isolation import canonical_rules_digest
+        a = {"rules": [{"direction": "outbound", "action": "deny",
+                        "weight": 350, "remote_ip": "ANY"}]}
+        b = {"rules": [{"direction": "outbound", "action": "deny",
+                        "weight": "350", "remote_ip": "ANY"}]}
+        assert canonical_rules_digest(a) == canonical_rules_digest(b)

@@ -303,6 +303,194 @@ class TestProvenanceReporting:
         by = {f["id"]: f for f in rep["findings"]}
         assert by["provenance.verdict"]["status"] != "complete"
 
+    def test_preflight_accepts_conversion_record_dict_incomplete_fails_closed(self):
+        # Incomplete conversion record still reports UNRECORDED
+        rep = pf.run_preflight(conversion_record={"source_base": "Qwen"})
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "UNRECORDED"
+        assert by["provenance.verdict"]["status"] != "complete"
+
+    def test_preflight_accepts_valid_conversion_record_file(self, tmp_path):
+        from qwen_train import f2_model_provenance as mp
+        # Assemble compliant conversion record bound to real proven artifacts
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        chain0 = mp.build_conversion_chain(
+            model_alias="robs4b",
+            training_runs_path=pf.Path(__file__).resolve().parents[1] / "qwen_train" / "training_runs.jsonl",
+            adapter_dirs=[adapter_dir],
+            corpus_search_roots=[],
+            served_gguf=None,
+        )
+        real_base_digest = chain0.link(mp.LINK_BASE).digest
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256=real_base_digest,
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py --adapter robs4b_final_adapter --base Qwen3.5-4B",
+            operator="operator@host",
+            conversion_inputs=[str(merged), str(gguf_path)],
+        )
+        rec_file = tmp_path / "conversion_record.json"
+        rec_file.write_text(json.dumps(rec), encoding="utf-8")
+
+        rep = pf.run_preflight(conversion_record=rec_file)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.conversion"]["category"] == pf.IMPLEMENTED
+        assert by["provenance.verdict"]["status"] == "complete"
+
+    def test_preflight_conversion_record_mismatch_fails_closed(self, tmp_path):
+        from qwen_train import f2_model_provenance as mp
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256="wrong_base_digest_00000000",
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py",
+            operator="operator@host",
+            conversion_inputs=[str(merged)],
+        )
+        rep = pf.run_preflight(conversion_record=rec)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "MISMATCH"
+        assert by["provenance.verdict"]["status"] != "complete"
+
+    def test_preflight_conversion_record_nonexistent_path_fails_closed(self, tmp_path):
+        missing = tmp_path / "nonexistent_record.json"
+        rep = pf.run_preflight(conversion_record=missing)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "does not exist" in by["provenance.conversion"]["detail"]
+        assert by["provenance.conversion"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+    def test_preflight_conversion_record_invalid_json_fails_closed(self, tmp_path):
+        bad = tmp_path / "bad_record.json"
+        bad.write_text("{not valid json: ", encoding="utf-8")
+        rep = pf.run_preflight(conversion_record=bad)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "could not be parsed" in by["provenance.conversion"]["detail"]
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+    def test_preflight_conversion_record_non_mapping_fails_closed(self, tmp_path):
+        bad = tmp_path / "list_record.json"
+        bad.write_text("[1, 2, 3]", encoding="utf-8")
+        rep = pf.run_preflight(conversion_record=bad)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "is not a JSON object" in by["provenance.conversion"]["detail"]
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+    def test_preflight_conversion_record_cli_precedence_over_env(self, tmp_path, monkeypatch):
+        # Env points to invalid record, but CLI/explicit arg points to valid record.
+        # Explicit arg MUST take precedence.
+        from qwen_train import f2_model_provenance as mp
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        chain0 = mp.build_conversion_chain(
+            model_alias="robs4b",
+            training_runs_path=pf.Path(__file__).resolve().parents[1] / "qwen_train" / "training_runs.jsonl",
+            adapter_dirs=[adapter_dir],
+            corpus_search_roots=[],
+            served_gguf=None,
+        )
+        real_base_digest = chain0.link(mp.LINK_BASE).digest
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256=real_base_digest,
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py",
+            operator="operator@host",
+            conversion_inputs=[str(merged), str(gguf_path)],
+        )
+        good_file = tmp_path / "good.json"
+        good_file.write_text(json.dumps(rec), encoding="utf-8")
+
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text("{bad", encoding="utf-8")
+
+        monkeypatch.setenv("SWARM_F2_CONVERSION_RECORD", str(bad_file))
+        # Passing good_file explicitly overrides the bad env var
+        rep = pf.run_preflight(conversion_record=good_file)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.verdict"]["status"] == "complete"
+
+    def test_preflight_conversion_record_env_fallback_valid(self, tmp_path, monkeypatch):
+        from qwen_train import f2_model_provenance as mp
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        chain0 = mp.build_conversion_chain(
+            model_alias="robs4b",
+            training_runs_path=pf.Path(__file__).resolve().parents[1] / "qwen_train" / "training_runs.jsonl",
+            adapter_dirs=[adapter_dir],
+            corpus_search_roots=[],
+            served_gguf=None,
+        )
+        real_base_digest = chain0.link(mp.LINK_BASE).digest
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256=real_base_digest,
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py",
+            operator="operator@host",
+            conversion_inputs=[str(merged), str(gguf_path)],
+        )
+        rec_file = tmp_path / "env_record.json"
+        rec_file.write_text(json.dumps(rec), encoding="utf-8")
+
+        monkeypatch.setenv("SWARM_F2_CONVERSION_RECORD", str(rec_file))
+        rep = pf.run_preflight(conversion_record=None)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.verdict"]["status"] == "complete"
+
+    def test_preflight_conversion_record_env_fallback_invalid_fails_closed(self, tmp_path, monkeypatch):
+        bad_file = tmp_path / "env_bad.json"
+        bad_file.write_text("{bad", encoding="utf-8")
+        monkeypatch.setenv("SWARM_F2_CONVERSION_RECORD", str(bad_file))
+        rep = pf.run_preflight(conversion_record=None)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "could not be parsed" in by["provenance.conversion"]["detail"]
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+
 
 class TestAttestationVerification:
     def _att(self):
@@ -742,3 +930,67 @@ class TestIsolationCliArgumentContract:
             iso.parse_attestation(out.read_bytes()))
         assert "proxy" not in v.policy_declared_dimensions
         assert "proxy" in v.unproven_dimensions
+
+
+class TestOptionBModelIdentity:
+    """Option B (2026-10-14): adopted the witnessed reconversion as the F2
+    distiller identity. The two artifacts are DISTINCT and must never be
+    conflated; the original is preserved.
+    """
+
+    ORIGINAL_SHA256 = "65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41"
+    RECONVERTED_SHA256 = "3e5ba031f0b50e98450d1575aa19780bc5b4b13f48bf3eca38f3c915a442a337"
+
+    def test_served_identity_points_at_the_witnessed_reconversion(self):
+        assert pf.SERVED_GGUF_SHA256 == self.RECONVERTED_SHA256
+        assert pf.SERVED_GGUF_PATH.name == "robs4b_q4km_reconverted.gguf"
+
+    def test_original_and_reconverted_are_distinct(self):
+        # The adopted digest is NOT the previously served digest.
+        assert pf.SERVED_GGUF_SHA256 != self.ORIGINAL_SHA256
+        assert pf.SERVED_GGUF_PATH.name != "robs4b_q4km.gguf"
+
+    def test_original_served_artifact_is_preserved(self):
+        original = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_q4km.gguf"
+        if not original.is_file():
+            pytest.skip("original served artifact not present on this host")
+        import hashlib
+        h = hashlib.sha256()
+        with open(original, "rb") as fh:
+            for b in iter(lambda: fh.read(1 << 20), b""):
+                h.update(b)
+        assert h.hexdigest() == self.ORIGINAL_SHA256
+
+    def test_record_naming_the_original_digest_fails_closed(self, tmp_path):
+        # A record whose served_gguf_sha256 names the ORIGINAL artifact must NOT
+        # be accepted for the adopted reconversion: MISMATCH, fail closed.
+        rec = {
+            "source_base": "Qwen3.5-4B",
+            "source_base_sha256": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+            "source_adapter": "robs4b_final_adapter",
+            "source_adapter_sha256": "294feecc592b5a7abca7913dcb58ea797e62c2e3fe3a42abf3fe5e59db506cfd",
+            "merge_operation": "merge",
+            "conversion_tool": "llama.cpp",
+            "conversion_tool_version": "b11624",
+            "conversion_inputs": ["a", "b"],
+            "merged_artifact": "Robs4B_Merged_Hf",
+            "merged_artifact_sha256": "f" * 64,
+            "served_gguf": "robs4b_q4km.gguf",
+            "served_gguf_sha256": self.ORIGINAL_SHA256,
+            "operator": "test",
+        }
+        p = tmp_path / "rec.json"
+        p.write_text(json.dumps(rec), encoding="utf-8")
+        rep = pf.run_preflight(conversion_record=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "MISMATCH"
+        assert by["provenance.verdict"]["status"] != "complete"
+
+    def test_real_reconversion_record_accepts(self):
+        rec_path = pf.Path(r"C:\Users\rober\F2_EVIDENCE\s8\conversion\conversion_record.json")
+        if not (rec_path.is_file() and pf.SERVED_GGUF_PATH.is_file()):
+            pytest.skip("requires host-local witnessed reconversion evidence")
+        rep = pf.run_preflight(conversion_record=rec_path)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.verdict"]["status"] == "complete"

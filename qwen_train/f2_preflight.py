@@ -48,6 +48,8 @@ Usage
                                                    verify it the way the consuming gate
                                                    does, with the host capture that makes
                                                    a silently-dropping control visible
+``python -m qwen_train.f2_preflight --conversion-record PATH``
+                                                   verify a supplied conversion record
 ``python -m qwen_train.f2_preflight --provenance``
                                                    print the conversion-chain verdict
 """
@@ -551,21 +553,112 @@ def _q9_findings(
     ]
 
 
-def _provenance_findings(root: Path) -> list[Finding]:
+def _resolve_conversion_record(
+    conversion_record: Path | Mapping[str, Any] | str | None = None,
+) -> tuple[Mapping[str, Any] | None, str]:
+    """Resolve conversion record from argument or SWARM_F2_CONVERSION_RECORD.
+
+    CLI / programmatic argument takes precedence over environment variable.
+    Fails closed if a supplied path cannot be read, parsed, or is not a JSON object.
+    """
+    if conversion_record is not None:
+        if isinstance(conversion_record, Mapping):
+            return conversion_record, ""
+        p = Path(conversion_record)
+        if not p.is_file():
+            return None, f"supplied conversion record '{p.name}' does not exist or is not a file"
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return None, f"supplied conversion record '{p.name}' could not be parsed: {exc}"
+        if not isinstance(data, Mapping):
+            return None, f"supplied conversion record '{p.name}' is not a JSON object"
+        return data, ""
+
+    rec_env = _env("SWARM_F2_CONVERSION_RECORD")
+    if rec_env:
+        p = Path(rec_env)
+        if not p.is_file():
+            return None, f"SWARM_F2_CONVERSION_RECORD '{p.name}' does not exist or is not a file"
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return None, f"SWARM_F2_CONVERSION_RECORD '{p.name}' could not be parsed: {exc}"
+        if not isinstance(data, Mapping):
+            return None, f"SWARM_F2_CONVERSION_RECORD '{p.name}' is not a JSON object"
+        return data, ""
+
+    return None, ""
+
+
+#: Authorized F2 distiller GGUF the provenance chain is bound to, plus its
+#: SHA-256. Single source of truth so a model-identity change is one visible
+#: edit. This is the WITNESSED RECONVERSION (owner-authorized 2026-10-14); it is
+#: deliberately NOT byte-identical to the previously served artifact
+#: (``65202f37...``, 2_708_803_840 B), which is preserved unchanged. The two are
+#: distinct artifacts with distinct digests and must never be conflated.
+SERVED_GGUF_PATH = Path(
+    r"C:\Users\rober\F2_EVIDENCE\s8\conversion\robs4b_q4km_reconverted.gguf"
+)
+SERVED_GGUF_SHA256 = (
+    "3e5ba031f0b50e98450d1575aa19780bc5b4b13f48bf3eca38f3c915a442a337"
+)
+
+
+def _provenance_findings(
+    root: Path,
+    conversion_record: Path | Mapping[str, Any] | str | None = None,
+) -> list[Finding]:
     """Conversion-chain verdict, computed from what is actually on disk."""
     try:
         from qwen_train import f2_model_provenance as mp
     except Exception as exc:  # noqa: BLE001
         return [Finding(IMPLEMENTED, "provenance.module", "MISSING",
                         f"f2_model_provenance unavailable: {exc}", "")]
+
+    rec, err = _resolve_conversion_record(conversion_record)
+    if err:
+        try:
+            chain = mp.build_conversion_chain(
+                model_alias="robs4b",
+                training_runs_path=root / "qwen_train" / "training_runs.jsonl",
+                adapter_dirs=[root / "qwen_train" / "robs4b_final_adapter"],
+                corpus_search_roots=[root.parent / "qwen_train_data"],
+                served_gguf=SERVED_GGUF_PATH,
+                served_gguf_sha256=SERVED_GGUF_SHA256,
+                conversion_record=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return [Finding(EXTERNAL_EVIDENCE, "provenance.chain", "error",
+                            f"chain could not be built: {exc}", "")]
+        out = [
+            Finding(IMPLEMENTED if link.state == "PROVEN" else EXTERNAL_EVIDENCE,
+                    f"provenance.{link.name}", link.state, link.detail,
+                    "" if link.state == "PROVEN" else mp.LINK_REMEDY.get(link.name, ""))
+            for link in chain.links
+            if link.name != mp.LINK_CONVERSION
+        ]
+        out.append(
+            Finding(EXTERNAL_EVIDENCE, "provenance.conversion", "error",
+                    f"conversion record unusable: {err}",
+                    "supply a valid conversion record JSON")
+        )
+        out.append(
+            Finding(OPERATOR_ACTION, "provenance.verdict", "incomplete",
+                    f"model provenance NOT established: {err}",
+                    "supply a valid conversion record JSON")
+        )
+        return out
+
     try:
         chain = mp.build_conversion_chain(
             model_alias="robs4b",
             training_runs_path=root / "qwen_train" / "training_runs.jsonl",
             adapter_dirs=[root / "qwen_train" / "robs4b_final_adapter"],
             corpus_search_roots=[root.parent / "qwen_train_data"],
-            served_gguf=root / "qwen_train" / "robs4b_q4km.gguf",
-            served_gguf_sha256="65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41",
+            served_gguf=SERVED_GGUF_PATH,
+            served_gguf_sha256=SERVED_GGUF_SHA256,
+            conversion_record=rec,
         )
     except Exception as exc:  # noqa: BLE001
         return [Finding(EXTERNAL_EVIDENCE, "provenance.chain", "error",
@@ -592,6 +685,7 @@ def run_preflight(
     root: Path | None = None,
     attestation: Path | None = None,
     enforcement_capture: Path | None = None,
+    conversion_record: Path | Mapping[str, Any] | str | None = None,
     env: dict[str, str] | None = None,
     adapter_controls: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -601,6 +695,9 @@ def run_preflight(
     ``attestation``. It reaches only the Q9 gate, and only the same way the
     consuming gate takes it (``qwen_train.f2_readiness``); supplying it can
     shrink the unproven set, never grow the satisfied one.
+
+    ``conversion_record`` is an optional conversion record JSON path or mapping.
+    CLI/explicit argument takes precedence over SWARM_F2_CONVERSION_RECORD.
 
     ``adapter_controls`` overrides the adapter-forced control values that
     ``env.controls`` resolves against. Like ``env`` it exists so a test can
@@ -622,7 +719,7 @@ def run_preflight(
     # VERIFIED (never trusted) from the single supplied artifact, with the host
     # capture the consuming gate also takes.
     findings += _q9_findings(attestation, enforcement_capture)
-    findings += _provenance_findings(repo)
+    findings += _provenance_findings(repo, conversion_record=conversion_record)
 
     for f in findings:
         if f.category not in CATEGORIES:
@@ -746,6 +843,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--enforcement-capture", default=None,
                     help="host-side enforcement capture that belongs to the "
                          "supplied attestation (requires --attestation)")
+    ap.add_argument("--conversion-record", default=None,
+                    help="path to a conversion record JSON to verify")
     ap.add_argument("--provenance", action="store_true",
                     help="print only the conversion-chain verdict")
     args = ap.parse_args(list(argv) if argv is not None else None)
@@ -762,16 +861,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     _load_operator_env(root)
     att = Path(args.attestation) if args.attestation else None
     cap = Path(args.enforcement_capture) if args.enforcement_capture else None
+    conv_path = Path(args.conversion_record) if args.conversion_record else None
 
     if args.provenance:
-        for f in _provenance_findings(root):
+        for f in _provenance_findings(root, conversion_record=conv_path):
             print(f"[{f.status:>10}] {f.ident}: {f.detail}")
             if f.action:
                 print(f"             ACTION: {f.action}")
         return 0
 
     report = run_preflight(root=root, attestation=att,
-                           enforcement_capture=cap)
+                           enforcement_capture=cap,
+                           conversion_record=conv_path)
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
