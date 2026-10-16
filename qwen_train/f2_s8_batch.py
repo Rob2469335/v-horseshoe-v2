@@ -146,12 +146,18 @@ GRANDFATHERED_CORRECTION_TASK_IDS: frozenset[str] = frozenset({
     "HypothesisWorks__hypothesis-4532",
 })
 
+#: Test-only sentinel (see ``reconcile_admissions_across_chains``).  Private by
+#: design: production code must never hold a reference to it, and passing
+#: anything else -- including ``False`` -- leaves registered-chain enforcement
+#: ON.  There is deliberately no boolean switch to disable the policy.
+_ALLOW_UNREGISTERED_CHAINS = object()
+
 
 def reconcile_admissions_across_chains(
     chains: Sequence[AppendOnlyLedger | Path | str],
     ordered_task_ids: Sequence[str],
     *,
-    enforce_registered_chains: bool = True,
+    allow_unregistered_chains: object | None = None,
 ) -> dict[str, Any]:
     """Credit admissions across the registered chains (owner rule, option B).
 
@@ -181,6 +187,15 @@ def reconcile_admissions_across_chains(
     if not chains:
         raise BatchError("cross-chain reconciliation needs at least one chain")
     universe = set(ordered_task_ids)
+
+    # Registered-chain enforcement is ON unless the caller passes the module
+    # private test-only sentinel.  A caller cannot relax the policy by passing a
+    # boolean: ``enforce_registered_chains=False`` is now a TypeError (no such
+    # parameter), and any other value -- including ``False`` -- leaves the
+    # enforcement enabled.  Only in-tree test modules hold the sentinel.
+    enforce_registered_chains = (
+        allow_unregistered_chains is not _ALLOW_UNREGISTERED_CHAINS
+    )
 
     # REGISTERED-CHAIN ENFORCEMENT (owner-authorized OD-2). The supplied chains
     # must be exactly the code-pinned registered set, in registered order, and
@@ -312,6 +327,12 @@ def reconcile_admissions_across_chains(
                 raise BatchError(
                     f"task {task_id!r} correction claims prior_outcome "
                     f"{claimed_prior!r} but the earlier record is {actual_prior!r}")
+            claimed_class = str(correction.get("prior_outcome_class") or "")
+            actual_class = str(prior_rec.get("outcome_class") or "")
+            if claimed_class != actual_class:
+                raise BatchError(
+                    f"task {task_id!r} correction claims prior_outcome_class "
+                    f"{claimed_class!r} but the earlier record is {actual_class!r}")
             # A correction may override a TERMINAL SCIENTIFIC REJECTION only
             # through the one code-pinned historical exception; every other such
             # attempt is REFUSED (never credited).

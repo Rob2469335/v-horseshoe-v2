@@ -23,12 +23,17 @@ def reconcile_admissions_across_chains(chains, tasks, **kw):
     """Synthetic-chain wrapper: these fixtures use temp paths, never the registered
     chains, so the code-pinned chain-registration enforcement is opted out of here.
     The real registered chains and the grandfather exception are exercised by
-    TestCrossChainPolicyWithRealChains."""
+    TestCrossChainPolicyWithRealChains.  The opt-out requires the module-private
+    sentinel; there is deliberately no boolean switch a production caller could
+    pass, so ``enforce_registered_chains=False`` is now a TypeError."""
     from qwen_train.f2_s8_batch import (
+        _ALLOW_UNREGISTERED_CHAINS,
         reconcile_admissions_across_chains as _real,
     )
 
-    return _real(chains, tasks, enforce_registered_chains=False, **kw)
+    return _real(
+        chains, tasks,
+        allow_unregistered_chains=_ALLOW_UNREGISTERED_CHAINS, **kw)
 
 REG_SHA = "c" * 64
 TASKS = [f"t-{i}" for i in range(5)]
@@ -372,7 +377,8 @@ class TestCrossChainCorrectionBinding:
 
     def _correction(self, *, task_id, chain_name, chain_sha256, record_digest,
                     outcome="base_fail_gold_pass",
-                    prior_outcome="infrastructure_failure"):
+                    prior_outcome="infrastructure_failure",
+                    prior_outcome_class="infrastructure"):
         return {
             "task_id": task_id, "registration_id": "reg",
             "registration_sha256": REG_SHA, "outcome": outcome,
@@ -381,6 +387,7 @@ class TestCrossChainCorrectionBinding:
             "correction_of_chain_sha256": chain_sha256,
             "correction_of_record_digest": record_digest,
             "prior_outcome": prior_outcome,
+            "prior_outcome_class": prior_outcome_class,
         }
 
     def test_a_valid_historical_prefix_binding_is_accepted(self, tmp_path):
@@ -489,6 +496,48 @@ class TestCrossChainCorrectionBinding:
             task_id="t-1", chain_name=a_path.name,
             chain_sha256=_prefix_digest(a_path, 1), record_digest="not-a-digest")])
         with pytest.raises(BatchError, match="not a 64-character"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_an_altered_record_digest_is_refused(self, tmp_path):
+        """A well-formed digest that matches no record is refused.
+
+        ``AppendOnlyLedger.verify()`` recomputes ``record_digest`` from the record
+        body (chained via ``prev_digest``), so altering the referenced record
+        changes its digest; a correction still citing the old value cannot bind.
+        """
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        good = _record_digest(a_path, 0)
+        flipped = ("0" if good[0] != "0" else "1") + good[1:]
+        assert flipped != good
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 1), record_digest=flipped)])
+        with pytest.raises(BatchError, match="does not exist"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_digest_of_a_different_record_in_the_chain_is_refused(self, tmp_path):
+        """The referenced digest must be the record OF THE SAME TASK."""
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1"), _infra("t-2")])
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 2),
+            record_digest=_record_digest(a_path, 1))])      # t-2's record, not t-1's
+        with pytest.raises(BatchError, match="SAME task"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_prior_outcome_class_mismatch_is_refused(self, tmp_path):
+        """The declared prior CLASS must equal the actual earlier record's class."""
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1")])
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 1),
+            record_digest=_record_digest(a_path, 0),
+            prior_outcome="infrastructure_failure",
+            prior_outcome_class="scientific")])             # WRONG class
+        with pytest.raises(BatchError, match="prior_outcome_class"):
             reconcile_admissions_across_chains([a, b], TASKS)
 
 
@@ -614,7 +663,7 @@ class TestCrossChainPolicyWithRealChains:
             "correction_of_chain": a_path.name,
             "correction_of_chain_sha256": prefix,
             "correction_of_record_digest": _record_digest(a_path, 0),
-            "prior_outcome": "gold_fail",
+            "prior_outcome": "gold_fail", "prior_outcome_class": "scientific",
         }])
         out = reconcile_admissions_across_chains([a, b], TASKS)
         assert out["credited_count"] == 0
@@ -636,3 +685,66 @@ class TestCrossChainPolicyWithRealChains:
             assert task_id in doc, task_id
         assert GRANDFATHERED_CORRECTION_TASK_IDS == frozenset(
             {"HypothesisWorks__hypothesis-4532"})
+
+
+class TestRegisteredChainEnforcementCannotBeSwitchedOff:
+    """The chain-registration policy must be unreachable-OFF from production.
+
+    ``reconcile_admissions_across_chains`` relaxes its registered-chain
+    enforcement ONLY for the module-private ``_ALLOW_UNREGISTERED_CHAINS``
+    sentinel, which lives in ``qwen_train/f2_s8_batch.py`` and is passed by no
+    production module.  There is deliberately no boolean switch: the old
+    ``enforce_registered_chains`` parameter no longer exists.
+    """
+
+    _ROOTS = ("swarm_os", "runtime_v2", "organism_console", "qwen_train")
+
+    def _production_modules(self):
+        root = Path(__file__).resolve().parents[1]
+        for top in self._ROOTS:
+            for path in (root / top).rglob("*.py"):
+                if "tests" in path.parts:
+                    continue
+                yield root, path
+
+    def test_no_production_module_passes_the_test_only_override(self):
+        """AST-level: only the defining module may mention the sentinel or the kwarg."""
+        import ast
+
+        root = Path(__file__).resolve().parents[1]
+        defining = (root / "qwen_train" / "f2_s8_batch.py").resolve()
+        offenders: list[str] = []
+        for root, path in self._production_modules():
+            if path.resolve() == defining:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.keyword) and node.arg in {
+                    "allow_unregistered_chains", "enforce_registered_chains",
+                }:
+                    offenders.append(
+                        f"{path.relative_to(root)}:{node.lineno} kwarg {node.arg}")
+                if (isinstance(node, ast.Name)
+                        and node.id == "_ALLOW_UNREGISTERED_CHAINS"):
+                    offenders.append(
+                        f"{path.relative_to(root)}:{node.lineno} sentinel reference")
+        assert offenders == [], offenders
+
+    def test_the_boolean_switch_no_longer_exists(self):
+        import inspect
+
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains
+
+        params = inspect.signature(reconcile_admissions_across_chains).parameters
+        assert "enforce_registered_chains" not in params
+        assert "allow_unregistered_chains" in params
+
+    def test_an_arbitrary_value_does_not_disable_enforcement(self, tmp_path):
+        """``False`` (or anything but the sentinel) leaves enforcement ON."""
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains
+
+        c = _chain(tmp_path / "not-registered.jsonl",
+                   [_sci("t-0", "base_fail_gold_pass", True)])
+        with pytest.raises(TypeError):
+            reconcile_admissions_across_chains(
+                [c], TASKS, enforce_registered_chains=False)
