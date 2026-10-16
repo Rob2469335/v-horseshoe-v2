@@ -229,6 +229,32 @@ no pilot or task execution is authorized by it.
 
 Default-deny outbound egress for the arm's identity. See §4.
 
+### 1.6 Signed execution authorization and the evidence-capture contract (Phase 2 onward)
+
+**Signed authorization is required before any guest work.** The eight gate booleans
+are caller-supplied **preconditions, not authority**: the entry point additionally
+requires an owner-signed record for stage **`S8-001`**, operation
+**`base_gold_production`**, bound to the **candidate-manifest digest**, the
+**registration digest**, and the **repository revision** (`f2_authorization.py`;
+enforced once at entry in `f2_s8_pilot_live`). With no trust root, or with an
+invalid, expired, revoked, mismatched or already-consumed record, the run is
+**refused** — `pilot_authorized: true` alone is not authority.
+
+**Every future admitted pair must retain a canonically verifiable bundle:** per side
+the full governed `EvidenceRecord`, a **real run log** with its digest and size, real
+ISO-8601 UTC `started_at`/`finished_at`, `environment_identity`, the base/gold
+`execution_state_digest`, the report digest and size, the evaluator identity and
+implementation digest, and the repository revision plus registration digest — all
+bound into the ledger record. **Placeholder logs** (e.g. a 12-byte `"base run log"`)
+and **placeholder timestamps** (`t0`/`t1`) are refused
+(`f2_s8_compose.require_authentic_evidence`); the pilot emits real logs and
+timestamps.
+
+**Counting rule:** see `docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md` — the target
+is the union of admitted pairs across *registered* chains, each task counted once,
+with the four historical pilot pairs grandfathered under a documented legacy
+evidence contract.
+
 ---
 
 ## 2. THE EXACT EXECUTION ORDER
