@@ -12,6 +12,7 @@ import pytest
 from qwen_train.f2_s8_factory import (
     ADMITTED_OUTCOME,
     GENESIS_DIGEST,
+    REQUIRED_EVIDENCE_ROLES,
     AppendOnlyLedger,
     ExecutionResult,
     FactoryError,
@@ -45,6 +46,18 @@ def _ok(task_id, attempt, **over):
         evidence_sha256="c" * 64,
         evidence_size=1234,
         evaluator=EVAL,
+        # The prospective evidence contract (Decision 3): an admission must bind
+        # the durable record digest and the run/environment/state identities.
+        evidence_record_digest="d" * 64,
+        environment_identity="test-env",
+        execution_state_digest="e" * 64,
+        started_at="2026-10-16T00:00:00Z",
+        finished_at="2026-10-16T00:00:01Z",
+        repository_revision="a" * 40,
+        artifacts={
+            role: {"name": f"{role}.bin", "sha256": "f" * 64, "size_bytes": 10}
+            for role in REQUIRED_EVIDENCE_ROLES
+        },
     )
     kw.update(over)
     return ExecutionResult(**kw)
@@ -215,6 +228,88 @@ class TestRunOnce:
         # nothing ran, nothing was written: still exactly the one seeded record
         assert len(ledger.records()) == 1
         assert ledger.verify()[0] is True
+
+
+class TestEvidenceBindingIsFailClosed:
+    """Decision 3: an ADMITTED outcome must bind its evidence identities.
+
+    A missing, substituted or inconsistent binding is refused -- the ledger must
+    never carry a half-bound admission.
+    """
+
+    def _run(self, tmp_path, **over):
+        return run_once(
+            task_id="t-1", ledger=AppendOnlyLedger(tmp_path / "l.jsonl"),
+            runner=lambda tid, attempt: _ok(tid, attempt, **over),
+            registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL,
+        )
+
+    def test_a_bound_admission_carries_the_bundle_into_the_record(self, tmp_path):
+        rec = self._run(tmp_path)
+        assert rec["admitted"] is True
+        assert rec["evidence_record_digest"] == "d" * 64
+        bundle = rec["evidence_bundle"]
+        assert bundle["environment_identity"] == "test-env"
+        assert bundle["execution_state_digest"] == "e" * 64
+        assert bundle["repository_revision"] == "a" * 40
+        assert set(REQUIRED_EVIDENCE_ROLES) <= set(bundle["artifacts"])
+
+    def test_a_missing_record_digest_is_refused(self, tmp_path):
+        with pytest.raises(FactoryError, match="persisted evidence record"):
+            self._run(tmp_path, evidence_record_digest="")
+
+    def test_a_substituted_record_digest_is_refused(self, tmp_path):
+        with pytest.raises(FactoryError, match="persisted evidence record"):
+            self._run(tmp_path, evidence_record_digest="NOT-A-DIGEST")
+
+    def test_a_missing_environment_identity_is_refused(self, tmp_path):
+        with pytest.raises(FactoryError, match="environment identity"):
+            self._run(tmp_path, environment_identity="")
+
+    def test_a_missing_execution_state_digest_is_refused(self, tmp_path):
+        with pytest.raises(FactoryError, match="execution-state digest"):
+            self._run(tmp_path, execution_state_digest="")
+
+    def test_a_missing_repository_revision_is_refused(self, tmp_path):
+        with pytest.raises(FactoryError, match="repository revision"):
+            self._run(tmp_path, repository_revision="")
+
+    def test_a_placeholder_timestamp_is_refused(self, tmp_path):
+        with pytest.raises(FactoryError, match="ISO-8601 UTC"):
+            self._run(tmp_path, started_at="t0")
+
+    def test_a_missing_required_artifact_role_is_refused(self, tmp_path):
+        artifacts = {r: {"name": f"{r}.bin", "sha256": "f" * 64, "size_bytes": 1}
+                     for r in REQUIRED_EVIDENCE_ROLES}
+        artifacts.pop("gold_run_log")
+        with pytest.raises(FactoryError, match="missing required evidence artifacts"):
+            self._run(tmp_path, artifacts=artifacts)
+
+    def test_an_artifact_with_an_inconsistent_digest_is_refused(self, tmp_path):
+        artifacts = {r: {"name": f"{r}.bin", "sha256": "f" * 64, "size_bytes": 1}
+                     for r in REQUIRED_EVIDENCE_ROLES}
+        artifacts["base_report"] = {"name": "b.bin", "sha256": "short", "size_bytes": 1}
+        with pytest.raises(FactoryError, match="no 64-hex SHA-256"):
+            self._run(tmp_path, artifacts=artifacts)
+
+    def test_an_artifact_without_a_size_is_refused(self, tmp_path):
+        artifacts = {r: {"name": f"{r}.bin", "sha256": "f" * 64, "size_bytes": 1}
+                     for r in REQUIRED_EVIDENCE_ROLES}
+        artifacts["gold_report"] = {"name": "g.bin", "sha256": "f" * 64}
+        with pytest.raises(FactoryError, match="non-negative size_bytes"):
+            self._run(tmp_path, artifacts=artifacts)
+
+    def test_a_non_admitted_outcome_is_unaffected(self, tmp_path):
+        """A non-admitted outcome carries no admission binding (and is not counted)."""
+        rec = run_once(
+            task_id="t-2", ledger=AppendOnlyLedger(tmp_path / "l2.jsonl"),
+            runner=lambda tid, attempt: _ok(
+                tid, attempt, outcome="gold_fail", evidence_name="",
+                evidence_sha256="", evidence_size=0),
+            registration_id="reg", registration_sha256=REG_SHA, evaluator=EVAL,
+        )
+        assert rec["admitted"] is False
+        assert "evidence_bundle" not in rec
 
 
 class TestPlanning:

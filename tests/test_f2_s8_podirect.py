@@ -263,6 +263,7 @@ class TestEndToEndHostPath:
             ledger=AppendOnlyLedger(tmp_path / "ledger.jsonl"), inputs=inputs,
             execute=lambda _s, side: evidence[side],
             expected_registration_sha256="c" * 64, ts="T",
+            repository_revision="a" * 40,
         )
         assert res.state == "admitted"
         assert res.record["admitted"] is True

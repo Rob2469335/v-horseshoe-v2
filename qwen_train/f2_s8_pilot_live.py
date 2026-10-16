@@ -256,7 +256,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest_path = Path(args.manifest)
     manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     try:
-        require_authorized(
+        verified = require_authorized(
             stage="S8-001",
             operation="base_gold_production",
             binding={
@@ -269,6 +269,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "REFUSING: no valid S8-001/base_gold_production signed authorization "
             f"for this manifest and registration ({exc})"
         ) from exc
+    # The revision the OWNER-signed grant bound; written into every admitted
+    # ledger record (Decision 3) so a record names the code that produced it.
+    authorized_revision = str((verified or {}).get("repository_revision") or "")
 
     # Fail closed before touching the guest: the governed path needs a real
     # trusted store and a real authorized evaluator, none of which this module
@@ -318,6 +321,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 spec=spec, channel=channel, inputs=inputs, ledger=ledger,
                 gates=gates, guest_dir=GUEST_DIR, host_dir=str(staging),
                 registration_sha256=args.registration_sha256,
+                repository_revision=authorized_revision,
                 job_nonce=args.nonce or spec.task_id,
                 timeout_seconds=3600, **env,
             )

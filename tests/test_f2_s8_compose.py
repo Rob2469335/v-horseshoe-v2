@@ -123,7 +123,7 @@ def _run(root, spec, inputs, execute, ts="T"):
     return produce_governed_task(
         spec=spec, gates={n: True for n in REQUIRED_GATES}, adapter=FakeVMAdapter(),
         ledger=AppendOnlyLedger(root / "ledger.jsonl"), inputs=inputs, execute=execute,
-        expected_registration_sha256=REG_SHA, ts=ts,
+        expected_registration_sha256=REG_SHA, ts=ts, repository_revision="a" * 40,
     )
 
 

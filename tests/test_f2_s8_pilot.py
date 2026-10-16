@@ -197,6 +197,7 @@ class TestHonestAdmission:
         result = run_pilot_task(
             spec=spec, channel=channel, inputs=_inputs(tmp_path), ledger=ledger,
             gates=GATES, guest_dir=str(tmp_path), registration_sha256=REG_SHA,
+            repository_revision="a" * 40,
             job_nonce="t1",
         )
         assert result.admitted is True
@@ -215,6 +216,7 @@ class TestHonestAdmission:
             spec=spec, channel=channel, inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t2",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
         assert result.outcome == "gold_fail"
@@ -227,6 +229,7 @@ class TestHonestAdmission:
             spec=spec, channel=channel, inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t3",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
         assert result.outcome == "base_pass"
@@ -238,6 +241,7 @@ class TestHonestAdmission:
             spec=spec, channel=channel, inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t4",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
         assert result.failure_class.startswith("evaluator_refused_base")
@@ -257,6 +261,7 @@ class TestHonestAdmission:
             spec=spec, channel=channel, inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t5",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
 
@@ -271,6 +276,7 @@ class TestFailClosed:
                 ledger=AppendOnlyLedger(tmp_path / "l.jsonl"),
                 gates={**GATES, "pilot_authorized": False},
                 guest_dir=str(tmp_path), registration_sha256=REG_SHA,
+                repository_revision="a" * 40,
             )
         assert channel.commands == []
 
@@ -280,6 +286,7 @@ class TestFailClosed:
                 spec=_spec(), channel=FakeChannel(), inputs=_inputs(tmp_path),
                 ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
                 guest_dir=str(tmp_path), registration_sha256="d" * 64,
+                repository_revision="a" * 40,
             )
 
     def test_guest_failure_is_infrastructure_not_scientific(self, tmp_path):
@@ -287,6 +294,7 @@ class TestFailClosed:
             spec=_spec(), channel=FakeChannel(fail_at="run"), inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t6",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
         assert result.outcome_class == "infrastructure"
@@ -323,6 +331,7 @@ class TestFailClosed:
             spec=_spec(), channel=FakeChannel(), inputs=inputs,
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t7",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
         assert result.outcome == "test_not_run"
@@ -351,6 +360,7 @@ class TestFailClosed:
             spec=_spec(), channel=Tampering(base=JUNIT_BASE), inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t8",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
         assert result.failure_class == "artifact_digest_mismatch"
@@ -389,6 +399,7 @@ class TestCountsStaySeparate:
         result = run_pilot_task(
             spec=spec, channel=FakeChannel(), inputs=_inputs(tmp_path), ledger=ledger,
             gates=GATES, guest_dir=str(tmp_path), registration_sha256=REG_SHA,
+            repository_revision="a" * 40,
             job_nonce="t9",
         )
         records = ledger.records()
@@ -525,6 +536,7 @@ class TestOutcomeTaxonomy:
             spec=spec, channel=CrashingChannel(), inputs=_inputs(tmp_path),
             ledger=ledger, gates=GATES, guest_dir=str(tmp_path),
             registration_sha256=REG_SHA, job_nonce="crash-1",
+            repository_revision="a" * 40,
         )
         assert result.admitted is False
         assert result.outcome_class == "infrastructure"
@@ -542,6 +554,7 @@ class TestOutcomeTaxonomy:
             spec=spec, channel=CrashingChannel(), inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="crash-2",
+            repository_revision="a" * 40,
         )
         assert result.outcome == "infrastructure_failure"
         assert result.outcome != "base_fail_gold_pass"
@@ -553,6 +566,7 @@ class TestOutcomeTaxonomy:
             spec=_spec(), channel=FakeChannel(), inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "a.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="ok-1",
+            repository_revision="a" * 40,
         )
         assert admitted.admitted is True
         assert admitted.reason_code == ""
@@ -561,6 +575,7 @@ class TestOutcomeTaxonomy:
             spec=_spec(), channel=FakeChannel(gold=JUNIT_BASE),
             inputs=_inputs(tmp_path), ledger=AppendOnlyLedger(tmp_path / "r.jsonl"),
             gates=GATES, guest_dir=str(tmp_path), registration_sha256=REG_SHA,
+            repository_revision="a" * 40,
             job_nonce="rej-1",
         )
         assert rejected.outcome_class == "scientific"
@@ -734,6 +749,7 @@ class TestArtifactRetrievalUsesTheReportedName:
             spec=_spec(), channel=channel, inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA,
+            repository_revision="a" * 40,
             job_nonce=job_nonce,
         )
 
@@ -848,6 +864,7 @@ class TestPerSideEnvironment:
             spec=_spec(), channel=channel, inputs=_inputs(tmp_path),
             ledger=AppendOnlyLedger(tmp_path / "l.jsonl"), gates=GATES,
             guest_dir=str(tmp_path), registration_sha256=REG_SHA, job_nonce="t9",
+            repository_revision="a" * 40,
             workdirs={"base": r"C:\ws\repo", "gold": r"C:\ws\repo_gold"},
             path_prefix={"base": r"C:\ws\.venv\Scripts",
                          "gold": r"C:\ws\.venv_gold\Scripts"},

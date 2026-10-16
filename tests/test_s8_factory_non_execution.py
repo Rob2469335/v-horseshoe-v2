@@ -21,6 +21,7 @@ import pytest
 from qwen_train import f2_s8_factory as factory
 from qwen_train.f2_s8_factory import (
     ADMITTED_OUTCOME,
+    REQUIRED_EVIDENCE_ROLES,
     AppendOnlyLedger,
     ExecutionResult,
     RetryPolicy,
@@ -94,6 +95,14 @@ def _ok(task_id, attempt, **over):
         evidence_sha256="c" * 64,
         evidence_size=10,
         evaluator=EVAL,
+        evidence_record_digest="d" * 64,
+        environment_identity="test-env",
+        execution_state_digest="e" * 64,
+        started_at="2026-10-16T00:00:00Z",
+        finished_at="2026-10-16T00:00:01Z",
+        repository_revision="a" * 40,
+        artifacts={r: {"name": f"{r}.bin", "sha256": "f" * 64, "size_bytes": 1}
+                   for r in REQUIRED_EVIDENCE_ROLES},
     )
     kw.update(over)
     return ExecutionResult(**kw)

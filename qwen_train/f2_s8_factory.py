@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +67,21 @@ INFRASTRUCTURE_OUTCOMES = ("timeout", "build_failure", "infrastructure_failure")
 ALL_OUTCOMES = SCIENTIFIC_OUTCOMES + INFRASTRUCTURE_OUTCOMES
 
 _SAFE_ARTIFACT_BAD = set('<>:"|?*;&') | {"/", "\\"}
+
+#: The evidence artifacts an admitted pair must bind.  ``test_output`` is the
+#: authoritative evaluator report per side, ``run_log`` the actual execution log
+#: per side, and the evaluator implementation is the exact code that graded it.
+REQUIRED_EVIDENCE_ROLES = (
+    "base_report", "gold_report", "base_run_log", "gold_run_log",
+    "evaluator_implementation",
+)
+
+_ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def _is_sha256(value: Any) -> bool:
+    s = str(value or "")
+    return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
 
 
 class FactoryError(Exception):
@@ -131,6 +147,15 @@ class ExecutionResult:
     evaluator: Mapping[str, str] = field(default_factory=dict)
     reason: str = ""
     ts: str = ""
+    # --- prospective evidence-binding identities (Decision 3).  Required for an
+    # --- admitted outcome; ``run_once`` refuses an admission that omits them.
+    evidence_record_digest: str = ""
+    environment_identity: str = ""
+    execution_state_digest: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    repository_revision: str = ""
+    artifacts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     @property
     def outcome_class(self) -> str:
@@ -390,6 +415,43 @@ def run_once(
         for key in ("evaluator_id", "version", "implementation_digest", "procedure_id"):
             if not str(result.evaluator.get(key) or ""):
                 raise FactoryError(f"admitted outcome is missing evaluator.{key}")
+        # PROSPECTIVE EVIDENCE CONTRACT (Decision 3): an admission must bind the
+        # durable evidence-record digest AND the environment/execution-state/run
+        # identities into the ledger record.  A pair that cannot carry them is
+        # NOT admitted -- fail closed rather than record a half-bound admission.
+        if not _is_sha256(result.evidence_record_digest):
+            raise FactoryError(
+                "an admitted outcome requires the digest of the persisted evidence "
+                "record (64-hex); a pair without a durable record is not admitted")
+        if not str(result.environment_identity or "").strip():
+            raise FactoryError(
+                "an admitted outcome requires the execution environment identity")
+        if not _is_sha256(result.execution_state_digest):
+            raise FactoryError(
+                "an admitted outcome requires the gold execution-state digest (64-hex)")
+        if not str(result.repository_revision or "").strip():
+            raise FactoryError(
+                "an admitted outcome requires the repository revision it was run from")
+        for label, value in (("started_at", result.started_at),
+                             ("finished_at", result.finished_at)):
+            if not _ISO_UTC.match(str(value or "")):
+                raise FactoryError(
+                    f"an admitted outcome requires a real ISO-8601 UTC {label} "
+                    f"({value!r} is not)")
+        missing_roles = [r for r in REQUIRED_EVIDENCE_ROLES
+                         if r not in (result.artifacts or {})]
+        if missing_roles:
+            raise FactoryError(
+                f"an admitted outcome is missing required evidence artifacts: "
+                f"{missing_roles}")
+        for role, ref in (result.artifacts or {}).items():
+            if not _is_sha256(str((ref or {}).get("sha256") or "")):
+                raise FactoryError(
+                    f"evidence artifact {role!r} has no 64-hex SHA-256")
+            size = (ref or {}).get("size_bytes")
+            if not isinstance(size, int) or size < 0:
+                raise FactoryError(
+                    f"evidence artifact {role!r} has no non-negative size_bytes")
 
     record = {
         "schema_version": SCHEMA_VERSION,
@@ -415,6 +477,18 @@ def run_once(
         "evaluator": dict(result.evaluator or evaluator),
         "reason": result.reason,
     }
+    if admitted:
+        # The bound evidence bundle: every identity the canonical verifiers and the
+        # counting rule need, attached to THIS hash-chained record.
+        record["evidence_record_digest"] = result.evidence_record_digest
+        record["evidence_bundle"] = {
+            "environment_identity": result.environment_identity,
+            "execution_state_digest": result.execution_state_digest,
+            "started_at": result.started_at,
+            "finished_at": result.finished_at,
+            "repository_revision": result.repository_revision,
+            "artifacts": {k: dict(v) for k, v in (result.artifacts or {}).items()},
+        }
     return ledger.append(record)
 
 

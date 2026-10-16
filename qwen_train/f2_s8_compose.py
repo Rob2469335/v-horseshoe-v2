@@ -404,7 +404,7 @@ def assemble_governed_bundle(
         test_output=test_output,
         run_log=run_log,
     )
-    return governance.ExecutionBundle(
+    bundle = governance.ExecutionBundle(
         identity=identity,
         declared_result=verdict,
         result_protocol_id=evaluator.RESULT_PROTOCOL_ID,
@@ -414,6 +414,14 @@ def assemble_governed_bundle(
         finished_at=guest.finished_at,
         implementation_artifact=implementation_artifact,
     )
+    # Decision 3: PERSIST the complete EvidenceRecord (canonically serialized) so
+    # every admission is backed by a durable, verifyable record -- not just the
+    # ledger's partial reference -- and its digest can be bound into the row.
+    retain_artifact(
+        inputs.store.root, f"{spec.task_id}.{side}.evidence_record.json",
+        evidence._canonical_bytes(_record_for(bundle).to_dict()),
+    )
+    return bundle
 
 
 def _record_for(bundle: governance.ExecutionBundle) -> evidence.EvidenceRecord:
@@ -491,11 +499,19 @@ def build_governed_verifiers(
     return evaluate, verify_evidence, verify_pair
 
 
+def _ref_dict(ref: Any) -> dict[str, Any]:
+    if ref is None:
+        return {}
+    return {"name": str(ref.name), "sha256": str(ref.digest),
+            "size_bytes": int(ref.size_bytes or 0)}
+
+
 def _result_from_bundles(
     spec: TaskSpec,
     base_bundle: governance.ExecutionBundle,
     gold_bundle: governance.ExecutionBundle,
     attempt: int = 1,
+    repository_revision: str = "",
 ) -> ExecutionResult:
     """A transport-level ExecutionResult summarising the assembled bundles.
 
@@ -519,6 +535,28 @@ def _result_from_bundles(
             attempt_id=f"{spec.task_id}#{attempt}", reason="S8 contract not satisfied",
         )
     ref = gold_bundle.test_output
+    # Decision 3: bind the durable evidence-record digest and every identity the
+    # canonical verifiers and the counting rule need, so the ledger record can
+    # carry them (an admission without them is refused by ``run_once``).
+    record_digest = hashlib.sha256(
+        evidence._canonical_bytes(_record_for(base_bundle).to_dict())
+        + evidence._canonical_bytes(_record_for(gold_bundle).to_dict())
+    ).hexdigest()
+    artifacts = {
+        role: ref_dict for role, ref_dict in (
+            ("base_report", _ref_dict(base_bundle.test_output)),
+            ("gold_report", _ref_dict(gold_bundle.test_output)),
+            ("base_run_log", _ref_dict(base_bundle.run_log)),
+            ("gold_run_log", _ref_dict(gold_bundle.run_log)),
+            ("evaluator_implementation",
+             _ref_dict(base_bundle.implementation_artifact
+                       or gold_bundle.implementation_artifact)),
+            ("base_evidence_record",
+             _ref_dict(getattr(base_bundle, "evidence_record", None))),
+            ("gold_evidence_record",
+             _ref_dict(getattr(gold_bundle, "evidence_record", None))),
+        ) if ref_dict
+    }
     return ExecutionResult(
         task_id=spec.task_id,
         outcome=ADMITTED_OUTCOME,
@@ -529,6 +567,13 @@ def _result_from_bundles(
         evidence_sha256=ref.digest,
         evidence_size=int(ref.size_bytes or 0),
         evaluator=_evaluator_dict(base_bundle),
+        evidence_record_digest=record_digest,
+        environment_identity=base_bundle.identity.environment_identity,
+        execution_state_digest=gold_bundle.identity.execution_state_digest,
+        started_at=base_bundle.started_at or gold_bundle.started_at,
+        finished_at=gold_bundle.finished_at or base_bundle.finished_at,
+        repository_revision=repository_revision,
+        artifacts=artifacts,
     )
 
 
@@ -554,6 +599,7 @@ def produce_governed_task(
     policy: Any = None,
     expected_registration_sha256: str = "",
     ts: str = "",
+    repository_revision: str = "",
 ) -> Any:
     """The production entry point for one task.
 
@@ -576,7 +622,8 @@ def produce_governed_task(
     # attempt count itself and ``run_once`` refuses a runner that reports a
     # different number, so the result must carry the same one.
     attempt = len(ledger.attempts(spec.task_id)) + 1
-    result = _result_from_bundles(spec, base_bundle, gold_bundle, attempt=attempt)
+    result = _result_from_bundles(spec, base_bundle, gold_bundle, attempt=attempt,
+                                  repository_revision=repository_revision)
     evaluate, verify_evidence, verify_pair = build_governed_verifiers(
         spec=spec, inputs=inputs, base_bundle=base_bundle, gold_bundle=gold_bundle
     )

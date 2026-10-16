@@ -294,6 +294,7 @@ def run_pilot_task(
     python_exe: str = "",
     path_prefix: str | Mapping[str, str] = "",
     env_extra: Mapping[str, str] | None = None,
+    repository_revision: str = "",
 ) -> PilotTaskResult:
     """Drive ONE task's base/gold pair through the real guest and verifiers.
 
@@ -495,6 +496,7 @@ def run_pilot_task(
         spec=spec, gates=gates, adapter=_NoopAdapter(), ledger=ledger,
         inputs=inputs, execute=execute,
         expected_registration_sha256=registration_sha256,
+        repository_revision=repository_revision,
     )
     # produce_governed_task -> run_session returns a SessionResult, whose
     # ``record`` is the ledger row. Read the outcome from the ledger row rather
