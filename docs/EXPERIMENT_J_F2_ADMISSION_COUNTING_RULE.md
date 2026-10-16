@@ -22,6 +22,13 @@ no admission predicate; it defines how an admitted pair is *counted* toward the 
 registered chains, each task counted exactly once.** A task admitted in more than one chain is
 counted once; the fact that it appeared in more than one chain is reported, never added.
 
+**Qualification (see §1.1–§2 and §4).** The union is taken over *creditable* admissions. A
+second-chain admission for a task that already holds a terminal non-admitted **scientific** record
+in an earlier registered chain credits only through a proven correction binding (§2) or the §4
+grandfather exception; an unbound such override is refused, and it is not credited by the bare
+union. A correction of an **infrastructure** outcome needs the §2 binding but not the §4
+exception.
+
 ### 1.1 Registered chains
 
 A chain is *registered* only when it is named here, by the experiment owner, together with its
