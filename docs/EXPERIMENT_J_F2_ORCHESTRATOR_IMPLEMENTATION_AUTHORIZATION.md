@@ -2500,3 +2500,41 @@ trust-root custody. Passing tests does not prove a real signing ceremony
 occurred. A local ledger does not prove independent tamper resistance.
 Documentation does not authorize protected execution. This entry does not make
 F2 ready for execution; every external prerequisite stands.
+
+---
+
+### F2-IMPL-AUTH-034 - Population-census reconciliation (agent; record correction, grants nothing)
+
+**Author:** agent (record correction; **not** an operator grant)
+
+**Date:** 2026-10-12
+
+**Nature.** Reconciles an existing record against reproducible current evidence.
+Grants no authority, changes no criterion, withdraws nothing.
+
+**Finding (PROVEN).** F2-IMPL-AUTH-031 (Census) and F2-IMPL-AUTH-032 record **9,198
+metadata-eligible** (S6 = 239, S7 = 253). Re-deriving the current census from the
+on-disk `data/f2_population/union/union_report.json` (built after the S6/R8 predicate
+fix; see `data/f2_population/union/build_after_s6_fix.log`) yields **9,268
+metadata-eligible** (S6 = 3, S7 = 17). The pre-fix report
+`data/f2_population/union/union_report_pre_s6_fix.json` reproduces the recorded
+9,198 / 239 / 253.
+
+**Cause.** `qwen_train/f2_relevant_files.py` now imports the frozen predicate
+`qwen_train.f2_endpoint_derivation.is_test_path` (the AUTH-031 R8 correction), which
+reduced the S6 and S7 rejections by 236 each and raised the metadata-eligible ceiling
+by **+70** (9,198 -> 9,268). Raw rows (33,967), pre-screen exclusions (197), accepted
+after union (33,770), S10 (22,784), S4 (6,102), S8 (33,770) and **ADMITTED (0)** are
+unchanged.
+
+**Correction.** For the current build the metadata-eligible ceiling is **9,268**; the
+9,198 figure in AUTH-031/032 is superseded. Admission remains **0** because S8
+base/gold execution evidence is absent. No authority is created or withdrawn and no
+frozen element changed.
+
+**Related code correction (resolves the AUTH-032 stale-preflight finding).**
+`qwen_train/f2_preflight.py` no longer reports
+`authz.population_acquisition = not_authorized`: the finding is corrected to
+`population.admission` (`EXTERNAL EVIDENCE REQUIRED`, status `insufficient`), which
+still blocks until S8 evidence exists. Preflight remains not-READY; no other gate is
+relaxed.

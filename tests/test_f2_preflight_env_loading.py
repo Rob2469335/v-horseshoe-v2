@@ -12,6 +12,7 @@ no such marker can appear in the module's own output.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -67,14 +68,52 @@ class TestExplicitEnvironmentAlwaysWins:
         assert os.environ["SWARM_RECEIPT_KEY"] == "operator-exported-value"
 
     def test_only_absent_variables_are_filled(self, tmp_path, isolate_env):
-        os.environ["SWARM_F2_EMIT_BUNDLE"] = "1"
-        _write_env(
-            tmp_path,
-            "SWARM_F2_EMIT_BUNDLE=0\nSWARM_F2_ARTIFACT_RETENTION_DAYS=30\n",
-        )
+        # A PERMITTED key (one of the seven child controls) exercises the
+        # "explicit export wins" property; governed execution inputs are covered
+        # separately below.
+        os.environ["SWARM_AUTONOMY"] = "1"
+        _write_env(tmp_path, "SWARM_AUTONOMY=0\nSWARM_EVOLUTION=0\n")
         pf._load_operator_env(tmp_path)
-        assert os.environ["SWARM_F2_EMIT_BUNDLE"] == "1"
-        assert os.environ["SWARM_F2_ARTIFACT_RETENTION_DAYS"] == "30"
+        assert os.environ["SWARM_AUTONOMY"] == "1"   # explicit export is kept
+        assert os.environ["SWARM_EVOLUTION"] == "0"  # absent -> filled (allowed key)
+
+    def test_governed_execution_inputs_are_never_imported_from_dotenv(
+        self, tmp_path, isolate_env
+    ):
+        """Process/session-only (owner decision 2026-10-15).
+
+        Importing these from ``.env`` made the preflight look satisfied even
+        though the governed execution process reads ``os.environ`` only.
+        """
+        _write_env(tmp_path, "\n".join([
+            "SWARM_DISTILLER_MODEL=robs4b",
+            "SWARM_DISTILLER_WEIGHTS_DIGEST=" + "a" * 64,
+            "SWARM_F2_EVALUATOR_ID=e",
+            "SWARM_F2_EVALUATOR_IMPL=C:/x.py",
+            "SWARM_F2_ARTIFACT_ROOT=C:/store",
+            "SWARM_F2_ARTIFACT_RETENTION_DAYS=30",
+            "SWARM_F2_EMIT_BUNDLE=1",
+            "SWARM_F2_TASK_OUTCOME_REPORT=C:/out.json",
+            "SWARM_S8_ENVIRONMENT_IDENTITY=env",
+            "SWARM_S8_BASE_STATE_DIGEST=" + "a" * 64,
+            "SWARM_S8_GOLD_STATE_DIGEST=" + "b" * 64,
+            f"SWARM_RECEIPT_KEY={SYNTHETIC}",
+        ]) + "\n")
+        pf._load_operator_env(tmp_path)
+        for key in (
+            "SWARM_DISTILLER_MODEL", "SWARM_DISTILLER_WEIGHTS_DIGEST",
+            "SWARM_F2_EVALUATOR_ID", "SWARM_F2_EVALUATOR_IMPL",
+            "SWARM_F2_ARTIFACT_ROOT", "SWARM_F2_ARTIFACT_RETENTION_DAYS",
+            "SWARM_F2_EMIT_BUNDLE", "SWARM_F2_TASK_OUTCOME_REPORT",
+            "SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+            "SWARM_S8_GOLD_STATE_DIGEST",
+        ):
+            assert key not in os.environ, key
+        # ...while the permitted receipt key IS imported.
+        assert os.environ["SWARM_RECEIPT_KEY"] == SYNTHETIC
+        # The allow-list is exactly the receipt key plus the seven controls.
+        assert pf.DOTENV_ALLOWED_KEYS == frozenset(
+            {"SWARM_RECEIPT_KEY", *pf.F2_REQUIRED_CONTROLS})
 
     def test_a_stale_file_cannot_displace_a_live_export(self, isolate_env):
         """The failure mode this guards: an old .env silently replacing a fresh
@@ -146,6 +185,33 @@ class TestRepositoryRootResolution:
         assert os.environ["SWARM_RECEIPT_KEY"] == SYNTHETIC
 
 
+class TestDotenvAllowListIsDisjointFromGovernedInputs:
+    """A governed input must never enter the CLI's `.env` allow-list.
+
+    Structural (no ``__file__`` patching, no CLI invocation), so it cannot hide a
+    production mismatch: ``_load_operator_env`` imports ONLY
+    ``DOTENV_ALLOWED_KEYS``, and this pins that no governed F2 or S8 execution
+    input is a member of it.
+    """
+
+    def test_no_governed_input_is_dotenv_allow_listed(self):
+        from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
+
+        governed = {
+            "SWARM_DISTILLER_MODEL", "SWARM_DISTILLER_WEIGHTS_DIGEST",
+            "SWARM_F2_EVALUATOR_ID", "SWARM_F2_EVALUATOR_VERSION",
+            "SWARM_F2_EVALUATOR_PROCEDURE", "SWARM_F2_EVALUATOR_IMPL",
+            "SWARM_F2_ARTIFACT_ROOT", "SWARM_F2_ARTIFACT_RETENTION_DAYS",
+            "SWARM_F2_EMIT_BUNDLE", "SWARM_F2_TASK_OUTCOME_REPORT",
+            *(name for name, _ in S8_GOVERNANCE_ENV),
+            *S8_ENV_FALLBACKS.values(),
+        }
+        overlap = governed & set(pf.DOTENV_ALLOWED_KEYS)
+        assert not overlap, (
+            f"governed execution inputs must never be imported from .env: "
+            f"{sorted(overlap)}")
+
+
 class TestValuesNeverEscaped:
     def test_loader_returns_none(self, tmp_path, isolate_env):
         _write_env(tmp_path, f"SWARM_RECEIPT_KEY={SYNTHETIC}\n")
@@ -197,3 +263,71 @@ class TestValuesNeverEscaped:
         # absence of 64-hex runs is the expected invariant.
         assert not re.search(r"[0-9a-f]{64}", out)
         del real_key
+
+
+class TestCliPreflightDoesNotHonourDotenvGovernedInputs:
+    """The ACTUAL CLI path, not ``load_governance_from_env()`` in isolation.
+
+    ``python -m qwen_train.f2_preflight`` runs ``_load_operator_env(root)`` then
+    ``run_preflight(root=root)``, with ``root`` the repository root resolved from
+    ``__file__``.  These tests point ``__file__`` at a synthetic root that carries
+    a ``.env``, so the real CLI composition is what is exercised.
+    """
+
+    def _synthetic_root(self, tmp_path, monkeypatch):
+        repo_root = tmp_path / "repo"
+        (repo_root / "qwen_train").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(
+            pf, "__file__", str(repo_root / "qwen_train" / "f2_preflight.py"))
+        # The ~2.7 GB served-GGUF provenance hash is irrelevant here and would
+        # dominate the test; the CLI/env wiring is what is under test.
+        monkeypatch.setattr(pf, "_provenance_findings", lambda *a, **k: [])
+        return repo_root
+
+    def test_dotenv_only_governed_inputs_do_not_produce_ready_findings(
+        self, tmp_path, isolate_env, monkeypatch, capsys
+    ):
+        repo_root = self._synthetic_root(tmp_path, monkeypatch)
+        (repo_root / ".env").write_text("\n".join([
+            "SWARM_DISTILLER_MODEL=robs4b",
+            "SWARM_F2_EMIT_BUNDLE=1",
+            "SWARM_F2_EVALUATOR_ID=f2_pytest_junit_evaluator",
+            "SWARM_S8_ENVIRONMENT_IDENTITY=synthetic-env",
+            "SWARM_S8_BASE_STATE_DIGEST=" + "a" * 64,
+            "SWARM_S8_GOLD_STATE_DIGEST=" + "b" * 64,
+            f"SWARM_RECEIPT_KEY={SYNTHETIC}",
+        ]) + "\n", encoding="utf-8")
+
+        rc = pf.main(["--json"])
+        out = capsys.readouterr().out
+        by = {f["id"]: f for f in json.loads(out)["findings"]}
+
+        # Governed execution inputs must NOT be satisfied from `.env`.
+        assert by["env.distiller_model"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.emit_bundle"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.evaluator_id"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.s8_environment_identity"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.s8_base_state_digest"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.s8_gold_state_digest"]["category"] == pf.OPERATOR_ACTION
+        # The permitted pair is still observed -- presence only.
+        assert by["env.receipt_key"]["category"] == pf.READY
+        # No value reaches the report, and the run is still BLOCKED.
+        assert SYNTHETIC not in out
+        assert rc == 1
+
+    def test_process_provided_governed_values_are_observed(
+        self, tmp_path, isolate_env, monkeypatch, capsys
+    ):
+        repo_root = self._synthetic_root(tmp_path, monkeypatch)
+        (repo_root / ".env").write_text("", encoding="utf-8")
+        monkeypatch.setenv("SWARM_F2_EMIT_BUNDLE", "1")
+        monkeypatch.setenv("SWARM_S8_ENVIRONMENT_IDENTITY", "env-1")
+        monkeypatch.setenv("SWARM_S8_BASE_STATE_DIGEST", "a" * 64)
+        monkeypatch.setenv("SWARM_S8_GOLD_STATE_DIGEST", "b" * 64)
+
+        pf.main(["--json"])
+        by = {f["id"]: f for f in json.loads(capsys.readouterr().out)["findings"]}
+        assert by["env.emit_bundle"]["category"] == pf.READY
+        assert by["env.s8_environment_identity"]["category"] == pf.READY
+        assert by["env.s8_base_state_digest"]["category"] == pf.READY
+        assert by["env.s8_gold_state_digest"]["category"] == pf.READY

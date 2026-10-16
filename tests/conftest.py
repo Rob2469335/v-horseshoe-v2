@@ -139,7 +139,17 @@ def global_qdrant_mock():
                             side_effect=_qdrant_in_memory,
                             create=True,
                         ):
-                            yield
+                            with patch(
+                                "organism_console.skills.skill_repository.QdrantClient",
+                                side_effect=_qdrant_in_memory_sync,
+                                create=True,
+                            ):
+                                with patch(
+                                    "swarm_os.upwork.learning_engine_qdrant.QdrantClient",
+                                    side_effect=_qdrant_in_memory_sync,
+                                    create=True,
+                                ):
+                                    yield
 
 
 @pytest.fixture(autouse=True)

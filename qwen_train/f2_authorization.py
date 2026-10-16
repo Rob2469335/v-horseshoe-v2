@@ -38,7 +38,7 @@ from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 SCHEMA = "f2-authorization/v1"
-STAGES = ("POP-001", "EXPL-001", "CONF-001")
+STAGES = ("POP-001", "EXPL-001", "CONF-001", "S8-001")
 TRUST_ROOT_ENV = "F2_AUTHORIZATION_TRUST_ROOT"
 DEFAULT_TRUST_ROOT = Path(__file__).with_name("authorization") / "trust_root.json"
 
@@ -53,6 +53,7 @@ STAGE_OPERATIONS = {
     "POP-001": frozenset({"acquire", "register"}),
     "EXPL-001": frozenset({"exploratory_run"}),
     "CONF-001": frozenset({"confirmatory_run"}),
+    "S8-001": frozenset({"base_gold_production"}),
 }
 
 # An arm execution has exactly one allowed operation per executable stage.  Keep
@@ -75,6 +76,8 @@ BINDING_FIELDS = (
     "population_digest",
     "population_manifest_digest",
     "acquired_inputs_digest",
+    "candidate_manifest_digest",
+    "registration_sha256",
     "repository_revision",
     "experiment_id",
     "protocol_version",
@@ -112,6 +115,13 @@ OPERATION_REQUIRED_BINDINGS: dict[tuple[str, str], frozenset[str]] = {
     ),
     ("EXPL-001", "exploratory_run"): frozenset(
         {"repository_revision", "experiment_id", "protocol_version", "arm"}
+    ),
+    # S8 base/gold evidence production (the governed pilot). Bound to the exact
+    # candidate manifest and registration being run, and to the repository
+    # revision the code was taken from -- so a grant authorises ONE manifest at
+    # ONE revision, never "a pilot" in the abstract.
+    ("S8-001", "base_gold_production"): frozenset(
+        {"repository_revision", "candidate_manifest_digest", "registration_sha256"}
     ),
     ("CONF-001", "confirmatory_run"): frozenset(
         {"repository_revision", "experiment_id", "protocol_version", "arm"}

@@ -7,6 +7,7 @@ produces a stable machine-readable result.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,8 @@ def clean_env(monkeypatch):
         "SWARM_F2_ARTIFACT_RETENTION_DAYS", "SWARM_F2_EMIT_BUNDLE",
         "SWARM_F2_TASK_OUTCOME_REPORT", "SWARM_RECEIPT_KEY",
         "SWARM_F2_EVALUATOR_IMPL",
+        "SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+        "SWARM_S8_GOLD_STATE_DIGEST",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("SWARM_DISTILLER_MODEL", "robs4b")
@@ -36,6 +39,9 @@ def clean_env(monkeypatch):
     monkeypatch.setenv("SWARM_F2_ARTIFACT_RETENTION_DAYS", "365")
     monkeypatch.setenv("SWARM_F2_EMIT_BUNDLE", "1")
     monkeypatch.setenv("SWARM_F2_TASK_OUTCOME_REPORT", "C:/trusted/f2/outcome.json")
+    monkeypatch.setenv("SWARM_S8_ENVIRONMENT_IDENTITY", "s8-test-env")
+    monkeypatch.setenv("SWARM_S8_BASE_STATE_DIGEST", "b" * 64)
+    monkeypatch.setenv("SWARM_S8_GOLD_STATE_DIGEST", "c" * 64)
     return monkeypatch
 
 
@@ -56,7 +62,19 @@ class TestCategoriesAreNeverCollapsed:
         assert by["evidence.s8_base_gold"]["status"] != "present"
         assert by["evidence.active_lesson"]["status"] != "present"
         assert by["host.egress_enforcement"]["status"] == "not_enforced"
-        assert by["authz.population_acquisition"]["status"] == "not_authorized"
+        assert by["population.admission"]["status"] == "insufficient"
+
+    def test_population_acquisition_is_authorized_not_authz_blocked(self):
+        # F2-IMPL-AUTH-028/029/031 record population acquisition, so preflight must
+        # not claim it is unauthorized; admission stays blocked by missing S8
+        # evidence, so preflight must still be blocked (never READY from this).
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert "authz.population_acquisition" not in by
+        assert by["population.admission"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["population.admission"]["status"] != "present"
+        assert by["evidence.s8_base_gold"]["status"] == "absent"
+        assert rep["blocking_count"] > 0
 
     def test_implemented_findings_are_all_present(self):
         rep = pf.run_preflight()
@@ -140,6 +158,219 @@ class TestEnvChecking:
         rep = pf.run_preflight()
         by = {f["id"]: f for f in rep["findings"]}
         assert by["env.evaluator_impl"]["status"] == "missing"
+
+
+class TestS8EnvChecking:
+    """The three S8-only governed inputs, reported fail-closed by preflight.
+
+    They have no F2 fallback, so ``f2_s8_compose.load_governance_from_env``
+    refuses without them.  Preflight must surface them rather than let the
+    operator discover them only at launch -- but a green S8 finding is READINESS,
+    never authorization to execute.
+    """
+
+    S8_VARS = (
+        "SWARM_S8_ENVIRONMENT_IDENTITY",
+        "SWARM_S8_BASE_STATE_DIGEST",
+        "SWARM_S8_GOLD_STATE_DIGEST",
+    )
+
+    def test_reported_names_are_the_authoritative_s8_only_set(self):
+        from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
+
+        expected = {
+            "env.s8_" + name.removeprefix("SWARM_S8_").lower()
+            for name, _ in S8_GOVERNANCE_ENV if name not in S8_ENV_FALLBACKS
+        }
+        rep = pf.run_preflight()
+        reported = {f["id"] for f in rep["findings"] if f["id"].startswith("env.s8_")}
+        assert reported == expected
+        # The six F2-fallback inputs are NOT re-reported here.
+        assert len(expected) == 3
+
+    def test_all_three_are_ready_when_provisioned(self, clean_env):
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        for name in self.S8_VARS:
+            ident = "env.s8_" + name.removeprefix("SWARM_S8_").lower()
+            assert by[ident]["category"] == pf.READY, name
+
+    def test_an_absent_input_is_operator_action_with_an_action(self, clean_env):
+        clean_env.delenv("SWARM_S8_ENVIRONMENT_IDENTITY", raising=False)
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        f = by["env.s8_environment_identity"]
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert f["status"] == "absent"
+        assert "SWARM_S8_ENVIRONMENT_IDENTITY" in f["action"]
+
+    def test_a_malformed_digest_is_blocking_not_accepted(self, clean_env):
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST", "not-a-sha256")
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        f = by["env.s8_base_state_digest"]
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert f["status"] == "malformed"
+
+    def test_identical_state_digests_are_blocking(self, clean_env):
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST", "b" * 64)  # == base
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_gold_state_digest"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.s8_gold_state_digest"]["status"] == "identical"
+
+    def test_identical_invalid_digests_stay_malformed(self, clean_env):
+        """A shared INVALID string must never be relabelled `identical`."""
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST", "same-but-invalid")
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST", "same-but-invalid")
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_base_state_digest"]["status"] == "malformed"
+        assert by["env.s8_gold_state_digest"]["status"] == "malformed"
+
+    def test_one_malformed_one_valid_keeps_malformed(self, clean_env):
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST", "not-hex")
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST", "b" * 64)
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_base_state_digest"]["status"] == "malformed"
+        assert by["env.s8_gold_state_digest"]["status"] == "set"
+        assert "identical" not in {f["status"] for f in rep["findings"]
+                                   if f["id"].startswith("env.s8_")}
+
+    def test_two_distinct_valid_digests_pass(self, clean_env):
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_base_state_digest"]["category"] == pf.READY
+        assert by["env.s8_gold_state_digest"]["category"] == pf.READY
+        assert by["env.s8_base_state_digest"]["status"] == "set"
+        assert by["env.s8_gold_state_digest"]["status"] == "set"
+
+    def test_no_s8_value_is_ever_reported(self, clean_env):
+        secretish = "s8-identity-do-not-print-1234567890"
+        clean_env.setenv("SWARM_S8_ENVIRONMENT_IDENTITY", secretish)
+        blob = json.dumps(pf.run_preflight())
+        assert secretish not in blob
+        assert "value not printed" in blob
+
+    def test_s8_findings_are_readiness_never_authorization(self, clean_env):
+        rep = pf.run_preflight()
+        cats = {f["category"] for f in rep["findings"] if f["id"].startswith("env.s8_")}
+        assert cats <= {pf.READY, pf.OPERATOR_ACTION}
+        assert pf.AUTHORIZATION not in cats
+
+
+class TestPreflightCompositionRootParity:
+    """Preflight and the ACTUAL S8 composition root must agree.
+
+    Preflight reports whether governed inputs are provisioned; the S8 governed
+    path (``f2_s8_compose.load_governance_from_env``) consumes the SAME process
+    environment.  If preflight reported every governed input ready while the
+    composition root refused -- or a ``.env`` value satisfied preflight but not
+    the composition root -- the readiness signal would be false.
+    """
+
+    GOVERNED = (
+        "SWARM_DISTILLER_MODEL", "SWARM_DISTILLER_WEIGHTS_DIGEST",
+        "SWARM_F2_EVALUATOR_ID", "SWARM_F2_EVALUATOR_VERSION",
+        "SWARM_F2_EVALUATOR_PROCEDURE", "SWARM_F2_EVALUATOR_IMPL",
+        "SWARM_F2_ARTIFACT_ROOT", "SWARM_F2_ARTIFACT_RETENTION_DAYS",
+        "SWARM_F2_EMIT_BUNDLE", "SWARM_F2_TASK_OUTCOME_REPORT",
+        "SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+        "SWARM_S8_GOLD_STATE_DIGEST",
+    )
+
+    def _governed_findings(self, report):
+        return {f["id"]: f for f in report["findings"]
+                if f["id"].startswith("env.")
+                and f["id"] not in ("env.controls", "env.receipt_key")}
+
+    def _provision(self, monkeypatch, tmp_path):
+        for name in self.GOVERNED:
+            monkeypatch.delenv(name, raising=False)
+        impl = str(Path(fe.__file__).resolve())
+        for name, value in (
+            ("SWARM_DISTILLER_MODEL", "robs4b"),
+            ("SWARM_DISTILLER_WEIGHTS_DIGEST", "a" * 64),
+            ("SWARM_F2_EVALUATOR_ID", fe.EVALUATOR_ID),
+            ("SWARM_F2_EVALUATOR_VERSION", fe.EVALUATOR_VERSION),
+            ("SWARM_F2_EVALUATOR_PROCEDURE", fe.PROCEDURE_ID),
+            ("SWARM_F2_EVALUATOR_IMPL", impl),
+            ("SWARM_F2_ARTIFACT_ROOT", str(tmp_path / "store")),
+            ("SWARM_F2_ARTIFACT_RETENTION_DAYS", "365"),
+            ("SWARM_F2_EMIT_BUNDLE", "1"),
+            ("SWARM_F2_TASK_OUTCOME_REPORT", str(tmp_path / "out.json")),
+            ("SWARM_S8_ENVIRONMENT_IDENTITY", "env-1"),
+            ("SWARM_S8_BASE_STATE_DIGEST", "b" * 64),
+            ("SWARM_S8_GOLD_STATE_DIGEST", "c" * 64),
+        ):
+            monkeypatch.setenv(name, value)
+
+    def test_all_governed_findings_ready_implies_the_composition_root_succeeds(
+        self, tmp_path, monkeypatch
+    ):
+        from qwen_train.f2_s8_compose import load_governance_from_env
+
+        self._provision(monkeypatch, tmp_path)
+        not_ready = {i: f["status"]
+                     for i, f in self._governed_findings(pf.run_preflight()).items()
+                     if f["category"] != pf.READY}
+        assert not not_ready, not_ready
+        inputs = load_governance_from_env()          # must not raise
+        assert inputs.environment_identity == "env-1"
+
+    def test_a_missing_s8_only_input_blocks_preflight_and_the_composition_root(
+        self, tmp_path, monkeypatch
+    ):
+        from qwen_train.f2_s8_compose import S8ComposeError, load_governance_from_env
+
+        self._provision(monkeypatch, tmp_path)
+        monkeypatch.delenv("SWARM_S8_GOLD_STATE_DIGEST", raising=False)
+        by = self._governed_findings(pf.run_preflight())
+        assert by["env.s8_gold_state_digest"]["category"] == pf.OPERATOR_ACTION
+        with pytest.raises(S8ComposeError):
+            load_governance_from_env()
+
+    def test_a_malformed_digest_blocks_preflight_and_the_composition_root(
+        self, tmp_path, monkeypatch
+    ):
+        from qwen_train.f2_s8_compose import S8ComposeError, load_governance_from_env
+
+        self._provision(monkeypatch, tmp_path)
+        monkeypatch.setenv("SWARM_S8_BASE_STATE_DIGEST", "not-hex")
+        by = self._governed_findings(pf.run_preflight())
+        assert by["env.s8_base_state_digest"]["status"] == "malformed"
+        with pytest.raises(S8ComposeError):
+            load_governance_from_env()
+
+    def test_a_dotenv_only_governed_input_blocks_the_cli_and_the_composition_root(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from qwen_train.f2_s8_compose import S8ComposeError, load_governance_from_env
+
+        repo_root = tmp_path / "repo"
+        (repo_root / "qwen_train").mkdir(parents=True, exist_ok=True)
+        (repo_root / ".env").write_text("\n".join([
+            "SWARM_F2_EVALUATOR_ID=" + fe.EVALUATOR_ID,
+            "SWARM_F2_EVALUATOR_IMPL=" + str(Path(fe.__file__).resolve()),
+            "SWARM_F2_ARTIFACT_ROOT=" + str(tmp_path / "store"),
+            "SWARM_S8_ENVIRONMENT_IDENTITY=env-1",
+            "SWARM_S8_BASE_STATE_DIGEST=" + "b" * 64,
+            "SWARM_S8_GOLD_STATE_DIGEST=" + "c" * 64,
+        ]) + "\n", encoding="utf-8")
+        for name in self.GOVERNED:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(
+            pf, "__file__", str(repo_root / "qwen_train" / "f2_preflight.py"))
+        monkeypatch.setattr(pf, "_provenance_findings", lambda *a, **k: [])
+
+        pf.main(["--json"])
+        by = self._governed_findings(json.loads(capsys.readouterr().out))
+        assert by["env.s8_environment_identity"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.evaluator_id"]["category"] == pf.OPERATOR_ACTION
+        # ...and the composition root, reading the SAME process env, refuses.
+        with pytest.raises(S8ComposeError):
+            load_governance_from_env()
 
 
 class TestEnvControlsFinding:
@@ -291,14 +522,202 @@ class TestProvenanceReporting:
         by = {f["id"]: f for f in rep["findings"]}
         assert by["provenance.verdict"]["status"] != "complete"
 
+    def test_preflight_accepts_conversion_record_dict_incomplete_fails_closed(self):
+        # Incomplete conversion record still reports UNRECORDED
+        rep = pf.run_preflight(conversion_record={"source_base": "Qwen"})
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "UNRECORDED"
+        assert by["provenance.verdict"]["status"] != "complete"
+
+    def test_preflight_accepts_valid_conversion_record_file(self, tmp_path):
+        from qwen_train import f2_model_provenance as mp
+        # Assemble compliant conversion record bound to real proven artifacts
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        chain0 = mp.build_conversion_chain(
+            model_alias="robs4b",
+            training_runs_path=pf.Path(__file__).resolve().parents[1] / "qwen_train" / "training_runs.jsonl",
+            adapter_dirs=[adapter_dir],
+            corpus_search_roots=[],
+            served_gguf=None,
+        )
+        real_base_digest = chain0.link(mp.LINK_BASE).digest
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256=real_base_digest,
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py --adapter robs4b_final_adapter --base Qwen3.5-4B",
+            operator="operator@host",
+            conversion_inputs=[str(merged), str(gguf_path)],
+        )
+        rec_file = tmp_path / "conversion_record.json"
+        rec_file.write_text(json.dumps(rec), encoding="utf-8")
+
+        rep = pf.run_preflight(conversion_record=rec_file)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.conversion"]["category"] == pf.IMPLEMENTED
+        assert by["provenance.verdict"]["status"] == "complete"
+
+    def test_preflight_conversion_record_mismatch_fails_closed(self, tmp_path):
+        from qwen_train import f2_model_provenance as mp
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256="wrong_base_digest_00000000",
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py",
+            operator="operator@host",
+            conversion_inputs=[str(merged)],
+        )
+        rep = pf.run_preflight(conversion_record=rec)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "MISMATCH"
+        assert by["provenance.verdict"]["status"] != "complete"
+
+    def test_preflight_conversion_record_nonexistent_path_fails_closed(self, tmp_path):
+        missing = tmp_path / "nonexistent_record.json"
+        rep = pf.run_preflight(conversion_record=missing)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "does not exist" in by["provenance.conversion"]["detail"]
+        assert by["provenance.conversion"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+    def test_preflight_conversion_record_invalid_json_fails_closed(self, tmp_path):
+        bad = tmp_path / "bad_record.json"
+        bad.write_text("{not valid json: ", encoding="utf-8")
+        rep = pf.run_preflight(conversion_record=bad)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "could not be parsed" in by["provenance.conversion"]["detail"]
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+    def test_preflight_conversion_record_non_mapping_fails_closed(self, tmp_path):
+        bad = tmp_path / "list_record.json"
+        bad.write_text("[1, 2, 3]", encoding="utf-8")
+        rep = pf.run_preflight(conversion_record=bad)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "is not a JSON object" in by["provenance.conversion"]["detail"]
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+    def test_preflight_conversion_record_cli_precedence_over_env(self, tmp_path, monkeypatch):
+        # Env points to invalid record, but CLI/explicit arg points to valid record.
+        # Explicit arg MUST take precedence.
+        from qwen_train import f2_model_provenance as mp
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        chain0 = mp.build_conversion_chain(
+            model_alias="robs4b",
+            training_runs_path=pf.Path(__file__).resolve().parents[1] / "qwen_train" / "training_runs.jsonl",
+            adapter_dirs=[adapter_dir],
+            corpus_search_roots=[],
+            served_gguf=None,
+        )
+        real_base_digest = chain0.link(mp.LINK_BASE).digest
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256=real_base_digest,
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py",
+            operator="operator@host",
+            conversion_inputs=[str(merged), str(gguf_path)],
+        )
+        good_file = tmp_path / "good.json"
+        good_file.write_text(json.dumps(rec), encoding="utf-8")
+
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text("{bad", encoding="utf-8")
+
+        monkeypatch.setenv("SWARM_F2_CONVERSION_RECORD", str(bad_file))
+        # Passing good_file explicitly overrides the bad env var
+        rep = pf.run_preflight(conversion_record=good_file)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.verdict"]["status"] == "complete"
+
+    def test_preflight_conversion_record_env_fallback_valid(self, tmp_path, monkeypatch):
+        from qwen_train import f2_model_provenance as mp
+        merged = tmp_path / "Robs4B_Merged_Hf.safetensors"
+        merged.write_bytes(b"merged_weights" * 100)
+        adapter_dir = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_final_adapter"
+        gguf_path = pf.SERVED_GGUF_PATH
+        if not (adapter_dir / "adapter_config.json").is_file() or not gguf_path.is_file():
+            pytest.skip("requires host-local robs4b artifacts")
+
+        chain0 = mp.build_conversion_chain(
+            model_alias="robs4b",
+            training_runs_path=pf.Path(__file__).resolve().parents[1] / "qwen_train" / "training_runs.jsonl",
+            adapter_dirs=[adapter_dir],
+            corpus_search_roots=[],
+            served_gguf=None,
+        )
+        real_base_digest = chain0.link(mp.LINK_BASE).digest
+        rec = mp.derive_conversion_record(
+            source_adapter=adapter_dir,
+            merged_artifact=merged,
+            served_gguf=gguf_path,
+            source_base_sha256=real_base_digest,
+            conversion_tool="convert_hf_to_gguf.py",
+            conversion_tool_version="c0bc859",
+            merge_operation="merge.py",
+            operator="operator@host",
+            conversion_inputs=[str(merged), str(gguf_path)],
+        )
+        rec_file = tmp_path / "env_record.json"
+        rec_file.write_text(json.dumps(rec), encoding="utf-8")
+
+        monkeypatch.setenv("SWARM_F2_CONVERSION_RECORD", str(rec_file))
+        rep = pf.run_preflight(conversion_record=None)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.verdict"]["status"] == "complete"
+
+    def test_preflight_conversion_record_env_fallback_invalid_fails_closed(self, tmp_path, monkeypatch):
+        bad_file = tmp_path / "env_bad.json"
+        bad_file.write_text("{bad", encoding="utf-8")
+        monkeypatch.setenv("SWARM_F2_CONVERSION_RECORD", str(bad_file))
+        rep = pf.run_preflight(conversion_record=None)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "error"
+        assert "could not be parsed" in by["provenance.conversion"]["detail"]
+        assert by["provenance.verdict"]["status"] == "incomplete"
+
+
 
 class TestAttestationVerification:
     def _att(self):
         denied = {
-            ("tcp", "example.com", 80): (iso.OUTCOME_DENIED, "refused", ""),
-            ("tcp", "api.github.com", 443): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "93.184.216.34", 80): (iso.OUTCOME_DENIED, "refused", ""),
-            ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "timed out", ""),
+            ("tcp", "93.184.216.34", 443): (iso.OUTCOME_DENIED, "refused", ""),
+            ("tcp", "93.184.216.34", 8080): (iso.OUTCOME_DENIED, "refused", ""),
+            ("dns", "8.8.8.8", 53): (iso.OUTCOME_DENIED, "winerror=10013", ""),
             ("tcp", "2606:4700:4700::1111", 443): (iso.OUTCOME_DENIED, "refused", ""),
             ("tcp", "127.0.0.1", 1): (iso.OUTCOME_PERMITTED, "ok", "127.0.0.1"),
             ("tcp", "127.0.0.1", 8000): (iso.OUTCOME_PERMITTED, "ok", "127.0.0.1"),
@@ -308,7 +727,9 @@ class TestAttestationVerification:
             return denied.get((p, h, pt), (iso.OUTCOME_UNKNOWN, "np", ""))
 
         return iso.run_egress_probes(
-            probe=probe, loopback_targets=(("127.0.0.1", 1),),
+            probe=probe,
+            udp_probe=lambda h, pt: denied.get(("dns", h, pt), (iso.OUTCOME_UNKNOWN, "np", "")),
+            loopback_targets=(("127.0.0.1", 1),),
             required_services=(("backend", "127.0.0.1", 8000),),
             dns_probe=lambda: (iso.OUTCOME_DENIED, "refused"),
             ipv6_available=lambda: True,
@@ -316,7 +737,108 @@ class TestAttestationVerification:
             policy_identity="fw", policy_sha256="ab" * 32,
             policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
             arm_id="a", rollout_id="r", workspace="w",
+            # The enforcement identity is part of THE SAME contract the consuming
+            # gate applies (qwen_train.f2_readiness._check_no_egress): a
+            # satisfied verdict alone is unattributable. Preflight reconciles the
+            # two Q9 gates against that contract, so a fully-valid attestation
+            # carries it.
+            enforcement_scope="vm",
+            executing_user="F2VM\\user",
+            interpreter_path=r"C:\f2\python.exe",
+            interpreter_sha256="cd" * 32,
         )
+
+    @staticmethod
+    def _count(report, ident):
+        return sum(1 for f in report["findings"] if f["id"] == ident)
+
+    def test_q9_findings_are_emitted_exactly_once(self, tmp_path):
+        """The duplicate that made the same id both 'not_supplied' and
+        'verified' must never return."""
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(self._att()))
+        for rep in (pf.run_preflight(), pf.run_preflight(attestation=p)):
+            assert self._count(rep, "evidence.q9_attestation") == 1
+            assert self._count(rep, "host.egress_enforcement") == 1
+
+    def test_absent_attestation_blocks_both_q9_gates(self):
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert by["host.egress_enforcement"]["category"] == pf.PRIVILEGED_HOST
+        assert by["evidence.q9_attestation"]["status"] == "not_supplied"
+        assert by["evidence.q9_attestation"]["category"] == pf.EXTERNAL_EVIDENCE
+
+    def test_valid_attestation_clears_only_the_q9_gates(self, tmp_path):
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(self._att()))
+        base = pf.run_preflight()
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["host.egress_enforcement"]["status"] == "enforced"
+        assert by["host.egress_enforcement"]["category"] == pf.READY
+        assert by["evidence.q9_attestation"]["status"] == "verified"
+        assert by["evidence.q9_attestation"]["category"] == pf.READY
+
+        b0 = {f["id"]: f["status"] for f in base["findings"]}
+        b1 = {f["id"]: f["status"] for f in rep["findings"]}
+        changed = {k for k in b1 if b0.get(k) != b1.get(k)}
+        assert changed == {"host.egress_enforcement", "evidence.q9_attestation"}
+
+        # Unrelated blockers are untouched, and the two Q9 gates were the only
+        # blocking findings that cleared.
+        assert by["evidence.s8_base_gold"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["evidence.active_lesson"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["population.admission"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert rep["blocking_count"] == base["blocking_count"] - 2
+
+    def test_missing_enforcement_identity_does_not_verify(self, tmp_path):
+        att = self._att()
+        stripped = att.__class__(**{**att.__dict__,
+            "enforcement_scope": "", "interpreter_path": "", "interpreter_sha256": ""})
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(stripped))
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["evidence.q9_attestation"]["category"] == pf.PRIVILEGED_HOST
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert "ENFORCEMENT IDENTITY" in by["evidence.q9_attestation"]["detail"]
+
+    def test_missing_policy_binding_does_not_verify(self, tmp_path):
+        att = self._att()
+        stripped = att.__class__(**{**att.__dict__,
+            "policy_identity": "", "policy_sha256": ""})
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(stripped))
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+
+    def test_reachable_egress_does_not_verify(self, tmp_path):
+        def probe(protocol, host, port):
+            if str(host) == "127.0.0.1":
+                return (iso.OUTCOME_PERMITTED, "ok", "127.0.0.1")
+            return (iso.OUTCOME_PERMITTED, "connected", "10.0.0.5")
+
+        att = iso.run_egress_probes(
+            probe=probe, loopback_targets=(("127.0.0.1", 1),),
+            required_services=(("backend", "127.0.0.1", 8000),),
+            dns_probe=lambda: (iso.OUTCOME_DENIED, "refused"),
+            ipv6_available=lambda: True,
+            policy_identity="fw", policy_sha256="ab" * 32,
+            policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
+            arm_id="a", rollout_id="r", workspace="w",
+            enforcement_scope="vm",
+            interpreter_path=r"C:\f2\python.exe", interpreter_sha256="cd" * 32,
+        )
+        p = tmp_path / "att.json"
+        p.write_bytes(iso.render_attestation(att))
+        rep = pf.run_preflight(attestation=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
 
     def test_verified_attestation_is_reported_ready(self, tmp_path):
         p = tmp_path / "att.json"
@@ -341,6 +863,176 @@ class TestAttestationVerification:
         rep = pf.run_preflight(attestation=p)
         by = {f["id"]: f for f in rep["findings"]}
         assert by["evidence.q9_attestation"]["status"] == "invalid"
+
+
+class TestEnforcementCapturePassThrough:
+    """Preflight must verify Q9 exactly the way the consuming gate does.
+
+    `qwen_train.f2_readiness._check_no_egress` takes the HOST enforcement
+    capture, because a silently-dropping control (a Hyper-V extended ACL drops
+    in the vSwitch) produces a timeout no observer can tell from a blackhole.
+    `_q9_findings` never passed it, so the command the operator handoff tells
+    the operator to run reported `http/https/tcp/udp` as `unproven` for an
+    attestation whose real verdict has only `ipv6` unproven -- the
+    documentation-vs-implementation contradiction on the gate that decides
+    readiness.
+
+    The capture changes no contract: it must still hash to the digest the
+    attestation claims, its effective highest-weight rule must still derive an
+    explicit `Deny`, the enforcement identity must still be bound, and the gate
+    still cannot clear while any dimension is unproven.
+    """
+
+    @staticmethod
+    def _attestation_and_capture():
+        from qwen_train import f2_isolation as iso
+
+        capture = {
+            "schema": iso.ENFORCEMENT_CAPTURE_SCHEMA,
+            "kind": "hyper-v-extended-acl",
+            "subject": {"vm_name": "F2-S8-VM1", "vm_id": "c" * 32,
+                        "adapter_mac": "00155D56D603"},
+            "captured_at": "2026-10-14T00:00:00Z",
+            "rules": [
+                {"direction": "outbound", "action": "deny", "remote_ip": "0.0.0.0/0",
+                 "protocol": "any", "weight": 350, "stateful": False},
+                {"direction": "outbound", "action": "deny", "remote_ip": "ANY",
+                 "protocol": "any", "weight": 1, "stateful": False},
+            ],
+        }
+
+        def probe(protocol, host, port):
+            if str(host) == "127.0.0.1":
+                return (iso.OUTCOME_PERMITTED, "connected", "127.0.0.1")
+            return ("timeout", "timed out (silently dropped)", "")
+
+        att = iso.run_egress_probes(
+            probe=probe,
+            udp_probe=lambda h, p: ("silent", "sent; no response", ""),
+            loopback_targets=(("127.0.0.1", 1),),
+            required_services=(("channel", "127.0.0.1", 2179),),
+            dns_probe=lambda: ("timeout", "timed out"),
+            interface_inventory=("Ethernet 2",),
+            policy_identity="hyper-v-extended-acl:F2-S8-VM1",
+            policy_sha256="ab" * 32,
+            policy_assertions={"proxy": "denied", "alternate_interface": "denied"},
+            external_targets=(("1.1.1.1", 443), ("93.184.216.34", 80),
+                              ("93.184.216.34", 8080)),
+            udp_target=("8.8.8.8", 53),
+            arm_id="s8-f2-vm1",
+            rollout_id="s8-pilot",
+            workspace="C:/f2_s8",
+            # The real S8 guest: link-local IPv6 only, so the dimension is
+            # `unavailable` and stays unproven -- the one thing the capture
+            # cannot and must not stand in for.
+            ipv6_available=lambda: False,
+            enforcement_scope="vm",
+            executing_user="DESKTOP-H6A0HQS\\rob3",
+            interpreter_path=r"C:\f2_tooling\python\python.exe",
+            interpreter_sha256="cd" * 32,
+            enforcement_capture_sha256=iso.canonical_enforcement_digest(capture),
+        )
+        return att, capture
+
+    def _paths(self, tmp_path):
+        att, capture = self._attestation_and_capture()
+        att_path = tmp_path / "att.json"
+        att_path.write_bytes(iso.render_attestation(att))
+        capture_path = tmp_path / "capture.json"
+        capture_path.write_text(json.dumps(capture), encoding="utf-8")
+        return att_path, capture_path
+
+    @staticmethod
+    def _by_id(report):
+        return {f["id"]: f for f in report["findings"]}
+
+    def _unproven(self, report):
+        import re
+
+        detail = self._by_id(report)["evidence.q9_attestation"]["detail"]
+        m = re.search(r"UNPROVEN: \[([^\]]*)\]", detail)
+        assert m, detail
+        return m.group(1).replace("'", "").split(", ")
+
+    def test_without_the_capture_the_drop_dimensions_stay_unproven(self, tmp_path):
+        """The defect this wiring fixes, pinned as a regression."""
+        att_path, _ = self._paths(tmp_path)
+        rep = pf.run_preflight(attestation=att_path)
+        assert {"http", "https", "tcp", "udp"} <= set(self._unproven(rep))
+
+    def test_with_the_capture_only_ipv6_remains_and_the_gate_still_blocks(
+        self, tmp_path
+    ):
+        att_path, capture_path = self._paths(tmp_path)
+        rep = pf.run_preflight(attestation=att_path,
+                               enforcement_capture=capture_path)
+        by = self._by_id(rep)
+        detail = by["evidence.q9_attestation"]["detail"]
+        # The unproven set shrinks to the one thing only an owner decision can
+        # resolve; the capture itself is verified, not assumed.
+        assert self._unproven(rep) == ["ipv6"]
+        assert "enforcement capture accepted" in detail
+        # Narrowing the REASON must not clear the gate: no dimension may stay
+        # unproven, so both Q9 findings remain blocking.
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert by["evidence.q9_attestation"]["category"] == pf.PRIVILEGED_HOST
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert by["host.egress_enforcement"]["category"] == pf.PRIVILEGED_HOST
+        assert rep["result"] == "BLOCKED"
+
+    def test_only_the_two_q9_findings_are_affected(self, tmp_path):
+        att_path, capture_path = self._paths(tmp_path)
+        without = self._by_id(pf.run_preflight(attestation=att_path))
+        with_cap = self._by_id(
+            pf.run_preflight(attestation=att_path, enforcement_capture=capture_path)
+        )
+        changed = {k for k in with_cap if with_cap[k] != without.get(k)}
+        assert changed <= {"host.egress_enforcement", "evidence.q9_attestation"}
+        # Every other gate keeps its own status and category.
+        for k in set(without) - {"host.egress_enforcement",
+                                 "evidence.q9_attestation"}:
+            assert with_cap[k] == without[k]
+
+    def test_a_capture_that_does_not_match_the_claim_changes_nothing(self, tmp_path):
+        """A substituted capture must not be able to unlock the gate."""
+        att, capture = self._attestation_and_capture()
+        att_path = tmp_path / "att.json"
+        att_path.write_bytes(iso.render_attestation(att))
+        other = dict(capture, rules=[{"direction": "outbound", "action": "allow",
+                                      "remote_ip": "0.0.0.0/0", "protocol": "any",
+                                      "weight": 999, "stateful": True}])
+        capture_path = tmp_path / "other.json"
+        capture_path.write_text(json.dumps(other), encoding="utf-8")
+        rep = pf.run_preflight(attestation=att_path, enforcement_capture=capture_path)
+        assert {"http", "https", "tcp", "udp"} <= set(self._unproven(rep))
+        by = self._by_id(rep)
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+
+    def test_an_unreadable_capture_is_reported_not_silently_ignored(self, tmp_path):
+        att_path, _ = self._paths(tmp_path)
+        missing = tmp_path / "never-written.json"
+        rep = pf.run_preflight(attestation=att_path, enforcement_capture=missing)
+        by = self._by_id(rep)
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
+        assert by["evidence.q9_attestation"]["status"] == "not_established"
+        assert "could not be read" in by["host.egress_enforcement"]["detail"]
+        assert "capture unusable" in by["evidence.q9_attestation"]["detail"]
+        # An input the operator named must not be silently downgraded to
+        # "no capture given": the attestation itself is fine here.
+        assert by["evidence.q9_attestation"]["status"] != "invalid"
+
+    def test_a_capture_without_an_attestation_is_a_usage_error(self, capsys):
+        assert pf.main(["--enforcement-capture", "capture.json"]) == 2
+        assert "--enforcement-capture requires --attestation" in capsys.readouterr().err
+
+    def test_capture_without_attestation_leaves_the_absent_evidence_block(
+        self, tmp_path
+    ):
+        _, capture_path = self._paths(tmp_path)
+        rep = pf.run_preflight(enforcement_capture=capture_path)
+        by = self._by_id(rep)
+        assert by["evidence.q9_attestation"]["status"] == "not_supplied"
+        assert by["host.egress_enforcement"]["status"] == "not_enforced"
 
 
 class TestRendering:
@@ -457,3 +1149,88 @@ class TestIsolationCliArgumentContract:
             iso.parse_attestation(out.read_bytes()))
         assert "proxy" not in v.policy_declared_dimensions
         assert "proxy" in v.unproven_dimensions
+
+
+def _path_basename(pathlike) -> str:
+    """Last segment of a path literal, on ANY platform.
+
+    ``Path(r"C:\\a\\b.gguf").name`` returns the WHOLE string under POSIX, because
+    pathlib does not treat a backslash as a separator there. Asserting on
+    ``.name`` for a Windows path constant therefore failed on the Linux CI runner
+    even though the constant itself was correct. Normalising separators first
+    makes the assertion mean the same thing on both platforms.
+    """
+    return str(pathlike).replace("\\", "/").rsplit("/", 1)[-1]
+
+
+class TestOptionBModelIdentity:
+    """Option B (2026-10-14): adopted the witnessed reconversion as the F2
+    distiller identity. The two artifacts are DISTINCT and must never be
+    conflated; the original is preserved.
+    """
+
+    ORIGINAL_SHA256 = "65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41"
+    RECONVERTED_SHA256 = "3e5ba031f0b50e98450d1575aa19780bc5b4b13f48bf3eca38f3c915a442a337"
+
+    def test_served_identity_points_at_the_witnessed_reconversion(self):
+        assert pf.SERVED_GGUF_SHA256 == self.RECONVERTED_SHA256
+        assert _path_basename(pf.SERVED_GGUF_PATH) == "robs4b_q4km_reconverted.gguf"
+
+    def test_original_and_reconverted_are_distinct(self):
+        # The adopted digest is NOT the previously served digest.
+        assert pf.SERVED_GGUF_SHA256 != self.ORIGINAL_SHA256
+        assert _path_basename(pf.SERVED_GGUF_PATH) != "robs4b_q4km.gguf"
+
+    def test_original_served_artifact_is_preserved(self):
+        original = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_q4km.gguf"
+        if not original.is_file():
+            pytest.skip("original served artifact not present on this host")
+        import hashlib
+        h = hashlib.sha256()
+        with open(original, "rb") as fh:
+            for b in iter(lambda: fh.read(1 << 20), b""):
+                h.update(b)
+        assert h.hexdigest() == self.ORIGINAL_SHA256
+
+    def test_record_naming_the_original_digest_fails_closed(self, tmp_path):
+        # A record whose served_gguf_sha256 names the ORIGINAL artifact must NOT
+        # be accepted for the adopted reconversion: MISMATCH, fail closed.
+        #
+        # The comparison needs the served artifact's BYTES: the provenance check
+        # hashes the served file when it exists, and only then compares it with
+        # the record's digest. Without the artifact there is nothing to compare,
+        # the served link stays UNRECORDED, and no MISMATCH can be raised -- so
+        # assert that outcome only where the artifact is present. This mirrors
+        # test_real_reconversion_record_accepts immediately below.
+        if not pf.SERVED_GGUF_PATH.is_file():
+            pytest.skip("served artifact not present on this host")
+        rec = {
+            "source_base": "Qwen3.5-4B",
+            "source_base_sha256": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+            "source_adapter": "robs4b_final_adapter",
+            "source_adapter_sha256": "294feecc592b5a7abca7913dcb58ea797e62c2e3fe3a42abf3fe5e59db506cfd",
+            "merge_operation": "merge",
+            "conversion_tool": "llama.cpp",
+            "conversion_tool_version": "b11624",
+            "conversion_inputs": ["a", "b"],
+            "merged_artifact": "Robs4B_Merged_Hf",
+            "merged_artifact_sha256": "f" * 64,
+            "served_gguf": "robs4b_q4km.gguf",
+            "served_gguf_sha256": self.ORIGINAL_SHA256,
+            "operator": "test",
+        }
+        p = tmp_path / "rec.json"
+        p.write_text(json.dumps(rec), encoding="utf-8")
+        rep = pf.run_preflight(conversion_record=p)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "MISMATCH"
+        assert by["provenance.verdict"]["status"] != "complete"
+
+    def test_real_reconversion_record_accepts(self):
+        rec_path = pf.Path(r"C:\Users\rober\F2_EVIDENCE\s8\conversion\conversion_record.json")
+        if not (rec_path.is_file() and pf.SERVED_GGUF_PATH.is_file()):
+            pytest.skip("requires host-local witnessed reconversion evidence")
+        rep = pf.run_preflight(conversion_record=rec_path)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["provenance.conversion"]["status"] == "PROVEN"
+        assert by["provenance.verdict"]["status"] == "complete"

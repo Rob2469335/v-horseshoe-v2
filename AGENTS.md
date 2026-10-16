@@ -345,13 +345,13 @@ the consequential implementation strategy.
 
 Written instructions alone cannot guarantee agent compliance. To ensure the process in §3.7.4 is actually followed, enforcement relies on a deterministic code gate.
 
-Every consequential engineering commit (prefixed with `ARCH:`, `INFRA:`, `API:`, `DOMAIN:`, or `SERVICE:`) MUST include a `SOTA-Basis:` footer or section in the commit message. The section must record:
+Every consequential engineering commit (prefixed with `ARCH:`, `INFRA:`, `API:`, `DOMAIN:`, or `SERVICE:`, optionally in the scoped form `PREFIX(<scope>):`, e.g. `ARCH(binding):`) MUST include a `SOTA-Basis:` footer or section in the commit message. The section must record:
 1. The primary source consulted (Title and URL) or `None`.
 2. The specific assumption or finding applied.
 3. How it reconciles with repository authority.
 
 If no external research was required for the architectural decision, the section must explicitly state `SOTA-Basis: None` and provide a `Justification: <reason>` field on the following line.
-This requirement is enforced mechanically by `tests/test_agent_sota_enforcement.py`. Commits failing this check will fail repository validation.
+This requirement is enforced mechanically by `tests/test_agent_sota_enforcement.py`, which scans the authored commits in the policy range `POLICY_START_COMMIT..HEAD` (all five governed prefixes, in both their unscoped and scoped forms). **Merge commits are excluded** from the requirement (`git log --no-merges`): a merge message routinely embeds the merged branch's PR title, and the merge itself is not an authored architectural change. Authored commits that reach the range through a merge remain subject to enforcement — a merge can never hide a non-compliant authored commit. Commits failing this check will fail repository validation.
 
 ### 3.8 EVIDENCE LANGUAGE
 

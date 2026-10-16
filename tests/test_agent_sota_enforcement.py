@@ -233,8 +233,21 @@ def run_scanner_on_repo(repo_dir, start_commit, end_commit, legacy_exemptions=No
             "git",
             "log",
             f"{start_commit}..{end_commit}",
+            # Exclude MERGE commits from the authored-footer requirement. A merge
+            # message routinely embeds the merged branch's PR title (e.g.
+            # "Merge pull request #32 ...\n\nARCH: ..."), but the merge commit is
+            # not an authored architectural change and must not be required to
+            # carry its own SOTA-Basis footer. --no-merges filters ONLY the merge
+            # commits themselves: authored commits reachable through a merge
+            # (its second parent) still appear here and remain subject to the
+            # requirement, so a merge can never hide a non-compliant authored
+            # commit.
+            "--no-merges",
             "--extended-regexp",
-            "--grep=^(ARCH|INFRA|API|DOMAIN|SERVICE):",
+            # Recognise the scoped commit form too -- "ARCH(scope):" and its
+            # siblings -- exactly as the commit-msg hook already accepts, for
+            # every governed prefix.
+            r"--grep=^(ARCH|INFRA|API|DOMAIN|SERVICE)(\([a-z0-9_-]+\))?:",
             "--format=%H%n%B%n---COMMIT_SEP---",
         ],
         capture_output=True,
@@ -441,3 +454,177 @@ def _test_history_scanner_enforcement(tmp_path):
     ).stdout.strip()
     with pytest.raises(Failed, match="is not an ancestor"):
         run_scanner_on_repo(str(repo), head_sha, orphan_sha, legacy_exemptions=set())
+
+
+# --------------------------------------------------------------------------
+# Scanner behaviour on synthetic histories: scoped prefixes, non-governed
+# prefixes, and merge commits. These build throwaway repositories; the real
+# repository history is never modified.
+# --------------------------------------------------------------------------
+GOVERNED_PREFIXES = ("ARCH", "INFRA", "API", "DOMAIN", "SERVICE")
+NON_GOVERNED_PREFIXES = ("FIX", "CI", "DOCS")
+VALID_FOOTER = "SOTA-Basis: None\nJustification: synthetic scanner test commit"
+INVALID_FOOTER = "SOTA-Basis: None\nmissing justification"
+
+
+def _sync_git(repo, *args):
+    subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True)
+
+
+def _rev(repo, ref="HEAD"):
+    return subprocess.run(
+        ["git", "rev-parse", ref],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _new_scanner_repo(repo):
+    repo.mkdir(parents=True, exist_ok=True)
+    _sync_git(repo, "init")
+    _sync_git(repo, "config", "user.email", "test@example.com")
+    _sync_git(repo, "config", "user.name", "Test User")
+    (repo / "tracked.txt").write_text("0")
+    _sync_git(repo, "add", "tracked.txt")
+    _sync_git(repo, "commit", "-m", "init")
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return _rev(repo), branch
+
+
+def _commit(repo, subject, body, token):
+    (repo / "tracked.txt").write_text(token)
+    message = subject if not body else f"{subject}\n\n{body}"
+    _sync_git(repo, "commit", "-am", message)
+    return _rev(repo)
+
+
+def test_scanner_covers_scoped_and_unscoped_governed_prefixes(tmp_path):
+    """Every governed prefix is scanned in BOTH its ``PREFIX:`` and
+    ``PREFIX(scope):`` forms, and an authored governed commit in either form
+    without a valid footer is caught."""
+    import pathlib
+    from unittest.mock import patch
+
+    from tests.conftest import _REAL_POPEN
+
+    repo = pathlib.Path(tmp_path) / "scoped"
+    with patch("subprocess.Popen", new=_REAL_POPEN):
+        base, _branch = _new_scanner_repo(repo)
+
+        for i, prefix in enumerate(GOVERNED_PREFIXES):
+            _commit(repo, f"{prefix}: valid unscoped {i}", VALID_FOOTER, f"u{i}")
+            _commit(repo, f"{prefix}(scope{i}): valid scoped {i}", VALID_FOOTER, f"s{i}")
+        run_scanner_on_repo(str(repo), base, _rev(repo), legacy_exemptions=set())
+
+        head = _rev(repo)
+        for prefix in GOVERNED_PREFIXES:
+            _commit(repo, f"{prefix}: invalid unscoped", INVALID_FOOTER, f"x{prefix}")
+            with pytest.raises(
+                Failed, match="missing or malformed 'SOTA-Basis:' footer"
+            ):
+                run_scanner_on_repo(
+                    str(repo), base, _rev(repo), legacy_exemptions=set()
+                )
+            _sync_git(repo, "reset", "--hard", head)
+
+            _commit(repo, f"{prefix}(scope): invalid scoped", INVALID_FOOTER, f"y{prefix}")
+            with pytest.raises(
+                Failed, match="missing or malformed 'SOTA-Basis:' footer"
+            ):
+                run_scanner_on_repo(
+                    str(repo), base, _rev(repo), legacy_exemptions=set()
+                )
+            _sync_git(repo, "reset", "--hard", head)
+
+
+def test_scanner_ignores_non_governed_prefixes(tmp_path):
+    """``FIX:``, ``CI:`` and ``DOCS:`` are outside the SOTA footer policy."""
+    import pathlib
+    from unittest.mock import patch
+
+    from tests.conftest import _REAL_POPEN
+
+    repo = pathlib.Path(tmp_path) / "nongov"
+    with patch("subprocess.Popen", new=_REAL_POPEN):
+        base, _branch = _new_scanner_repo(repo)
+        for i, prefix in enumerate(NON_GOVERNED_PREFIXES):
+            _commit(repo, f"{prefix}: no footer required {i}", "", f"n{i}")
+        run_scanner_on_repo(str(repo), base, _rev(repo), legacy_exemptions=set())
+
+
+def test_scanner_merge_commit_body_needs_no_footer(tmp_path):
+    """A merge whose body begins with ``ARCH:`` is not itself required to carry
+    an authored-commit footer, provided the authored commits are compliant."""
+    import pathlib
+    from unittest.mock import patch
+
+    from tests.conftest import _REAL_POPEN
+
+    repo = pathlib.Path(tmp_path) / "merge_ok"
+    with patch("subprocess.Popen", new=_REAL_POPEN):
+        base, branch = _new_scanner_repo(repo)
+
+        _sync_git(repo, "checkout", "-b", "feature")
+        _commit(repo, "ARCH: valid feature commit", VALID_FOOTER, "fvalid")
+        _sync_git(repo, "checkout", branch)
+        _sync_git(
+            repo,
+            "merge",
+            "--no-ff",
+            "feature",
+            "-m",
+            "ARCH: merge feature branch\n\n(merge commit carries no SOTA footer)",
+        )
+        merge_sha = _rev(repo)
+
+        # The merge body genuinely begins with a governed prefix...
+        body = subprocess.run(
+            ["git", "log", "-1", "--format=%B", merge_sha],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "ARCH:" in body
+
+        # ...yet the scanner passes: the merge is excluded, its authored
+        # ancestor carries a valid footer.
+        run_scanner_on_repo(str(repo), base, merge_sha, legacy_exemptions=set())
+
+
+def test_scanner_merge_cannot_hide_invalid_authored_commit(tmp_path):
+    """An authored governed commit brought in THROUGH a merge is still scanned."""
+    import pathlib
+    from unittest.mock import patch
+
+    from tests.conftest import _REAL_POPEN
+
+    repo = pathlib.Path(tmp_path) / "merge_bad"
+    with patch("subprocess.Popen", new=_REAL_POPEN):
+        base, branch = _new_scanner_repo(repo)
+
+        _sync_git(repo, "checkout", "-b", "feature")
+        _commit(repo, "ARCH: invalid feature commit", INVALID_FOOTER, "finvalid")
+        _sync_git(repo, "checkout", branch)
+        _sync_git(
+            repo,
+            "merge",
+            "--no-ff",
+            "feature",
+            "-m",
+            "ARCH: merge feature branch\n\n(merge commit carries no SOTA footer)",
+        )
+        merge_sha = _rev(repo)
+
+        # The invalid authored ARCH commit is reachable only via the merge's
+        # second parent; excluding merge commits must not hide it.
+        with pytest.raises(Failed, match="missing or malformed 'SOTA-Basis:' footer"):
+            run_scanner_on_repo(str(repo), base, merge_sha, legacy_exemptions=set())
