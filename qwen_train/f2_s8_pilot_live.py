@@ -245,6 +245,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     if false_gates:
         raise SystemExit(f"REFUSING: gates not satisfied: {false_gates}")
 
+    # MANDATORY signed authorization (S8-001 / base_gold_production), enforced ONCE
+    # at entry -- before any guest work.  The gate booleans above are caller-
+    # supplied PRECONDITIONS, not authority: without a valid owner-signed record
+    # bound to THIS manifest and THIS registration at THIS repository revision,
+    # the run is refused.  Single-use, scope-bound, revocable and fail-closed is
+    # enforced by ``f2_authorization`` (no trust root => every stage denied).
+    from qwen_train.f2_authorization import AuthorizationError, require_authorized
+
+    manifest_path = Path(args.manifest)
+    manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    try:
+        require_authorized(
+            stage="S8-001",
+            operation="base_gold_production",
+            binding={
+                "candidate_manifest_digest": manifest_digest,
+                "registration_sha256": args.registration_sha256,
+            },
+        )
+    except AuthorizationError as exc:
+        raise SystemExit(
+            "REFUSING: no valid S8-001/base_gold_production signed authorization "
+            f"for this manifest and registration ({exc})"
+        ) from exc
+
     # Fail closed before touching the guest: the governed path needs a real
     # trusted store and a real authorized evaluator, none of which this module
     # invents.

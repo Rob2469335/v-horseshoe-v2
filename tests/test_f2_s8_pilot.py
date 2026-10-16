@@ -688,6 +688,19 @@ class TestRunManifestMustResolveToRunnableTasks:
         inputs = tmp_path / "inputs"
         inputs.mkdir()
 
+        # The CLI now requires a signed S8-001 grant before anything else; supply
+        # an ephemeral test-owned one so the test reaches the behaviour it pins.
+        from tests import f2_authz_testkit as kit
+
+        kit.apply_repo_identity(monkeypatch)
+        kit.provision_record_env(
+            tmp_path, monkeypatch, stage="S8-001", ops=("base_gold_production",),
+            binding={
+                "candidate_manifest_digest":
+                    hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                "registration_sha256": REG_SHA,
+            },
+        )
         with pytest.raises(SystemExit) as excinfo:
             live.main([
                 "--manifest", str(manifest),
@@ -896,6 +909,19 @@ class TestLedgerRefusalIsAClassifiedOutcome:
                          encoding="utf-8")
         out = tmp_path / "out"
 
+        # Signed S8-001 grant (ephemeral test-owned) so the CLI reaches the path
+        # this test pins.
+        from tests import f2_authz_testkit as kit
+
+        kit.apply_repo_identity(monkeypatch)
+        kit.provision_record_env(
+            tmp_path, monkeypatch, stage="S8-001", ops=("base_gold_production",),
+            binding={
+                "candidate_manifest_digest":
+                    hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                "registration_sha256": REG_SHA,
+            },
+        )
         rc = live.main([
             "--manifest", str(manifest), "--inputs", str(inputs),
             "--registration-id", "rid", "--registration-sha256", REG_SHA,
