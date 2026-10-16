@@ -2111,3 +2111,83 @@ six evaluator/artifact names) are absent from the session scope; the operator ha
 agent from provisioning them. This session's shell **is** elevated and `F2-S8-VM1` is running with all
 integration services enabled; credential file present; 136.09 GB free. No pilot task, no base/gold run,
 no T/X run, no Q10/Q12/Q13; no commit or push; PR #33 open/unmerged.
+
+---
+
+## 2026-10-16 — Documentation reconciliation and Linux-CI portability repair
+
+**Scope.** Independent re-verification of the admission counts, readiness state and
+isolation posture against primary evidence, correction of stale documents, and repair
+of the three defects that keep Linux CI red on the published PR head. Commits
+`8107b213` (CI portability) and `0c47ecc4` (document reconciliation). No push, no PR
+change, no pilot execution, no inference, no Q10/Q12/Q13, no T/X.
+
+**Admission counts recomputed independently — PROVEN, not copied.** Parsed both ledgers
+directly and re-derived the canonical digest chain without using the reconciliation
+helper: chain 1 holds 9 records, 9/9 self-digests valid and 8/8 non-genesis prev-links
+valid; chain 2 holds 1. Operative admissions **3** (`openai-agents-1633`,
+`openai-agents-1636`, `mypy-19767`), credited union **4** (+ `hypothesis-4532`),
+remaining to 300 **296**, refused terminal overrides **none**, verified corrections
+**1**. The repository helper agrees. The correction's `correction_of_record_digest`
+resolves to the exact chain-1 record and its declared `prior_outcome` /
+`prior_outcome_class` match it field-for-field. Both ledgers byte-identical
+(`5FB0AA8E…`, `E030C05A…`) before and after every command.
+
+**One apparent integrity question resolved rather than assumed.** The correction pins
+chain 1's hash as `07CB4545…` while the live chain-1 file is `5FB0AA8E…`. That is not a
+mismatch: the pinned digest matches a **prefix of exactly 7 lines**, and the two later
+records (`django-guardian-899`, `-896`) carry timestamps after the correction's. Chain 1
+simply grew, which is why credit binds by record digest and not by file hash.
+
+**Preflight re-run — BLOCKED, 20 blockers, exit 1.** `python -m qwen_train.f2_preflight
+--json` reproduces exactly, and the handoff's §1 summary table matches the live report
+in every category (14 operator / 5 external evidence / 1 privileged host / 0
+authorization / 2 not-executed / 16 implemented). Note for future readers: the
+`NOT EXECUTED` pair (Q10, Q13) is counted but is **not** part of the 20 — 14+5+1.
+
+**The "0 admitted" vs "4 credited" tension is NOT a contradiction** — it is two
+different questions, and the counting rule §5 already separates them (credited union 4;
+population-census admissions 0; 296 required). The handoff likewise labels the 0 as the
+CENSUS figure at its own §1.4. No change was warranted, and a hasty "fix" here would
+have damaged correct documentation.
+
+**Linux CI, all three reported defects CONFIRMED PRESENT and now fixed.** CI run
+`38834896497` on published head `0890a729` fails with 14 failed + 6 errors, all from:
+(1) the literal `C:\Program Files\Git\cmd\git.exe` in `f2_s8_pilot_build.py` (11
+failures; Windows keeps that exact binary, only non-Windows resolves from PATH);
+(2) `test_f2_reconcile.py` reading gitignored `acquired.jsonl` (6 errors + 1 failure;
+now a skip guard that still runs in full where the data exists); (3) a `Path.name`
+assertion on a Windows path constant, which pathlib returns whole under POSIX (2
+failures; now separator-normalised, plus a skip guard on the sibling MISMATCH test that
+needs the served artifact's bytes). 80 passed across the affected files; the guarded
+tests still PASS locally rather than skip; full suite **5925 passed, 12 skipped, 1
+xfailed, 0 failed**, exit 0, 40 min.
+
+**Two stale figures resolved with evidence.** The disputed `5350 passed` total is a
+**2026-10-11** machine-local scratch run (`full_suite_out.txt`, untracked) at a much
+older commit that also shows an unrelated chess failure; it is not a failure to
+reproduce 5925, which I ran twice at current HEAD. The audit's `5920` was correct for
+HEAD `2e024564` and is now recorded alongside 5925 with both commits, rather than one
+silently overwriting the other.
+
+**`docs/KNOWN_FAILURES.md` was materially misleading and is now marked superseded.** It
+declared an authoritative 7-entry known-failure set and a gate that passes *only* when
+the failure set equals those 7. All seven now pass, so that gate returns a **false FAIL
+on a healthy tree**. The baseline is retained unchanged as 2026-09-20 history; its
+`full_suite_output.txt` pointer no longer exists and was never tracked.
+
+**Checked and deliberately left alone.** The 9,198 vs 9,268 metadata-eligible conflict is
+already correctly superseded in-repo (`..._ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md`
+records the +70). The audit §18 "RED | 2 | 1" cell contradicted its own prose and was
+corrected to 0. The isolation plan's `52fdecc0` row is a dated 2026-10-13 observation in
+a document that says its sections are retained unchanged, so it was tied to its date
+rather than rewritten.
+
+**Still open (not remediated, reported).** Preflight remains BLOCKED on 20 external and
+operator items; the 300-admission target's reachability is **NOT ESTABLISHED**; CI for
+the 23 unpushed local commits is **NOT ESTABLISHED** (no run exists for them); the
+`:8081` embedding retry cost remains an open performance defect; and there is no
+recorded reference hash for `EXPERIMENT_J_F1_AUTHORIZATION.md` or
+`LEARNING_EXPERIMENT_STATE.md`, a **GOVERNANCE GAP** given AGENTS.md §6.10 asks for
+hash verification without supplying values. PR #33 remains **open and unmerged**;
+nothing was pushed.
