@@ -200,6 +200,24 @@ duplicate `conan-io__conan-18153` is removed by the union's conflict rule (all c
 excluded), so it is not in the registration. The admitted population therefore stays
 **zero**.
 
+**Census zero vs ledger admissions — two different questions.** This **0** is the
+POPULATION CENSUS figure: no row of the 3,828-task registration carries attached S8
+base/gold execution evidence, so nothing is ADMITTED at the census tier. Separately,
+the governed S8 ledger holds admitted records: **3 distinct tasks** in the operative
+chain (`openai__openai-agents-python-1633`, `-1636`, `python__mypy-19767`), or **4**
+if the corrective chain's `HypothesisWorks__hypothesis-4532` record is credited
+across chains. The cross-chain aggregate rule has **no authoritative in-repository
+source** (`GOVERNANCE GAP`); the operative-chain figure of 3 is the code-bound
+canonical count. Neither figure satisfies the **≥ 300 admitted pairs** target, and no
+count of candidates, attempts, or compatible classifications is an admission.
+
+**Shape is not authenticity.** Preflight validates the *syntax* of the governed
+values it is given (a 64-character lowercase SHA-256 for each state digest, base ≠
+gold). It cannot and does not establish that a digest is the *true* execution-state
+digest for a run — the correct state digests are produced by the run itself and are
+not referenceable in advance. A well-formed but wrong digest therefore passes
+preflight and is only caught by the governed evidence verification.
+
 **Note on the authorization count.** Preflight reports `AUTHORIZATION REQUIRED = 0` for
 population acquisition: the acquisition authorization is recorded
 (F2-IMPL-AUTH-028/029/031) and `authz.population_acquisition` is **no longer emitted**
@@ -251,7 +269,9 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 > (no extension filter). Contamination is a **declared temporal proxy**
 > (`2024-01-01`, `is_proxy: true`); tasks created before it are POTENTIALLY
 > CONTAMINATED, not silently clean. Funnel: **33,967 raw  ->  197 pre-screen
-> exclusions  ->  33,770 accepted  ->  9,198 metadata-eligible  ->  0 ADMITTED**.
+> exclusions  ->  33,770 accepted  ->  9,268 metadata-eligible  ->  0 ADMITTED**.
+> (Corrected 2026-10-16: this note previously said 9,198 metadata-eligible; the
+> current union reconciles to 9,268, matching section 1.)
 > S4 rejects 6,102 (empty `PASS_TO_PASS`) and S10 rejects 22,784 (2014-2023 tasks);
 > both verified genuine, not mapping errors. The >= 300 target is unchanged and
 > **not** met at the admitted tier: S8 base/gold execution evidence is still
