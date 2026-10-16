@@ -334,3 +334,54 @@ class TestArtifactIsPerSide:
         assert captured["stdin"] is subprocess.DEVNULL
         assert captured["timeout"] == 7
         assert captured["capture_output"] is True
+
+
+class TestGuestExecutionSummaryIsEmitted:
+    """The guest must ECHO the real test-command output (Decision 3 / audit D-02).
+
+    The transport envelope is a record, not a log; without the echo the host's
+    retained run log would carry empty output sections.
+    """
+
+    def _emit(self, capsys, *, stdout=b"", stderr=b"", exit_status=0, timed_out=False):
+        import json as _json
+
+        from qwen_train import f2_s8_guest as G
+
+        G._emit_execution_summary(G.CommandResult(
+            exit_status=exit_status, stdout=stdout, stderr=stderr, timed_out=timed_out))
+        return _json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+    def test_real_stdout_and_stderr_are_echoed(self, capsys):
+        payload = self._emit(capsys, stdout=b"89 passed in 3.1s\n", stderr=b"warning: x\n")
+        assert payload["guest_execution"]["stdout"] == "89 passed in 3.1s\n"
+        assert payload["guest_execution"]["stderr"] == "warning: x\n"
+        assert payload["guest_execution"]["stdout_truncated"] is False
+        assert payload["guest_execution"]["stdout_total_bytes"] == 18
+
+    def test_truncation_is_explicit_not_silent(self, capsys):
+        from qwen_train import f2_s8_guest as G
+
+        big = b"x" * (G.MAX_ECHO_BYTES + 500)
+        payload = self._emit(capsys, stdout=big)
+        exec_summary = payload["guest_execution"]
+        assert exec_summary["stdout_truncated"] is True
+        assert exec_summary["stdout_total_bytes"] == len(big)
+        assert len(exec_summary["stdout"]) == G.MAX_ECHO_BYTES
+
+    def test_two_streams_stay_inside_the_host_log_cap(self, capsys):
+        """Both per-stream budgets, JSON-escaped, must fit the host run-log cap so
+        the host never slices the summary object in half."""
+        import json as _json
+
+        from qwen_train import f2_s8_guest as G
+        from qwen_train.f2_s8_pilot import MAX_LOG_BYTES
+
+        worst = b"\x01" * G.MAX_ECHO_BYTES          # escapes to a 6-byte \\u0001
+        self._emit(capsys, stdout=worst, stderr=worst)
+        # Re-render the same object the way the host would embed it.
+        rendered = _json.dumps({
+            "stdout": worst[-G.MAX_ECHO_BYTES:].decode("utf-8", "replace"),
+            "stderr": worst[-G.MAX_ECHO_BYTES:].decode("utf-8", "replace"),
+        })
+        assert len(rendered) < MAX_LOG_BYTES

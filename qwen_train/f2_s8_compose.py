@@ -473,6 +473,15 @@ def build_governed_verifiers(
         return "pass" if ok else "fail"
 
     def verify_evidence(active: TaskSpec, _result: ExecutionResult) -> bool:
+        # Bind the ROW to the records it claims: the digest over the canonical
+        # base+gold records and the environment identity must agree with the
+        # result, or the evidence is not the evidence it says it is.
+        base_bytes = evidence._canonical_bytes(_record_for(base_bundle).to_dict())
+        gold_bytes = evidence._canonical_bytes(_record_for(gold_bundle).to_dict())
+        if hashlib.sha256(base_bytes + gold_bytes).hexdigest() != _result.evidence_record_digest:
+            return False
+        if _result.environment_identity != inputs.environment_identity:
+            return False
         verification = evidence.verify_task_evidence(
             task_id=active.task_id,
             repository=str(active.payload["repo"]),

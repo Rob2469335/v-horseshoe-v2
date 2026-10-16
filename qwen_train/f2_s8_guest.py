@@ -48,9 +48,11 @@ GUEST_SCHEMA = "f2_s8_guest_execution_v1"
 #: Exit status the bounded runner reports for a timed-out command.
 TIMEOUT_EXIT_STATUS = 124
 
-#: Bound on the guest's echoed execution output (bytes). The run log is a
-#: byproduct, so one pathological task cannot balloon the retained bundle.
-MAX_ECHO_BYTES = 64 * 1024
+#: Bound on the guest's echoed execution output PER STREAM (bytes). Two streams,
+#: JSON-escaped at worst case (\\uXXXX = 6 bytes/char), must stay well inside the
+#: host run-log cap (64 KiB) so the host never slices the summary object in half;
+#: truncation is reported explicitly.
+MAX_ECHO_BYTES = 4 * 1024
 
 
 class GuestExecutorError(Exception):
@@ -161,16 +163,26 @@ def _emit_execution_summary(outcome: "CommandResult") -> None:
     import json as _json
 
     def _tail(raw: bytes) -> str:
-        if not raw:
-            return ""
-        return raw[-MAX_ECHO_BYTES:].decode("utf-8", "replace")
+        return _stream(raw)[0]
 
+    def _stream(raw: bytes) -> tuple[str, int, bool]:
+        if not raw:
+            return "", 0, False
+        return (raw[-MAX_ECHO_BYTES:].decode("utf-8", "replace"),
+                len(raw), len(raw) > MAX_ECHO_BYTES)
+
+    out_txt, out_total, out_trunc = _stream(outcome.stdout)
+    err_txt, err_total, err_trunc = _stream(outcome.stderr)
     print(_json.dumps({
         "guest_execution": {
             "exit_status": int(outcome.exit_status),
             "timed_out": bool(outcome.timed_out),
-            "stdout": _tail(outcome.stdout),
-            "stderr": _tail(outcome.stderr),
+            "stdout": out_txt,
+            "stdout_total_bytes": out_total,
+            "stdout_truncated": out_trunc,
+            "stderr": err_txt,
+            "stderr_total_bytes": err_total,
+            "stderr_truncated": err_trunc,
         }
     }, sort_keys=True), flush=True)
 

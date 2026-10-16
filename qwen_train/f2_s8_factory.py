@@ -70,10 +70,11 @@ _SAFE_ARTIFACT_BAD = set('<>:"|?*;&') | {"/", "\\"}
 
 #: The evidence artifacts an admitted pair must bind.  ``test_output`` is the
 #: authoritative evaluator report per side, ``run_log`` the actual execution log
-#: per side, and the evaluator implementation is the exact code that graded it.
+#: per side, the evaluator implementation is the exact code that graded it, and
+#: the per-side PERSISTED EvidenceRecord is the durable record of the pair.
 REQUIRED_EVIDENCE_ROLES = (
     "base_report", "gold_report", "base_run_log", "gold_run_log",
-    "evaluator_implementation",
+    "evaluator_implementation", "base_evidence_record", "gold_evidence_record",
 )
 
 _ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -439,6 +440,10 @@ def run_once(
         if not _is_sha256(result.base_state_digest):
             raise FactoryError(
                 "an admitted outcome requires the base execution-state digest (64-hex)")
+        if result.base_state_digest == result.execution_state_digest:
+            raise FactoryError(
+                "base and gold execution-state digests are identical; they cannot "
+                "describe two distinct states")
         if not _is_commit_revision(result.repository_revision):
             raise FactoryError(
                 "an admitted outcome requires a 40-character lowercase hex commit "

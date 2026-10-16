@@ -90,8 +90,11 @@ retained:
 
 **This is a historical governance exception, not a finding that they satisfy §3.** Their evidence
 passes pointer integrity, report-digest integrity, JUnit→report reproducibility, the
-base-FAIL/gold-PASS relationship, and evaluator-identity binding, but **not** the canonical verifier
-(the `EvidenceRecord`'s `execution_state_digest` and `environment_identity` were never recorded).
+base-FAIL/gold-PASS relationship, and evaluator-identity binding, but **not** the canonical
+verifier: the per-task `EvidenceRecord` was never persisted, and the ledger row carries no
+`evidence_bundle`. (Note the distinction: the *session*-level `environment_identity` and the
+`base_state_digest`/`gold_state_digest` *were* recorded in `pilot_governance_env_used.json`; what
+is missing is the *per-task* binding.)
 Nothing here rewrites a ledger row or an evidence artifact, and no missing historical field may be
 back-filled.
 

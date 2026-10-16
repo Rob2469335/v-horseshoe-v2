@@ -256,8 +256,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         verify_and_consume,
     )
 
-    manifest_path = Path(args.manifest)
-    manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    # Read the manifest ONCE: the digest bound into the authorization and the
+    # manifest actually parsed must be the SAME bytes (no TOCTOU window between
+    # hashing and use, which would let a swapped manifest run under the grant).
+    manifest_bytes = Path(args.manifest).read_bytes()
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
     try:
         # SINGLE-USE, durable consumption (Decision 2): `verify_and_consume`
         # verifies the grant AND durably consumes it BEFORE any guest work, so a
@@ -287,7 +290,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # invents.
     inputs = load_governance_from_env()
 
-    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    # Parse the SAME bytes whose digest the authorization was bound to.
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
     specs = build_specs(manifest, Path(args.inputs), args.registration_sha256,
                         args.registration_id)
     if args.only:
