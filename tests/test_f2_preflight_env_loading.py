@@ -185,6 +185,33 @@ class TestRepositoryRootResolution:
         assert os.environ["SWARM_RECEIPT_KEY"] == SYNTHETIC
 
 
+class TestDotenvAllowListIsDisjointFromGovernedInputs:
+    """A governed input must never enter the CLI's `.env` allow-list.
+
+    Structural (no ``__file__`` patching, no CLI invocation), so it cannot hide a
+    production mismatch: ``_load_operator_env`` imports ONLY
+    ``DOTENV_ALLOWED_KEYS``, and this pins that no governed F2 or S8 execution
+    input is a member of it.
+    """
+
+    def test_no_governed_input_is_dotenv_allow_listed(self):
+        from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
+
+        governed = {
+            "SWARM_DISTILLER_MODEL", "SWARM_DISTILLER_WEIGHTS_DIGEST",
+            "SWARM_F2_EVALUATOR_ID", "SWARM_F2_EVALUATOR_VERSION",
+            "SWARM_F2_EVALUATOR_PROCEDURE", "SWARM_F2_EVALUATOR_IMPL",
+            "SWARM_F2_ARTIFACT_ROOT", "SWARM_F2_ARTIFACT_RETENTION_DAYS",
+            "SWARM_F2_EMIT_BUNDLE", "SWARM_F2_TASK_OUTCOME_REPORT",
+            *(name for name, _ in S8_GOVERNANCE_ENV),
+            *S8_ENV_FALLBACKS.values(),
+        }
+        overlap = governed & set(pf.DOTENV_ALLOWED_KEYS)
+        assert not overlap, (
+            f"governed execution inputs must never be imported from .env: "
+            f"{sorted(overlap)}")
+
+
 class TestValuesNeverEscaped:
     def test_loader_returns_none(self, tmp_path, isolate_env):
         _write_env(tmp_path, f"SWARM_RECEIPT_KEY={SYNTHETIC}\n")
