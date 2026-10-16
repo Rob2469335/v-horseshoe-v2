@@ -1151,6 +1151,18 @@ class TestIsolationCliArgumentContract:
         assert "proxy" in v.unproven_dimensions
 
 
+def _path_basename(pathlike) -> str:
+    """Last segment of a path literal, on ANY platform.
+
+    ``Path(r"C:\\a\\b.gguf").name`` returns the WHOLE string under POSIX, because
+    pathlib does not treat a backslash as a separator there. Asserting on
+    ``.name`` for a Windows path constant therefore failed on the Linux CI runner
+    even though the constant itself was correct. Normalising separators first
+    makes the assertion mean the same thing on both platforms.
+    """
+    return str(pathlike).replace("\\", "/").rsplit("/", 1)[-1]
+
+
 class TestOptionBModelIdentity:
     """Option B (2026-10-14): adopted the witnessed reconversion as the F2
     distiller identity. The two artifacts are DISTINCT and must never be
@@ -1162,12 +1174,12 @@ class TestOptionBModelIdentity:
 
     def test_served_identity_points_at_the_witnessed_reconversion(self):
         assert pf.SERVED_GGUF_SHA256 == self.RECONVERTED_SHA256
-        assert pf.SERVED_GGUF_PATH.name == "robs4b_q4km_reconverted.gguf"
+        assert _path_basename(pf.SERVED_GGUF_PATH) == "robs4b_q4km_reconverted.gguf"
 
     def test_original_and_reconverted_are_distinct(self):
         # The adopted digest is NOT the previously served digest.
         assert pf.SERVED_GGUF_SHA256 != self.ORIGINAL_SHA256
-        assert pf.SERVED_GGUF_PATH.name != "robs4b_q4km.gguf"
+        assert _path_basename(pf.SERVED_GGUF_PATH) != "robs4b_q4km.gguf"
 
     def test_original_served_artifact_is_preserved(self):
         original = pf.Path(__file__).resolve().parents[1] / "qwen_train" / "robs4b_q4km.gguf"
@@ -1183,6 +1195,15 @@ class TestOptionBModelIdentity:
     def test_record_naming_the_original_digest_fails_closed(self, tmp_path):
         # A record whose served_gguf_sha256 names the ORIGINAL artifact must NOT
         # be accepted for the adopted reconversion: MISMATCH, fail closed.
+        #
+        # The comparison needs the served artifact's BYTES: the provenance check
+        # hashes the served file when it exists, and only then compares it with
+        # the record's digest. Without the artifact there is nothing to compare,
+        # the served link stays UNRECORDED, and no MISMATCH can be raised -- so
+        # assert that outcome only where the artifact is present. This mirrors
+        # test_real_reconversion_record_accepts immediately below.
+        if not pf.SERVED_GGUF_PATH.is_file():
+            pytest.skip("served artifact not present on this host")
         rec = {
             "source_base": "Qwen3.5-4B",
             "source_base_sha256": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",

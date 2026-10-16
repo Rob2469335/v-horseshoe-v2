@@ -35,7 +35,18 @@ from qwen_train.f2_s8_acquisition import (
     repo_url_for,
 )
 
-GIT = r"C:\Program Files\Git\cmd\git.exe"
+#: Git executable for the acquisition host. The builder is a Windows-host tool
+#: and the pilot evidence was produced with the exact binary below, so Windows
+#: keeps that literal path UNCHANGED -- substituting a different git could alter
+#: a governed build. On every other platform the literal does not exist, so it is
+#: resolved from PATH instead. The literal alone made the Linux CI runner fail
+#: every plugin-compatibility test with ``FileNotFoundError`` (11 CI failures);
+#: git is on PATH there, so the resolution succeeds.
+GIT = (
+    r"C:\Program Files\Git\cmd\git.exe"
+    if os.name == "nt"
+    else (shutil.which("git") or "git")
+)
 INPUTS = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_inputs\full")
 PATCHES = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_build\patches")
 HOST_PYTHON = r"C:\Users\rober\Projects\v-horseshoe-v2\.venv\Scripts\python.exe"

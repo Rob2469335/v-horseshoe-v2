@@ -20,9 +20,29 @@ ROOT = Path(__file__).resolve().parents[1]
 POP = ROOT / "data" / "f2_population"
 
 
+def _require_population_inputs() -> None:
+    """Skip cleanly when the population acquisition artifacts are absent.
+
+    The inputs live under ``data/`` (gitignored -- ``.gitignore:44`` ``**/data/``),
+    so a clean checkout cannot run the reconciliation at all. Without this guard
+    the module fixture raised ``FileNotFoundError`` and 7 tests reported as ERROR
+    / FAILED on the Linux CI runner, where ``data/`` never exists. The assertions
+    themselves are unchanged and still execute in full wherever the artifacts are
+    present (they are present on the acquisition host).
+    """
+    missing = [str(path) for _, path, _, _ in rec.SOURCES if not path.is_file()]
+    if missing:
+        pytest.skip(
+            "population acquisition artifacts are gitignored local data "
+            "(data/ is not tracked); reconciliation needs them: "
+            + ", ".join(missing)
+        )
+
+
 @pytest.fixture(scope="module")
 def recon_out(tmp_path_factory):
     """Run the reconciliation exactly once against the real data."""
+    _require_population_inputs()
     out = tmp_path_factory.mktemp("recon")
     real_out = rec.OUT
     rec.OUT = out
@@ -94,6 +114,7 @@ def test_funnel_gaps_are_decomposed(recon_out):
 
 
 def test_conan_conflicting_duplicate_is_detected():
+    _require_population_inputs()
     path = POP / "upstream_swe_bench_live_b51a8642" / "acquired.jsonl"
     # scan only until both conan copies are seen (avoid full 500MB scan)
     copies = []
