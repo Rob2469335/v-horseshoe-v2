@@ -73,6 +73,7 @@ __all__ = [
     "resolve_dependency_groups",
     "load_corpus_rows",
     "scan_cross_source_conflicts",
+    "SourceDisagreements",
     "load_registration_order",
     "resolve_task",
     "select_tasks",
@@ -313,31 +314,61 @@ def _pick_test_cmd(value: Any) -> str:
     return str(value or "").strip()
 
 
+@dataclass(frozen=True)
+class SourceDisagreements:
+    """Instance ids whose canonical rows disagree, SPLIT BY KIND.
+
+    ``cross_source`` -- the id is supplied by MORE THAN ONE source and the
+    sources disagree.  The union resolves it deterministically by
+    ``SOURCE_PRIORITY`` (``qwen_train.f2_population_build.build_union``): the
+    highest-priority source's row is operative and the other is recorded as
+    excluded (``conflicting_cross_source_priority_selected``).
+
+    ``within_source`` -- the id appears MORE THAN ONCE in a SINGLE source with
+    differing payloads: an internal data defect.  ``build_union`` removes EVERY
+    copy, so the id is not in the registration.
+
+    Keeping the two classes apart is the point: two disagreeing rows from the
+    SAME source are not a cross-source conflict, and conflating them overstated
+    the cross-source count.
+    """
+
+    cross_source: dict[str, str]
+    within_source: dict[str, str]
+
+    @property
+    def total(self) -> int:
+        return len(self.cross_source) + len(self.within_source)
+
+
 def scan_cross_source_conflicts(
     acquired_paths: Mapping[str, Path],
-) -> dict[str, str]:
-    """Instance ids present in TWO sources whose canonical records DISAGREE.
+) -> SourceDisagreements:
+    """Instance ids whose canonical rows disagree, split by KIND.
 
-    These ids are **not unresolved**: the union step
-    (:func:`qwen_train.f2_population_build.union_sources`) already applied the
-    deterministic cross-source policy and kept the highest-priority source's
-    record, recording the other as
+    ``cross_source`` ids are **not unresolved**: the union
+    (:func:`qwen_train.f2_population_build.build_union`) already applied the
+    deterministic ``SOURCE_PRIORITY`` policy and kept the highest-priority
+    source's record, recording the other as
     ``conflicting_cross_source_priority_selected``.  This scan re-derives, from
-    the raw acquired corpora, *which* ids the two sources describe differently,
-    so the disagreement stays governance-visible at the source level.  It is a
+    the raw acquired corpora, *which* ids the sources describe differently, so
+    the disagreement stays governance-visible at the source level.  It is a
     detection/visibility helper, not a settlement of the operative row, and it
     changes no registration content.
 
-    Reconciled 2026-10-15 (read-only): 196 ids disagree in the two corpora; 185
-    of them are in the operative registration; for **185 of 185** the union
-    recorded ``conflicting_cross_source_priority_selected`` with
-    ``kept_source='swe-bench-live'``, so every in-registration conflict already
-    has a recorded, deterministic operative record.
+    ``within_source`` ids are the union's ``conflicting_duplicate_removed``
+    class: an internal data defect whose every copy the union excludes.
 
-    Returns ``instance_id -> reason``.
+    Reconciled 2026-10-15/16 (read-only, against the pinned corpora): 195
+    cross-source ids plus 1 within-source id (``conan-io__conan-18153``) = the
+    196 the earlier single-count report conflated.  185 of the cross-source ids
+    are in the operative registration and **185 of 185** carry the union's
+    ``conflicting_cross_source_priority_selected`` disposition
+    (``kept_source='swe-bench-live'``).
     """
     seen: dict[str, tuple[str, bytes, str]] = {}
-    conflicts: dict[str, str] = {}
+    cross_source: dict[str, str] = {}
+    within_source: dict[str, str] = {}
     for source_key in acquired_paths:
         if source_key not in SOURCES:
             raise AcquisitionError(
@@ -366,12 +397,24 @@ def scan_cross_source_conflicts(
                 seen[task_id] = (source_key, this[0], this[1])
                 continue
             if prior[1] != this[0]:
-                conflicts[task_id] = (
-                    f"canonical records disagree between {prior[0]} and {source_key}")
+                kind = "canonical records disagree"
             elif prior[2] and this[1] and prior[2] != this[1]:
-                conflicts[task_id] = (
-                    f"gold patches differ between {prior[0]} and {source_key}")
-    return conflicts
+                kind = "gold patches differ"
+            else:
+                continue
+            # Classify by whether the two rows came from the SAME source.  Two
+            # rows of one source are a within-source defect, never a cross-source
+            # conflict.
+            if prior[0] == source_key:
+                within_source[task_id] = (
+                    f"{kind} between two rows of the SAME source {source_key!r} "
+                    "(within-source conflict)")
+            else:
+                cross_source[task_id] = (
+                    f"{kind} between {prior[0]!r} and {source_key!r} "
+                    "(cross-source conflict)")
+    return SourceDisagreements(cross_source=cross_source,
+                               within_source=within_source)
 
 
 def resolve_task(row: Mapping[str, Any], *, registration_id: str = REGISTRATION_ID

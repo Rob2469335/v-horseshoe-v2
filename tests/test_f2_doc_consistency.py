@@ -391,7 +391,7 @@ class TestEnvSpecRecordsTheProvisioningDecision:
 class TestCrossSourceConflictPolicyIsRecorded:
     """The cross-source conflict policy exists, and the runbook must say so.
 
-    ``f2_population_build.union_sources`` resolves a cross-source disagreement by
+    ``f2_population_build.build_union`` resolves a cross-source disagreement by
     ``SOURCE_PRIORITY`` (keep the highest-priority source; record the other as
     ``conflicting_cross_source_priority_selected``).  A read-only reconciliation
     on 2026-10-15 found **185 of 185** in-registration conflicts carry exactly

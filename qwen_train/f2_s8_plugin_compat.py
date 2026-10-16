@@ -444,7 +444,8 @@ def classify_population(*, limit: int | None = None) -> dict[str, Any]:
     """Reproduce the population and classify every selectable task, offline."""
     started = time.time()
     order = load_registration_order(ORDER)
-    conflicts = scan_cross_source_conflicts(CORPUS)
+    disagreements = scan_cross_source_conflicts(CORPUS)
+    conflicts = disagreements.cross_source
     conflicts_in_registration = [t for t in order if t in conflicts]
     recorded_ids, ledger_rows = _ledger_task_ids(LEDGER)
     recorded_set = set(recorded_ids)
@@ -465,6 +466,12 @@ def classify_population(*, limit: int | None = None) -> dict[str, Any]:
     selectable = [t for t in order if t not in recorded_set]
     if limit is not None:
         selectable = selectable[:int(limit)]
+
+    # The number of priority-resolved conflicts ACTUALLY in the final population:
+    # after the ledger exclusions and after any requested limit.  Counting every
+    # detected conflict id would overstate it whenever the ledger or the limit
+    # removed one.
+    resolved_included = sorted(t for t in selectable if t in conflict_set)
 
     rows, corpus_digests = _slim_rows(set(selectable))
     results: list[dict[str, Any]] = []
@@ -504,21 +511,23 @@ def classify_population(*, limit: int | None = None) -> dict[str, Any]:
         "population": {
             "registered": len(order),
             "conflicts_total_both_sources": len(conflicts),
+            "conflicts_within_source": len(disagreements.within_source),
             "conflicts_in_registration": len(conflicts_in_registration),
             "conflicts_already_recorded_overlap": len(overlap),
             "conflict_resolution_policy": (
                 "SOURCE_PRIORITY: a cross-source conflict's operative row is the "
                 "highest-priority source's row; those ids ARE included and classified"
             ),
-            "conflicts_included_in_population": len(conflicts_in_registration),
+            "conflicts_included_in_population": len(resolved_included),
             "ledger_rows": ledger_rows,
             "ledger_distinct_task_ids": len(recorded_ids),
             "selectable": len(selectable),
             "classified": total,
         },
         # Provenance: the exact ids the existing SOURCE_PRIORITY policy resolved
-        # and that are therefore classified here (retained, not discarded).
+        # (retained, not discarded) AND those actually in the final population.
         "resolved_by_source_priority": sorted(conflicts_in_registration),
+        "resolved_by_source_priority_included": resolved_included,
         "counts": counts,
         "percentages": {cls: (round(100.0 * counts[cls] / total, 3) if total else 0.0)
                         for cls in CLASSES},
@@ -594,6 +603,8 @@ def _write_report(report: Mapping[str, Any], output_dir: Path = OUTPUT_DIR) -> d
         "|---|---|",
         f"| registered ids | {pop['registered']} |",
         f"| cross-source conflicts (both sources) | {pop['conflicts_total_both_sources']} |",
+        f"| ...within a single source (all copies excluded) | "
+        f"{pop['conflicts_within_source']} |",
         f"| ...in the operative registration | {pop['conflicts_in_registration']} |",
         f"| ...resolved by `SOURCE_PRIORITY` and INCLUDED in the population | "
         f"{pop['conflicts_included_in_population']} |",

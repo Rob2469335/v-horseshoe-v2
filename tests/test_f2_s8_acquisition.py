@@ -160,10 +160,12 @@ class TestCorpusLoading:
             instance_id=base["instance_id"], repo=base["repo"],
             base_commit="9" * 40, install_config={"test_cmd": "pytest -rA"})])
         a = _write_corpus(tmp_path / "a.jsonl", [base])
-        conflicts = scan_cross_source_conflicts(
+        found = scan_cross_source_conflicts(
             {"swe-bench-live": a, "swe-rebench-v2": b})
-        assert list(conflicts) == ["python-babel__babel-1120"]
-        assert "disagree" in conflicts["python-babel__babel-1120"]
+        assert list(found.cross_source) == ["python-babel__babel-1120"]
+        assert "disagree" in found.cross_source["python-babel__babel-1120"]
+        assert found.within_source == {}
+        assert found.total == 1
 
     def test_the_conflict_scan_is_empty_for_agreeing_duplicates(self, tmp_path):
         from qwen_train.f2_s8_acquisition import scan_cross_source_conflicts
@@ -177,8 +179,26 @@ class TestCorpusLoading:
             base_commit=base["base_commit"], FAIL_TO_PASS=base["FAIL_TO_PASS"],
             PASS_TO_PASS=base["PASS_TO_PASS"], patch=base["patch"],
             install_config={"test_cmd": live_cmd})])
-        assert scan_cross_source_conflicts(
-            {"swe-bench-live": a, "swe-rebench-v2": b}) == {}
+        found = scan_cross_source_conflicts(
+            {"swe-bench-live": a, "swe-rebench-v2": b})
+        assert found.cross_source == {}
+        assert found.within_source == {}
+        assert found.total == 0
+
+    def test_two_disagreeing_rows_of_ONE_source_are_not_a_cross_source_conflict(
+        self, tmp_path
+    ):
+        """Two rows of the SAME source that disagree is a within-source defect."""
+        from qwen_train.f2_s8_acquisition import scan_cross_source_conflicts
+
+        dup = _write_corpus(tmp_path / "a.jsonl", [
+            _row(),
+            _row(base_commit="9" * 40),  # same id, different payload
+        ])
+        found = scan_cross_source_conflicts({"swe-bench-live": dup})
+        assert found.cross_source == {}
+        assert list(found.within_source) == ["python-babel__babel-1120"]
+        assert "SAME source" in found.within_source["python-babel__babel-1120"]
 
     def test_unknown_source_key_is_refused(self, tmp_path):
         a = _write_corpus(tmp_path / "a.jsonl", [_row()])

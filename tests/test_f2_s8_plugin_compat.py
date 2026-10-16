@@ -594,19 +594,23 @@ class TestSourcePriorityPopulation:
         assert rows["o__a-1"]["source"] == "swe-bench-live"
         assert rows["o__a-1"]["test_cmd"] == "pytest -q"
 
-    def _population(self, monkeypatch, tmp_path, *, ordered, conflicts, recorded):
+    def _population(self, monkeypatch, tmp_path, *, ordered, conflicts, recorded,
+                    limit=None, within=None):
         from qwen_train import f2_s8_plugin_compat as pc
+        from qwen_train.f2_s8_acquisition import SourceDisagreements
 
         order_file = tmp_path / "order.json"
         order_file.write_text(
             json.dumps([{"instance_id": t} for t in ordered]), encoding="utf-8")
         monkeypatch.setattr(pc, "ORDER", order_file)
         monkeypatch.setattr(pc, "CORPUS", {})
-        monkeypatch.setattr(pc, "scan_cross_source_conflicts",
-                            lambda corpus: dict(conflicts))
+        monkeypatch.setattr(
+            pc, "scan_cross_source_conflicts",
+            lambda corpus: SourceDisagreements(cross_source=dict(conflicts),
+                                               within_source=dict(within or {})))
         monkeypatch.setattr(pc, "_ledger_task_ids",
                             lambda path: (list(recorded), len(recorded)))
-        return pc.classify_population()
+        return pc.classify_population(limit=limit)
 
     def test_a_resolved_conflict_is_included_not_subtracted(self, tmp_path, monkeypatch):
         r = self._population(monkeypatch, tmp_path, ordered=["a", "b", "c"],
@@ -635,6 +639,51 @@ class TestSourcePriorityPopulation:
         assert all(x["classification"] == CLASS_UNKNOWN for x in r["results"])
         assert any("NOT admission" in item for item in r["limitations"])
 
+    def test_a_resolved_conflict_excluded_by_the_ledger_is_not_counted(
+        self, tmp_path, monkeypatch
+    ):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b", "c"],
+                             conflicts={"b": "x"}, recorded=["b", "c"])
+        assert r["population"]["conflicts_included_in_population"] == 0
+        assert r["resolved_by_source_priority"] == ["b"]        # provenance kept
+        assert r["resolved_by_source_priority_included"] == []
+        assert r["population"]["selectable"] == 1               # only "a"
+
+    def test_a_resolved_conflict_omitted_by_the_limit_is_not_counted(
+        self, tmp_path, monkeypatch
+    ):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b"],
+                             conflicts={"b": "x"}, recorded=[], limit=1)
+        assert r["population"]["selectable"] == 1
+        assert r["population"]["conflicts_included_in_population"] == 0
+        assert r["resolved_by_source_priority_included"] == []
+
+    def test_a_resolved_conflict_that_remains_selectable_is_counted(
+        self, tmp_path, monkeypatch
+    ):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b"],
+                             conflicts={"b": "x"}, recorded=[])
+        assert r["population"]["selectable"] == 2
+        assert r["population"]["conflicts_included_in_population"] == 1
+        assert r["resolved_by_source_priority_included"] == ["b"]
+
+    def test_conflict_and_ledger_overlap_is_excluded_once(self, tmp_path, monkeypatch):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b"],
+                             conflicts={"b": "x"}, recorded=["b"])
+        assert r["population"]["conflicts_already_recorded_overlap"] == 1
+        assert r["population"]["selectable"] == 1
+        assert r["population"]["conflicts_included_in_population"] == 0
+        assert {x["task_id"] for x in r["results"]} == {"a"}
+
+    def test_within_source_disagreements_are_reported_separately(
+        self, tmp_path, monkeypatch
+    ):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b"],
+                             conflicts={"b": "x"}, recorded=[],
+                             within={"z": "two rows of one source"})
+        assert r["population"]["conflicts_total_both_sources"] == 1  # cross only
+        assert r["population"]["conflicts_within_source"] == 1
+
 
 class TestLedgerAndReport:
     def test_ledger_rows_and_distinct_task_ids_are_counted_separately(self, tmp_path):
@@ -654,7 +703,8 @@ class TestLedgerAndReport:
             "rule_version": PLUGIN_CHECK_RULE_VERSION,
             "generated_at": "2026-10-15T00:00:00Z",
             "elapsed_s": 0.1,
-            "population": {"registered": 3828, "conflicts_total_both_sources": 196,
+            "population": {"registered": 3828, "conflicts_total_both_sources": 195,
+                           "conflicts_within_source": 1,
                            "conflicts_in_registration": 185,
                            "conflicts_already_recorded_overlap": 0,
                            "conflict_resolution_policy": "SOURCE_PRIORITY: included",
