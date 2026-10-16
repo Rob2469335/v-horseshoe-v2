@@ -139,6 +139,23 @@ F2_ADAPTER_CONTROLS: dict[str, str] = {
 #: unrecognised and therefore fails closed rather than being coerced.
 _F2_CONTROL_VALUES = frozenset({"0", "1"})
 
+#: The ONLY ``.env`` entries the preflight CLI imports into the process
+#: environment.  Both are documented ``.env`` locations:
+#:
+#: * ``SWARM_RECEIPT_KEY`` -- ``EXPERIMENT_J_F2_OPERATOR_HANDOFF.md`` section 1.2
+#:   ("the operator's `.env` only"); and
+#: * the seven child controls -- ``EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md``
+#:   section 3.3 ("either in `.env` or inherited from the F2 execution adapter").
+#:
+#: The GOVERNED F2 and S8 execution inputs are deliberately ABSENT: the owner
+#: decision of 2026-10-15 is process/session-only provisioning, so a `.env`-only
+#: value must not make their preflight checks look satisfied while the separately
+#: launched execution process (``f2_s8_compose.load_governance_from_env``) reads
+#: ``os.environ`` only and would never receive it.  That loader is NOT changed.
+DOTENV_ALLOWED_KEYS: frozenset[str] = frozenset(
+    {"SWARM_RECEIPT_KEY", *F2_REQUIRED_CONTROLS}
+)
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -312,6 +329,24 @@ def _s8_env_findings() -> list[Finding]:
                if name not in S8_ENV_FALLBACKS]
     values = {name: _env(name) for name, _ in s8_only}
 
+    def _shape_ok(name: str, value: str) -> bool:
+        if not value:
+            return False
+        if name.endswith("_DIGEST"):
+            return _is_lower_sha256_hex(value)
+        return True
+
+    base_name = "SWARM_S8_BASE_STATE_DIGEST"
+    gold_name = "SWARM_S8_GOLD_STATE_DIGEST"
+    # Distinctness is decided ONLY between two INDEPENDENTLY well-formed digests.
+    # Two equal but malformed strings stay `malformed` -- they are never
+    # relabelled `identical` merely because their text matches.
+    identical = (
+        _shape_ok(base_name, values.get(base_name, ""))
+        and _shape_ok(gold_name, values.get(gold_name, ""))
+        and values[base_name] == values[gold_name]
+    )
+
     out: list[Finding] = []
     for name, label in s8_only:
         ident = "env.s8_" + name.removeprefix("SWARM_S8_").lower()
@@ -321,27 +356,25 @@ def _s8_env_findings() -> list[Finding]:
                 OPERATOR_ACTION, ident, "absent",
                 f"{name} is not set ({label})",
                 f"set {name} for the run"))
-        elif name.endswith("_DIGEST") and not _is_lower_sha256_hex(value):
+        elif not _shape_ok(name, value):
             out.append(Finding(
                 OPERATOR_ACTION, ident, "malformed",
                 f"{name} is not a 64-character lowercase SHA-256 hex digest "
                 f"({label}); value not printed",
                 f"set {name} to the {label} as sha256 hex"))
+        elif identical and name == gold_name:
+            # The GOLD side is named explicitly (the pair is the problem and the
+            # gold digest is the one to change).  No positional mutation of
+            # ``out[-1]``: that overwrote a `malformed` base finding.
+            out.append(Finding(
+                OPERATOR_ACTION, ident, "identical",
+                "the base and gold state digests are identical; they cannot "
+                "describe two distinct execution states",
+                f"set {name} to a digest distinct from the base state"))
         else:
             out.append(Finding(
                 READY, ident, "set",
                 f"{name} is set ({label}); value not printed", ""))
-
-    digest_names = [name for name, _ in s8_only if name.endswith("_DIGEST")]
-    if len(digest_names) == 2:
-        base_v, gold_v = (values[digest_names[0]], values[digest_names[1]])
-        if base_v and gold_v and base_v == gold_v:
-            last = out[-1]
-            out[-1] = Finding(
-                OPERATOR_ACTION, last.ident, "identical",
-                "the base and gold state digests are identical; they cannot "
-                "describe two distinct execution states",
-                f"set {digest_names[1]} to a digest distinct from the base state")
     return out
 
 
@@ -861,7 +894,7 @@ def _parse_operator_env(root: Path) -> dict[str, str]:
 
 
 def _load_operator_env(root: Path) -> None:
-    """Populate ``os.environ`` from the repository's ``.env`` for variables not set.
+    """Populate ``os.environ`` from the repository's ``.env``, ALLOW-LISTED.
 
     Why this exists
     ---------------
@@ -877,6 +910,17 @@ def _load_operator_env(root: Path) -> None:
     is a mechanism defect, not an operator mistake: the documented check could
     not observe the documented location.
 
+    Why it is now ALLOW-LISTED
+    --------------------------
+    Importing EVERY ``.env`` entry made a ``.env``-only GOVERNED input look
+    satisfied to the preflight, even though the governed execution path
+    (``qwen_train.f2_s8_compose.load_governance_from_env``) reads ``os.environ``
+    only and a separately launched process would never receive the value.  The
+    preflight could therefore report READY for an environment that cannot
+    execute.  Only :data:`DOTENV_ALLOWED_KEYS` -- the receipt key and the seven
+    child controls, the two documented ``.env`` locations -- are imported now;
+    the governed F2 and S8 execution inputs are process/session-only.
+
     This follows the repository's own convention -- ``swarm_os/config/settings.py``
     self-loads ``.env`` for the same reason -- and resolves ``.env`` at the
     REPOSITORY root rather than the current working directory, because the
@@ -887,6 +931,8 @@ def _load_operator_env(root: Path) -> None:
     * **An explicit process environment always wins.** A variable already present
       in ``os.environ`` is never overwritten, so an operator who exports a value
       in their shell is never silently replaced by a stale file.
+    * **Only the allow-listed keys are imported.** A governed execution input is
+      never taken from ``.env``, so it cannot produce a misleading READY finding.
     * **Values are never logged, printed, or returned.** Only presence is observed.
     * **Nothing is written.** This reads ``.env``; it never modifies it.
     * **Fail-closed behaviour is unchanged.** If ``.env`` is absent or unreadable,
@@ -894,6 +940,8 @@ def _load_operator_env(root: Path) -> None:
       weakened, skipped, or bypassed.
     """
     for key, value in _parse_operator_env(root).items():
+        if key not in DOTENV_ALLOWED_KEYS:
+            continue
         if key in os.environ:
             continue
         os.environ[key] = value

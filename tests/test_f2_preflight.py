@@ -218,6 +218,33 @@ class TestS8EnvChecking:
         assert by["env.s8_gold_state_digest"]["category"] == pf.OPERATOR_ACTION
         assert by["env.s8_gold_state_digest"]["status"] == "identical"
 
+    def test_identical_invalid_digests_stay_malformed(self, clean_env):
+        """A shared INVALID string must never be relabelled `identical`."""
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST", "same-but-invalid")
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST", "same-but-invalid")
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_base_state_digest"]["status"] == "malformed"
+        assert by["env.s8_gold_state_digest"]["status"] == "malformed"
+
+    def test_one_malformed_one_valid_keeps_malformed(self, clean_env):
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST", "not-hex")
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST", "b" * 64)
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_base_state_digest"]["status"] == "malformed"
+        assert by["env.s8_gold_state_digest"]["status"] == "set"
+        assert "identical" not in {f["status"] for f in rep["findings"]
+                                   if f["id"].startswith("env.s8_")}
+
+    def test_two_distinct_valid_digests_pass(self, clean_env):
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_base_state_digest"]["category"] == pf.READY
+        assert by["env.s8_gold_state_digest"]["category"] == pf.READY
+        assert by["env.s8_base_state_digest"]["status"] == "set"
+        assert by["env.s8_gold_state_digest"]["status"] == "set"
+
     def test_no_s8_value_is_ever_reported(self, clean_env):
         secretish = "s8-identity-do-not-print-1234567890"
         clean_env.setenv("SWARM_S8_ENVIRONMENT_IDENTITY", secretish)
