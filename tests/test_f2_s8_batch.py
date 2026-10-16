@@ -1,7 +1,9 @@
 """Tests for the S8 production batch driver (resume, retry, idempotency)."""
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -323,3 +325,104 @@ class TestCrossChainAdmissionCrediting:
             t for t in TASKS if a.admitted(t) is not None or b.admitted(t) is not None
         )
         assert out["credited_admitted"] == canonical
+
+
+def _prefix_digest(path, rows: int) -> str:
+    """SHA-256 of the first ``rows`` lines of a ledger file (line endings kept)."""
+    raw = Path(path).read_bytes()
+    return hashlib.sha256(b"".join(raw.splitlines(keepends=True)[:rows])).hexdigest()
+
+
+def _record_digest(path, index: int = 0) -> str:
+    line = Path(path).read_text(encoding="utf-8").splitlines()[index]
+    return json.loads(line)["record_digest"]
+
+
+class TestCrossChainCorrectionBinding:
+    """A correction row must BIND to a historical prefix of the chain it corrects.
+
+    Verified on the real ledgers (2026-10-16): the corrected chain's recorded
+    ``correction_of_chain_sha256`` is exactly the first-7-rows digest of the
+    9-row operative chain.  Reconciliation refuses any correction whose binding is
+    absent, malformed or unproven -- it never credits one on trust, and it never
+    changes which ordinary admissions are credited.
+    """
+
+    def _correction(self, *, task_id, chain_name, chain_sha256, record_digest,
+                    outcome="base_fail_gold_pass"):
+        return {
+            "task_id": task_id, "registration_id": "reg",
+            "registration_sha256": REG_SHA, "outcome": outcome,
+            "outcome_class": "scientific", "admitted": True, "attempt": 2,
+            "correction_of_chain": chain_name,
+            "correction_of_chain_sha256": chain_sha256,
+            "correction_of_record_digest": record_digest,
+        }
+
+    def test_a_valid_historical_prefix_binding_is_accepted(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        prefix = _prefix_digest(a_path, 1)               # the chain as it stood
+        a.append(_sci("t-2", "base_fail_gold_pass", True))  # chain later grows
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name, chain_sha256=prefix,
+            record_digest=_record_digest(a_path, 0))])
+        out = reconcile_admissions_across_chains([a, b], TASKS)
+        assert out["corrections_verified"] == 1
+        assert out["credited_admitted"] == ["t-1", "t-2"]
+
+    def test_an_invalid_prefix_digest_is_refused(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name, chain_sha256="0" * 64,
+            record_digest=_record_digest(a_path, 0))])
+        with pytest.raises(BatchError, match="not a historical prefix"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_an_altered_prefix_hash_is_refused(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        first = a_path.read_bytes().splitlines(keepends=True)[:1]
+        altered = hashlib.sha256(b"".join(first).replace(b"t-1", b"t-1 ")).hexdigest()
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name, chain_sha256=altered,
+            record_digest=_record_digest(a_path, 0))])
+        with pytest.raises(BatchError, match="not a historical prefix"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_malformed_correction_reference_is_refused(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        rec = self._correction(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 1),
+            record_digest=_record_digest(a_path, 0))
+        del rec["correction_of_record_digest"]        # the three fields bind together
+        b = _chain(tmp_path / "b.jsonl", [rec])
+        with pytest.raises(BatchError, match="required together"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_correction_naming_an_absent_record_is_refused(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 1), record_digest="f" * 64)])
+        with pytest.raises(BatchError, match="does not exist"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_correction_referencing_an_unrelated_chain_is_refused(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name="not-here.jsonl", chain_sha256="a" * 64,
+            record_digest=_record_digest(a_path, 0))])
+        with pytest.raises(BatchError, match="not part of this reconciliation"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_an_ordinary_record_is_not_a_correction(self, tmp_path):
+        a = _chain(tmp_path / "a.jsonl", [_sci("t-0", "base_fail_gold_pass", True)])
+        out = reconcile_admissions_across_chains([a], TASKS)
+        assert out["corrections_verified"] == 0
+        assert out["credited_admitted"] == ["t-0"]

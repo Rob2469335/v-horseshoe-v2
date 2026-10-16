@@ -28,6 +28,7 @@ already-governed per-task entry point (e.g. a closure over
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -141,6 +142,13 @@ def reconcile_admissions_across_chains(
     admission predicate changes; a task admitted in more than one chain is
     reported in ``credited_in_multiple_chains`` and still counted once.
 
+    A corrective record must also BIND to the chain it corrects
+    (:func:`_require_correction_binding`): the named chain must be part of this
+    reconciliation, the corrected record digest must exist in it, and
+    ``correction_of_chain_sha256`` must be a historical LINE PREFIX of that
+    chain's bytes.  A correction whose binding is absent, malformed or unproven
+    aborts the reconciliation rather than being credited.
+
     ``chains`` is ordered: the first entry is the **operative** chain (the one
     the runbook pins with ``--ledger``), whose admitted set is returned
     separately as ``operative_admitted`` -- the code-bound canonical figure.
@@ -148,20 +156,45 @@ def reconcile_admissions_across_chains(
     if not chains:
         raise BatchError("cross-chain reconciliation needs at least one chain")
     universe = set(ordered_task_ids)
-    per_chain: list[dict[str, Any]] = []
-    credited: set[str] = set()
-    in_multiple: set[str] = set()
-    unregistered: set[str] = set()
+
+    # Pass 1: verify and index EVERY chain first, so a correction row can be
+    # resolved against the chain it names even when that chain appears later.
+    indexes: list[dict[str, Any]] = []
+    by_name: dict[str, dict[str, Any]] = {}
     for chain in chains:
         ledger = chain if isinstance(chain, AppendOnlyLedger) else AppendOnlyLedger(chain)
         ok, reason = ledger.verify()
         if not ok:
             raise BatchError(f"chain {ledger.path} failed verification: {reason}")
+        records = ledger.records()
+        raw = ledger.path.read_bytes() if ledger.path.is_file() else b""
+        index = {
+            "ledger": ledger,
+            "records": records,
+            "prefix_digests": _chain_prefix_digests(raw),
+            "record_digests": {str(r.get("record_digest")) for r in records},
+        }
+        indexes.append(index)
+        by_name[ledger.path.name] = index
+        by_name[str(ledger.path)] = index
+
+    # Pass 2: validate every correction binding (fail closed), then credit.
+    per_chain: list[dict[str, Any]] = []
+    credited: set[str] = set()
+    in_multiple: set[str] = set()
+    unregistered: set[str] = set()
+    corrections_verified = 0
+    for index in indexes:
+        ledger = index["ledger"]
+        records = index["records"]
+        for record in records:
+            if _require_correction_binding(record, by_name=by_name):
+                corrections_verified += 1
         # The canonical admission rule (AppendOnlyLedger.admitted): the FIRST
         # scientific record for a task decides, and only ADMITTED_OUTCOME
         # credits.  Computed in one pass; a test pins it to the per-task method.
         first_scientific: dict[str, dict[str, Any]] = {}
-        for record in ledger.records():
+        for record in records:
             task_id = str(record.get("task_id"))
             if record.get("outcome_class") == "scientific" and task_id not in first_scientific:
                 first_scientific[task_id] = record
@@ -176,7 +209,7 @@ def reconcile_admissions_across_chains(
         credited |= admitted
         per_chain.append({
             "path": str(ledger.path),
-            "rows": len(ledger.records()),
+            "rows": len(records),
             "admitted": sorted(admitted),
         })
     return {
@@ -186,8 +219,94 @@ def reconcile_admissions_across_chains(
         "credited_count": len(credited),
         "credited_in_multiple_chains": sorted(in_multiple),
         "unregistered_admitted": sorted(unregistered),
+        "corrections_verified": corrections_verified,
         "registered": len(ordered_task_ids),
     }
+
+
+#: A correction record binds to the chain it corrects through these three fields;
+#: they are required together or not at all.
+_CORRECTION_KEYS = (
+    "correction_of_chain",
+    "correction_of_chain_sha256",
+    "correction_of_record_digest",
+)
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _chain_prefix_digests(raw: bytes) -> set[str]:
+    """Every SHA-256 of a LINE PREFIX of a ledger file's bytes.
+
+    A correction records ``correction_of_chain_sha256`` = the SHA-256 of the
+    corrected chain's bytes *as they stood when the correction was written*, i.e.
+    the first N non-empty rows with their line endings.  Later appends grow the
+    chain, so the recorded value is a prefix hash of the CURRENT file -- verified
+    on the real ledgers (2026-10-16): the corrected chain's recorded digest is
+    exactly the first-7-rows digest of the 9-row operative chain
+    (``07cb4545...``).  Membership in this set is therefore what proves a
+    correction binds to a PREFIX of the named chain, not to an unrelated file.
+
+    Both the literal byte prefix and its LF-normalised equivalent are accepted:
+    they agree for the current (LF) ledgers, and newline normalisation is the only
+    representation difference that does not change the chain's content.
+    """
+    digests: set[str] = set()
+    for variant in (raw, raw.replace(b"\r\n", b"\n")):
+        running = hashlib.sha256()
+        for line in variant.splitlines(keepends=True):
+            running.update(line)
+            if line.strip():
+                digests.add(running.hexdigest())
+    return digests
+
+
+def _require_correction_binding(
+    record: Mapping[str, Any],
+    *,
+    by_name: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """Fail closed unless a correction record binds to a historical prefix.
+
+    Returns ``True`` when the record is a validated correction and ``False`` when
+    it is an ordinary record (no correction fields).  Raises :class:`BatchError`
+    when the binding is present but not established.  This makes no credit
+    decision: it only refuses to credit a correction whose binding is unproven.
+    """
+    present = [k for k in _CORRECTION_KEYS if k in record]
+    if not present:
+        return False
+    missing = [k for k in _CORRECTION_KEYS if not str(record.get(k) or "").strip()]
+    if missing:
+        raise BatchError(
+            f"malformed correction record: it carries {sorted(present)} but omits "
+            f"{missing}; every correction field is required together "
+            f"({list(_CORRECTION_KEYS)})")
+    name = str(record["correction_of_chain"]).strip()
+    target = by_name.get(name) or by_name.get(Path(name).name)
+    if target is None:
+        raise BatchError(
+            f"correction references chain {name!r}, which is not part of this "
+            "reconciliation; a correction cannot be validated without the chain "
+            "it corrects")
+    ref = str(record["correction_of_record_digest"]).strip()
+    if ref not in target["record_digests"]:
+        raise BatchError(
+            f"correction references record {ref!r}, which does not exist in "
+            f"{Path(target['ledger'].path).name}")
+    claimed = str(record["correction_of_chain_sha256"]).strip()
+    if not _is_sha256_hex(claimed):
+        raise BatchError(
+            f"correction_of_chain_sha256 {claimed!r} is not a 64-character "
+            "lowercase SHA-256 hex digest")
+    if claimed not in target["prefix_digests"]:
+        raise BatchError(
+            f"correction_of_chain_sha256 {claimed!r} is not a historical prefix of "
+            f"{Path(target['ledger'].path).name}; the correction binding is not "
+            "established")
+    return True
 
 
 def _append_progress(path: Path | None, entry: Mapping[str, Any]) -> None:
