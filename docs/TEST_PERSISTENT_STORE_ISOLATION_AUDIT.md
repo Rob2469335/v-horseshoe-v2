@@ -529,7 +529,7 @@ behavior. No untracked file was added, deleted, modified, or staged.
 |---|---|---|---|
 | **GREEN** | 3 | 9 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); test_admin_status event-log isolation (remediated, §10); `SWARM_WRITE_ROOT` relative-root containment (GREEN by verification, §19 YELLOW-3); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
 | **YELLOW** | 3 | **0** | none — both YELLOW items are now GREEN (one remediated, one proven contained) |
-| **RED** | 2 | 1 | **Qdrant general-constructor bypass** — ordinary pytest reached a real `AsyncQdrantClient` and could issue a real `upsert('decision_cache')` (§7.2). **Remediated** by the two-layer package+per-module patch (§7.4) |
+| **RED** | 2 | **0** | none — the Qdrant general-constructor bypass (§7.2) is **Remediated** by the two-layer package+per-module patch (§7.4), and RED-1/RED-2 are remediated at `417d013c` |
 | **GRAY** | 6 | **0** | none — all three closed 2026-10-16 (see §18.1): `swarm_os/tests/` fitness scope **REMEDIATED**; memory/diary Qdrant path **REMEDIATED**; receipt-key file reachability **GREEN by verification**. (The other three — trajectories, checkpoints, run_snapshots — were proven **RED** and remediated; see §13.1.) |
 
 **REMEDIATED, no longer counted:** RED-1/RED-2 (`TestClient(app)` lifespan writing
@@ -544,7 +544,10 @@ isolation gap).
 
 **Final verdict on broad pytest (updated 2026-10-16):** every RED, YELLOW and GRAY
 isolation item is now either remediated or proven contained, and a full suite run has
-been executed — `5920 passed, 12 skipped, 1 xfailed, 0 failed` (exit 0). **That green
+been executed — at HEAD `15f6b48f`, **`5925 passed, 12 skipped, 1 xfailed,
+0 failed`** (exit 0, 40 min, re-verified 2026-10-16). The earlier figure of
+`5920` was correct for HEAD `2e024564` and rose by the 5 isolation-guard tests
+added at `28063091`. **That green
 result is not the evidence that isolation holds.** The evidence is the fixtures and
 sweeps recorded here; a passing suite says nothing about a store no test happened to
 touch. Re-audit this section if new `data/` writers or new import-time Qdrant bindings

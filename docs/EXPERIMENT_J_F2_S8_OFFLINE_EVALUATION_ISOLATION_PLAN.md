@@ -15,7 +15,7 @@ recorded evidence.
 
 | Item | Value |
 |---|---|
-| HEAD == `origin/agent/q9-classification-sota` | `52fdecc0` (divergence `0 0`) |
+| HEAD == `origin/agent/q9-classification-sota` | `52fdecc0` (divergence `0 0`) — **as observed 2026-10-13**, this document's investigation date; NOT current state. Read the live values with `git rev-parse HEAD origin/agent/q9-classification-sota` and `git rev-list --left-right --count` |
 | PR #33 | OPEN, unmerged, auto-merge disabled |
 | `F2-S8-VM1` | `Off`; Gen 2; NIC `Network Adapter` on `F2-S8-NAT` (Internal); MAC `00155D56D603`; no IP while Off |
 | Switches | `F2-S8-NAT` (Internal), `F2-Internal-Switch` (Internal), `Default Switch` (Internal) — **no external/NAPT switch bound to a physical NIC** |
