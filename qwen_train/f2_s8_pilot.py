@@ -441,15 +441,16 @@ def run_pilot_task(
         junit_hashes[side] = _sha256(junit_bytes)
 
         try:
+            side_finished = _utc_now()
             sides[side] = guest_evidence_from_junit(
                 spec=spec, side=side, junit_bytes=junit_bytes,
                 run_log=_execution_log(
                     side=side, task_id=spec.task_id, command=command,
                     stdout=guest_stdout, stderr=guest_stderr,
                     provenance=provenance, artifact=artifact,
-                    started_at=side_started, finished_at=_utc_now(),
+                    started_at=side_started, finished_at=side_finished,
                 ),
-                started_at=side_started, finished_at=_utc_now(),
+                started_at=side_started, finished_at=side_finished,
             )
         except Exception as exc:  # noqa: BLE001 - evaluator refused the evidence
             failure_class = f"evaluator_refused_{side}_{type(exc).__name__}"

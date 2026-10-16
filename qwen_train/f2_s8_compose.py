@@ -542,6 +542,12 @@ def _result_from_bundles(
         evidence._canonical_bytes(_record_for(base_bundle).to_dict())
         + evidence._canonical_bytes(_record_for(gold_bundle).to_dict())
     ).hexdigest()
+    def _record_ref(side: str) -> dict[str, Any]:
+        raw = evidence._canonical_bytes(_record_for(
+            base_bundle if side == "base" else gold_bundle).to_dict())
+        return {"name": f"{spec.task_id}.{side}.evidence_record.json",
+                "sha256": hashlib.sha256(raw).hexdigest(), "size_bytes": len(raw)}
+
     artifacts = {
         role: ref_dict for role, ref_dict in (
             ("base_report", _ref_dict(base_bundle.test_output)),
@@ -551,10 +557,10 @@ def _result_from_bundles(
             ("evaluator_implementation",
              _ref_dict(base_bundle.implementation_artifact
                        or gold_bundle.implementation_artifact)),
-            ("base_evidence_record",
-             _ref_dict(getattr(base_bundle, "evidence_record", None))),
-            ("gold_evidence_record",
-             _ref_dict(getattr(gold_bundle, "evidence_record", None))),
+            # The PERSISTED per-side EvidenceRecord, referenced by the digest of
+            # the exact canonical bytes written to the store.
+            ("base_evidence_record", _record_ref("base")),
+            ("gold_evidence_record", _record_ref("gold")),
         ) if ref_dict
     }
     return ExecutionResult(
@@ -570,6 +576,7 @@ def _result_from_bundles(
         evidence_record_digest=record_digest,
         environment_identity=base_bundle.identity.environment_identity,
         execution_state_digest=gold_bundle.identity.execution_state_digest,
+        base_state_digest=base_bundle.identity.execution_state_digest,
         started_at=base_bundle.started_at or gold_bundle.started_at,
         finished_at=gold_bundle.finished_at or base_bundle.finished_at,
         repository_revision=repository_revision,

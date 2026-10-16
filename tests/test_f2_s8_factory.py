@@ -51,13 +51,15 @@ def _ok(task_id, attempt, **over):
         evidence_record_digest="d" * 64,
         environment_identity="test-env",
         execution_state_digest="e" * 64,
+        base_state_digest="b" * 64,
         started_at="2026-10-16T00:00:00Z",
         finished_at="2026-10-16T00:00:01Z",
         repository_revision="a" * 40,
         artifacts={
             role: {"name": f"{role}.bin", "sha256": "f" * 64, "size_bytes": 10}
             for role in REQUIRED_EVIDENCE_ROLES
-        },
+        } | {"gold_report": {"name": f"{task_id}.junit.xml", "sha256": "c" * 64,
+                             "size_bytes": 1234}},
     )
     kw.update(over)
     return ExecutionResult(**kw)
@@ -271,7 +273,7 @@ class TestEvidenceBindingIsFailClosed:
             self._run(tmp_path, execution_state_digest="")
 
     def test_a_missing_repository_revision_is_refused(self, tmp_path):
-        with pytest.raises(FactoryError, match="repository revision"):
+        with pytest.raises(FactoryError, match="repository_revision"):
             self._run(tmp_path, repository_revision="")
 
     def test_a_placeholder_timestamp_is_refused(self, tmp_path):

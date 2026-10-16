@@ -84,6 +84,12 @@ def _is_sha256(value: Any) -> bool:
     return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
 
 
+def _is_commit_revision(value: Any) -> bool:
+    """A git commit id: 40 lowercase hex characters (SHA-1 object name)."""
+    s = str(value or "")
+    return len(s) == 40 and all(c in "0123456789abcdef" for c in s)
+
+
 class FactoryError(Exception):
     """Base class for factory contract violations."""
 
@@ -152,6 +158,7 @@ class ExecutionResult:
     evidence_record_digest: str = ""
     environment_identity: str = ""
     execution_state_digest: str = ""
+    base_state_digest: str = ""
     started_at: str = ""
     finished_at: str = ""
     repository_revision: str = ""
@@ -429,9 +436,13 @@ def run_once(
         if not _is_sha256(result.execution_state_digest):
             raise FactoryError(
                 "an admitted outcome requires the gold execution-state digest (64-hex)")
-        if not str(result.repository_revision or "").strip():
+        if not _is_sha256(result.base_state_digest):
             raise FactoryError(
-                "an admitted outcome requires the repository revision it was run from")
+                "an admitted outcome requires the base execution-state digest (64-hex)")
+        if not _is_commit_revision(result.repository_revision):
+            raise FactoryError(
+                "an admitted outcome requires a 40-character lowercase hex commit "
+                f"SHA for repository_revision ({result.repository_revision!r} is not)")
         for label, value in (("started_at", result.started_at),
                              ("finished_at", result.finished_at)):
             if not _ISO_UTC.match(str(value or "")):
@@ -452,6 +463,15 @@ def run_once(
             if not isinstance(size, int) or size < 0:
                 raise FactoryError(
                     f"evidence artifact {role!r} has no non-negative size_bytes")
+        # The bound gold report must BE the declared evidence: a bundle whose
+        # artifact ref disagrees with the row's evidence identity is refused.
+        gold_ref = (result.artifacts or {}).get("gold_report") or {}
+        if (str(gold_ref.get("name") or "") != result.evidence_name
+                or str(gold_ref.get("sha256") or "") != result.evidence_sha256
+                or int(gold_ref.get("size_bytes") or -1) != int(result.evidence_size)):
+            raise FactoryError(
+                "the bound gold_report artifact does not match the declared "
+                "evidence identity (name/digest/size must agree)")
 
     record = {
         "schema_version": SCHEMA_VERSION,
@@ -484,6 +504,8 @@ def run_once(
         record["evidence_bundle"] = {
             "environment_identity": result.environment_identity,
             "execution_state_digest": result.execution_state_digest,
+            "gold_state_digest": result.execution_state_digest,
+            "base_state_digest": result.base_state_digest,
             "started_at": result.started_at,
             "finished_at": result.finished_at,
             "repository_revision": result.repository_revision,

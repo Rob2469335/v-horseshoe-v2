@@ -98,11 +98,14 @@ def _ok(task_id, attempt, **over):
         evidence_record_digest="d" * 64,
         environment_identity="test-env",
         execution_state_digest="e" * 64,
+        base_state_digest="b" * 64,
         started_at="2026-10-16T00:00:00Z",
         finished_at="2026-10-16T00:00:01Z",
         repository_revision="a" * 40,
         artifacts={r: {"name": f"{r}.bin", "sha256": "f" * 64, "size_bytes": 1}
-                   for r in REQUIRED_EVIDENCE_ROLES},
+                   for r in REQUIRED_EVIDENCE_ROLES}
+        | {"gold_report": {"name": f"{task_id}.junit.xml", "sha256": "c" * 64,
+                           "size_bytes": 10}},
     )
     kw.update(over)
     return ExecutionResult(**kw)
