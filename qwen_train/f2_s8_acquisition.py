@@ -318,12 +318,21 @@ def scan_cross_source_conflicts(
 ) -> dict[str, str]:
     """Instance ids present in TWO sources whose canonical records DISAGREE.
 
-    The union step already de-duplicated the sources for the registration, so
-    these are rare.  They are reported rather than resolved: preferring one
-    source would be a guess about which commit and which patches the task means,
-    which is exactly the kind of silent substitution this layer must not do.
-    A caller selects around them explicitly (``select_tasks(exclude=...)``) and
-    the ids stay visible as a recorded, governance-visible gap.
+    These ids are **not unresolved**: the union step
+    (:func:`qwen_train.f2_population_build.union_sources`) already applied the
+    deterministic cross-source policy and kept the highest-priority source's
+    record, recording the other as
+    ``conflicting_cross_source_priority_selected``.  This scan re-derives, from
+    the raw acquired corpora, *which* ids the two sources describe differently,
+    so the disagreement stays governance-visible at the source level.  It is a
+    detection/visibility helper, not a settlement of the operative row, and it
+    changes no registration content.
+
+    Reconciled 2026-10-15 (read-only): 196 ids disagree in the two corpora; 185
+    of them are in the operative registration; for **185 of 185** the union
+    recorded ``conflicting_cross_source_priority_selected`` with
+    ``kept_source='swe-bench-live'``, so every in-registration conflict already
+    has a recorded, deterministic operative record.
 
     Returns ``instance_id -> reason``.
     """

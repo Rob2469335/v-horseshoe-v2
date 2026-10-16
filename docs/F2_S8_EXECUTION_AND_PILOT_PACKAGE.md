@@ -563,10 +563,25 @@ Reproduced by streaming both corpora and comparing the **canonical source-adapte
 
 **No class is a normalisation bug in this repository** — the upstream corpora genuinely disagree on
 the gold patch, the declared language, the node lists and/or the declared command for the same
-`instance_id`. No existing policy names a winner, so under §"never resolve a conflict by guessing"
-they remain **explicit conflicts**: a **`GOVERNANCE GAP`** requiring a rule, not a code fix.
-**Effect on the eligible population: none assumed** — resolving all 185 would not add 185 selectable
-tasks, and none was added here.
+`instance_id`. **The disagreement does not leave the task unresolved.** `qwen_train/f2_population_build.py`
+already defines a deterministic cross-source policy (`SOURCE_PRIORITY = ("swe-bench-live", "swe-rebench-v2")`),
+and the union applies it: for a conflicting `instance_id` present in more than one source it keeps the
+highest-priority source's record and records the other as `conflicting_cross_source_priority_selected`
+(within-source conflicts are the branch that removes every copy).
+
+**Reconciled 2026-10-15 (read-only, against the actual local artifacts).** All **185 of 185**
+in-registration conflicts carry exactly that disposition (`kept_source='swe-bench-live'`,
+`excluded_source='swe-rebench-v2'`) and the kept copy survived to screening (the 196 corpus-level
+disagreements minus the 11 outside the registration reproduce 185). The earlier claim here was wrong
+and is corrected — *"No existing policy names a winner ... a `GOVERNANCE GAP` requiring a rule, not a code fix"* — the rule exists (the union's `SOURCE_PRIORITY`), it is deterministic, and
+it is applied to every in-registration conflict. The raw source-level disagreement remains visible
+(that is what `scan_cross_source_conflicts` detects); it is **not** an open governance gap.
+
+**Effect on the eligible population — conservative, and now labelled.** The classifier's Selectable
+figure still *subtracts* the 185 (§16.9: `3,828 − 185 − 7 = 3,636`). With the disposition above that
+subtraction is visibly **conservative**: the 185 are resolved registered rows, not unavailable ones.
+Whether to keep excluding them from selection is a **policy choice for the owner**
+(`REQUIRES AUTHORIZATION`); no population figure was changed here.
 
 ### 16.9 (Session 42) - install-plan repair, regression suite, and the offline plugin classifier over all 3,636 selectable tasks
 

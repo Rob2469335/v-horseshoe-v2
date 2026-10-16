@@ -381,6 +381,34 @@ class TestEnvSpecRecordsTheProvisioningConflict:
         assert "f2_s8_compose.load_governance_from_env" in text
 
 
+class TestCrossSourceConflictPolicyIsRecorded:
+    """The cross-source conflict policy exists, and the runbook must say so.
+
+    ``f2_population_build.union_sources`` resolves a cross-source disagreement by
+    ``SOURCE_PRIORITY`` (keep the highest-priority source; record the other as
+    ``conflicting_cross_source_priority_selected``).  A read-only reconciliation
+    on 2026-10-15 found **185 of 185** in-registration conflicts carry exactly
+    that disposition, so the pilot package's earlier claim -- *"No existing
+    policy names a winner ... a GOVERNANCE GAP requiring a rule"* -- was false.
+    This guard fails if that claim returns or the policy stops being recorded.
+    """
+
+    def test_runbook_no_longer_claims_no_policy_exists(self):
+        # The stale wording may survive ONLY inside the attributed correction
+        # that quotes it (mirrors TestContradictionsStayFixed's pattern).
+        text = read(PILOT_PACKAGE)
+        for line in text.splitlines():
+            if "No existing policy names a winner" in line:
+                assert any(
+                    sig in line for sig in ("wrong", "corrected", "previous", "no longer")
+                ), f"unattributed stale claim: {line!r}"
+
+    def test_runbook_records_the_existing_priority_policy(self):
+        text = read(PILOT_PACKAGE)
+        assert "SOURCE_PRIORITY" in text
+        assert "conflicting_cross_source_priority_selected" in text
+
+
 class TestSession39And40ReconciliationIsRecorded:
     """The reconciliation pass must stay in the runbook, and must not slip into
     claiming population-wide yield from two observed tasks."""
