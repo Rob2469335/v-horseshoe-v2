@@ -426,3 +426,39 @@ class TestCrossChainCorrectionBinding:
         out = reconcile_admissions_across_chains([a], TASKS)
         assert out["corrections_verified"] == 0
         assert out["credited_admitted"] == ["t-0"]
+
+    def test_a_correction_naming_a_different_task_is_refused(self, tmp_path):
+        """A correction may only correct the SAME task it references."""
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-2",                                  # different task!
+            chain_name=a_path.name, chain_sha256=_prefix_digest(a_path, 1),
+            record_digest=_record_digest(a_path, 0))])
+        with pytest.raises(BatchError, match="SAME task"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_correction_referencing_a_record_outside_the_prefix_is_refused(
+        self, tmp_path
+    ):
+        """The corrected record must already exist within the verified prefix."""
+        a_path = tmp_path / "a.jsonl"
+        # row 1 is infrastructure, so the append of the row-2 scientific record is
+        # permitted by the append-only guard.
+        a = _chain(a_path, [_infra("t-1")])
+        boundary = _prefix_digest(a_path, 1)                # the 1-row prefix
+        a.append(_sci("t-1", "base_fail_gold_pass", True))  # row 2, AFTER the prefix
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name, chain_sha256=boundary,
+            record_digest=_record_digest(a_path, 1))])      # the row-2 record
+        with pytest.raises(BatchError, match="outside the verified"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_correction_with_a_malformed_record_digest_is_refused(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        b = _chain(tmp_path / "b.jsonl", [self._correction(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 1), record_digest="not-a-digest")])
+        with pytest.raises(BatchError, match="not a 64-character"):
+            reconcile_admissions_across_chains([a, b], TASKS)

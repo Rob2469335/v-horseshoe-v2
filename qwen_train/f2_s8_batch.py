@@ -168,11 +168,30 @@ def reconcile_admissions_across_chains(
             raise BatchError(f"chain {ledger.path} failed verification: {reason}")
         records = ledger.records()
         raw = ledger.path.read_bytes() if ledger.path.is_file() else b""
+        # Line numbers are 1-based over the file's NON-EMPTY lines (the rows the
+        # ledger's own reader enumerates), so a record's position is comparable to
+        # the verified prefix boundary.
+        line_numbers: dict[str, int] = {}
+        digests: dict[str, tuple[int, str]] = {}
+        number = 0
+        for row in raw.splitlines():
+            if not row.strip():
+                continue
+            number += 1
+            try:
+                parsed = json.loads(row)
+            except Exception:  # noqa: BLE001 - verify() already vouched for the chain
+                continue
+            digest = str(parsed.get("record_digest") or "")
+            if digest and digest not in digests:
+                digests[digest] = (number, str(parsed.get("task_id") or ""))
+                line_numbers[digest] = number
         index = {
             "ledger": ledger,
             "records": records,
             "prefix_digests": _chain_prefix_digests(raw),
-            "record_digests": {str(r.get("record_digest")) for r in records},
+            "record_digests": set(digests),
+            "record_task_and_line": digests,
         }
         indexes.append(index)
         by_name[ledger.path.name] = index
@@ -237,8 +256,8 @@ def _is_sha256_hex(value: str) -> bool:
     return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
-def _chain_prefix_digests(raw: bytes) -> set[str]:
-    """Every SHA-256 of a LINE PREFIX of a ledger file's bytes.
+def _chain_prefix_digests(raw: bytes) -> dict[str, int]:
+    """Every SHA-256 of a LINE PREFIX of a ledger file's bytes -> rows included.
 
     A correction records ``correction_of_chain_sha256`` = the SHA-256 of the
     corrected chain's bytes *as they stood when the correction was written*, i.e.
@@ -246,21 +265,27 @@ def _chain_prefix_digests(raw: bytes) -> set[str]:
     chain, so the recorded value is a prefix hash of the CURRENT file -- verified
     on the real ledgers (2026-10-16): the corrected chain's recorded digest is
     exactly the first-7-rows digest of the 9-row operative chain
-    (``07cb4545...``).  Membership in this set is therefore what proves a
-    correction binds to a PREFIX of the named chain, not to an unrelated file.
+    (``07cb4545...``).
+
+    Returning the ROW COUNT for each prefix digest (not a bare set) is what lets
+    the binding check place the referenced record relative to the verified
+    boundary: the corrected record must occur at or before it.
 
     Both the literal byte prefix and its LF-normalised equivalent are accepted:
     they agree for the current (LF) ledgers, and newline normalisation is the only
-    representation difference that does not change the chain's content.
+    representation difference that does not change the chain's content.  A
+    boundary observed in either representation records the same row count.
     """
-    digests: set[str] = set()
+    boundaries: dict[str, int] = {}
     for variant in (raw, raw.replace(b"\r\n", b"\n")):
         running = hashlib.sha256()
+        rows = 0
         for line in variant.splitlines(keepends=True):
             running.update(line)
             if line.strip():
-                digests.add(running.hexdigest())
-    return digests
+                rows += 1
+                boundaries.setdefault(running.hexdigest(), rows)
+    return boundaries
 
 
 def _require_correction_binding(
@@ -270,10 +295,19 @@ def _require_correction_binding(
 ) -> bool:
     """Fail closed unless a correction record binds to a historical prefix.
 
-    Returns ``True`` when the record is a validated correction and ``False`` when
-    it is an ordinary record (no correction fields).  Raises :class:`BatchError`
-    when the binding is present but not established.  This makes no credit
-    decision: it only refuses to credit a correction whose binding is unproven.
+    Four conditions must ALL hold; any failure aborts the reconciliation:
+
+    1. the named chain is part of this reconciliation;
+    2. ``correction_of_record_digest`` names a record that EXISTS in that chain;
+    3. that record is for the SAME ``task_id`` as the corrective record (a
+       correction may only correct the same task, never a different one);
+    4. the corrected record occurs AT OR BEFORE the verified prefix boundary
+       identified by ``correction_of_chain_sha256`` -- i.e. it was already in the
+       chain when the correction was written.
+
+    Returns ``True`` for a validated correction and ``False`` for an ordinary
+    record.  This makes no credit decision: it only refuses to credit a correction
+    whose binding is unproven.
     """
     present = [k for k in _CORRECTION_KEYS if k in record]
     if not present:
@@ -292,20 +326,40 @@ def _require_correction_binding(
             "reconciliation; a correction cannot be validated without the chain "
             "it corrects")
     ref = str(record["correction_of_record_digest"]).strip()
-    if ref not in target["record_digests"]:
+    if not _is_sha256_hex(ref):
+        raise BatchError(
+            f"correction_of_record_digest {ref!r} is not a 64-character lowercase "
+            "SHA-256 hex digest")
+    located = target["record_task_and_line"].get(ref)
+    if located is None:
         raise BatchError(
             f"correction references record {ref!r}, which does not exist in "
             f"{Path(target['ledger'].path).name}")
+    ref_line, ref_task = located
+
+    corrective_task = str(record.get("task_id") or "")
+    if not corrective_task or ref_task != corrective_task:
+        raise BatchError(
+            f"correction for task {corrective_task!r} references a record for task "
+            f"{ref_task!r}; a correction may only correct the SAME task")
+
     claimed = str(record["correction_of_chain_sha256"]).strip()
     if not _is_sha256_hex(claimed):
         raise BatchError(
             f"correction_of_chain_sha256 {claimed!r} is not a 64-character "
             "lowercase SHA-256 hex digest")
-    if claimed not in target["prefix_digests"]:
+    boundary = target["prefix_digests"].get(claimed)
+    if boundary is None:
         raise BatchError(
             f"correction_of_chain_sha256 {claimed!r} is not a historical prefix of "
             f"{Path(target['ledger'].path).name}; the correction binding is not "
             "established")
+    if ref_line > boundary:
+        raise BatchError(
+            f"correction references a record at row {ref_line} of "
+            f"{Path(target['ledger'].path).name}, outside the verified "
+            f"{boundary}-row prefix recorded by correction_of_chain_sha256; the "
+            "corrected record must already exist within that prefix")
     return True
 
 
