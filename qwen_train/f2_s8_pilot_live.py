@@ -251,12 +251,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     # bound to THIS manifest and THIS registration at THIS repository revision,
     # the run is refused.  Single-use, scope-bound, revocable and fail-closed is
     # enforced by ``f2_authorization`` (no trust root => every stage denied).
-    from qwen_train.f2_authorization import AuthorizationError, require_authorized
+    from qwen_train.f2_authorization import (
+        AuthorizationError,
+        verify_and_consume,
+    )
 
     manifest_path = Path(args.manifest)
     manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     try:
-        verified = require_authorized(
+        # SINGLE-USE, durable consumption (Decision 2): `verify_and_consume`
+        # verifies the grant AND durably consumes it BEFORE any guest work, so a
+        # second attempt -- concurrent or later, in this or any other process --
+        # is denied. `require_authorized` is the NON-consuming stateless check and
+        # must not be used here.
+        verified, _consumption = verify_and_consume(
             stage="S8-001",
             operation="base_gold_production",
             binding={
@@ -271,7 +279,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         ) from exc
     # The revision the OWNER-signed grant bound; written into every admitted
     # ledger record (Decision 3) so a record names the code that produced it.
-    authorized_revision = str((verified or {}).get("repository_revision") or "")
+    authorized_revision = str(
+        (getattr(verified, "record", {}) or {}).get("repository_revision") or "")
 
     # Fail closed before touching the guest: the governed path needs a real
     # trusted store and a real authorized evaluator, none of which this module

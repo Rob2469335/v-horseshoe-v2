@@ -48,6 +48,10 @@ GUEST_SCHEMA = "f2_s8_guest_execution_v1"
 #: Exit status the bounded runner reports for a timed-out command.
 TIMEOUT_EXIT_STATUS = 124
 
+#: Bound on the guest's echoed execution output (bytes). The run log is a
+#: byproduct, so one pathological task cannot balloon the retained bundle.
+MAX_ECHO_BYTES = 64 * 1024
+
 
 class GuestExecutorError(Exception):
     """The guest executor contract was violated."""
@@ -147,6 +151,30 @@ def _default_run_command(
         )
 
 
+def _emit_execution_summary(outcome: "CommandResult") -> None:
+    """Echo a bounded JSON execution summary (with real stdout/stderr tails).
+
+    The host reads this process's stdout through the guest channel and writes it
+    into ``<task>.<side>.run.log``; a guest that stayed silent left the host log
+    with empty output sections.
+    """
+    import json as _json
+
+    def _tail(raw: bytes) -> str:
+        if not raw:
+            return ""
+        return raw[-MAX_ECHO_BYTES:].decode("utf-8", "replace")
+
+    print(_json.dumps({
+        "guest_execution": {
+            "exit_status": int(outcome.exit_status),
+            "timed_out": bool(outcome.timed_out),
+            "stdout": _tail(outcome.stdout),
+            "stderr": _tail(outcome.stderr),
+        }
+    }, sort_keys=True), flush=True)
+
+
 def execute_in_guest(
     *,
     spec_path: Path | str,
@@ -214,6 +242,12 @@ def execute_in_guest(
     )
     if not isinstance(outcome, CommandResult):
         raise GuestExecutorError("run_command must return a CommandResult")
+
+    # Emit the ACTUAL test-command output to this process's stdout so the host
+    # channel captures it into the retained run log. The transport envelope is a
+    # record, not a log; without this the captured stdout/stderr would be
+    # discarded and the host-side log would carry empty output sections.
+    _emit_execution_summary(outcome)
 
     junit_bytes = junit_path.read_bytes() if junit_path.is_file() else b""
     now = (clock or _utc_now)()

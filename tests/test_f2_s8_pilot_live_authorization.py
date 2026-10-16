@@ -82,6 +82,23 @@ class TestS8LiveAuthorization:
         with pytest.raises(SystemExit, match="S8-001"):
             live.main(_argv(tmp_path, manifest, _gates(tmp_path)))
 
+    def test_a_grant_cannot_be_replayed(self, tmp_path, monkeypatch):
+        """S8-001 is SINGLE-USE: the grant is durably consumed before guest work,
+        so a second invocation with the same grant is refused."""
+        manifest = _manifest(tmp_path)
+        sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        _provision_s8_grant(tmp_path, monkeypatch, manifest_sha=sha)
+        for name in ("SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_ARTIFACT_ROOT"):
+            monkeypatch.delenv(name, raising=False)
+        argv = _argv(tmp_path, manifest, _gates(tmp_path))
+        # First run: authorization is consumed, then the governed env fails closed.
+        with pytest.raises(Exception) as first:
+            live.main(argv)
+        assert "S8-001" not in str(first.value)      # got past authorization
+        # Second run with the SAME grant: refused as already consumed.
+        with pytest.raises(SystemExit, match="S8-001"):
+            live.main(argv)
+
     def test_a_correctly_bound_grant_passes_authorization(self, tmp_path, monkeypatch):
         """With a correctly bound grant, the entry point gets PAST the S8-001 check
         and fails on the (absent) governed environment instead -- proving the gate
