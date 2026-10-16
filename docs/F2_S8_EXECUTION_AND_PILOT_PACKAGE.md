@@ -571,8 +571,9 @@ highest-priority source's record and records the other as `conflicting_cross_sou
 
 **Reconciled 2026-10-15 (read-only, against the actual local artifacts).** All **185 of 185**
 in-registration conflicts carry exactly that disposition (`kept_source='swe-bench-live'`,
-`excluded_source='swe-rebench-v2'`) and the kept copy survived to screening (the 196 corpus-level
-disagreements minus the 11 outside the registration reproduce 185). The earlier claim here was wrong
+`excluded_source='swe-rebench-v2'`) and the kept copy survived to screening (195 cross-source plus 1
+within-source = the 196 corpus-level disagreements; minus the 10 cross-source ids outside the
+registration = 185 in-registration). The earlier claim here was wrong
 and is corrected — *"No existing policy names a winner ... a `GOVERNANCE GAP` requiring a rule, not a code fix"* — the rule exists (the union's `SOURCE_PRIORITY`), it is deterministic, and
 it is applied to every in-registration conflict. The raw source-level disagreement remains visible
 (that is what `scan_cross_source_conflicts` detects); it is **not** an open governance gap.
@@ -601,8 +602,9 @@ Whether to keep excluding them from selection is a **policy choice for the owner
 | quantity | count | basis |
 |---|---|---|
 | registered ids | 3,828 | counted directly from `full_ordered_metadata.json` (sha256 `35b704b7921086853a0857e2b5bad7d020ca8edb7932e8cfca3f0e0a25421eeb`) |
-| cross-source conflicts, BOTH sources | 196 | `scan_cross_source_conflicts()` streaming both pinned corpora |
-| ... in the operative registration | 185 | 196 total minus 11 outside registration; reproduces 16.8 and stays DISTINCT from it |
+| cross-source conflicts, BOTH sources | 195 | `scan_cross_source_conflicts().cross_source` streaming both pinned corpora |
+| ... within a single source (all copies excluded) | 1 | `scan_cross_source_conflicts().within_source` (`conan-io__conan-18153`) |
+| ... in the operative registration | 185 | 195 cross-source minus 10 outside the registration; reproduces 16.8 |
 | ledger rows | 9 | read-only; sha256 `5fb0aa8eda37f220ea2fce5ca96688bb4a7edf94576b73b32b1678c1a1971430` |
 | ledger DISTINCT task ids | 7 | 5 pilot tasks + 2 django-guardian; the provisional "9 recorded ledger task IDs" were ROWS - 2 are repeats (`openai__openai-agents-python-1633` and `openai__openai-agents-python-1636`, twice each) |
 | overlap conflicts (in reg) AND ledger | 0 | nothing is subtracted twice |
@@ -656,13 +658,14 @@ highest-priority source's row, so the classifier reads the same row the union ke
 or scientific analyzability — it changes only which registered ids the offline
 plugin classifier considers.
 
-**Recomputed** (rule `f2-plugin-compat-v2`, generated `2026-10-16T00:27:23Z`,
-elapsed 104.4 s, `python -m qwen_train.f2_s8_plugin_compat`):
+**Recomputed** (rule `f2-plugin-compat-v2`, generated `2026-10-16T01:06:34Z`,
+elapsed 72.0 s, `python -m qwen_train.f2_s8_plugin_compat`):
 
 | quantity | count |
 |---|---|
 | registered ids | 3,828 |
-| cross-source conflicts (both sources) | 196 |
+| cross-source conflicts (both sources) | 195 |
+| …within a single source (all copies excluded) | 1 |
 | …in the operative registration | 185 |
 | …resolved by `SOURCE_PRIORITY` and **INCLUDED** | 185 |
 | ledger rows / distinct task ids | 9 / 7 |
@@ -690,7 +693,7 @@ result remains `swe-bench-live`.
 run and is identical (`5fb0aa8e…`) — **zero mutations observed between the two
 captures**. Registration SHA-256 `35b704b7…`; corpus digests unchanged
 (`swe-bench-live 9f22aa07…`, `swe-rebench-v2 577b56ff…`). Report
-`plugin_compat_report.json` sha256 `f073cf31…`; companion `.md` sha256 `1cbfb89b…`.
+`plugin_compat_report.json` sha256 `8adcda20…`; companion `.md` sha256 `aec7f9e8…`.
 
 **Boundaries (unchanged from §16.9).** Read-only offline classification: no
 admission, no pilot, no Q10/Q12/Q13, no network, no package installed, no project

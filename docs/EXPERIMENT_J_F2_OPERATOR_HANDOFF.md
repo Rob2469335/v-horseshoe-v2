@@ -64,9 +64,8 @@ exit code non-zero. Current categories:
 > `env.s8_gold_state_digest`) whose names come from `qwen_train/f2_s8_compose.py`
 > — see `docs/EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md` §1–§2.
 > `AUTHORIZATION REQUIRED` is now 0 because population acquisition is recorded
-> (F2-IMPL-AUTH-028/029/031) and preflight no longer reports it as unauthorized,
-> so the §1.4 note about a hard-coded `authz.population_acquisition` finding is
-> stale. A green environment check is still never authorization to execute.
+> (F2-IMPL-AUTH-028/029/031); §1.4 records that. A green environment check is
+> still never authorization to execute.
 
 Run this yourself — it is read-only and safe:
 
@@ -77,9 +76,10 @@ python -m qwen_train.f2_preflight --json       # machine-readable (schema f2_pre
 
 Exit code is `0` **only** when the result is `READY`. Today it is `BLOCKED`.
 
-### 1.1 Execution variables you must set (11)
+### 1.1 Execution variables you must set (10 F2 settings + 3 S8-only governed inputs)
 
-None of these is a secret. Set them in the process environment for the run only.
+The ten **F2 settings** below are not secrets (the receipt key is handled
+separately in §1.2). Set every value in the process environment for the run only.
 
 | Variable | Meaning | Owner | Secret? |
 |---|---|---|---|
@@ -93,10 +93,28 @@ None of these is a secret. Set them in the process environment for the run only.
 | `SWARM_F2_ARTIFACT_RETENTION_DAYS` | retention, whole days | operator | no |
 | `SWARM_F2_EMIT_BUNDLE` | must be enabled or no evidence chain is emitted | operator | no |
 | `SWARM_F2_TASK_OUTCOME_REPORT` | destination the evaluator writes its report to | operator | no |
-| `SWARM_RECEIPT_KEY` | receipt signing key (**Q11**) | operator | **YES — never print** |
+
+**Three S8-ONLY governed inputs (no F2 fallback).** The S8 composition root
+(`qwen_train/f2_s8_compose.py`) additionally requires these; none may be omitted
+or defaulted. Preflight reports them as `env.s8_environment_identity`,
+`env.s8_base_state_digest` and `env.s8_gold_state_digest` (`OPERATOR ACTION
+REQUIRED` when absent or malformed).
+
+| Variable | Meaning | Owner | Secret? |
+|---|---|---|---|
+| `SWARM_S8_ENVIRONMENT_IDENTITY` | execution-environment identity (non-empty) | operator | no |
+| `SWARM_S8_BASE_STATE_DIGEST` | base execution-state digest (64-char lowercase SHA-256 hex) | operator | no |
+| `SWARM_S8_GOLD_STATE_DIGEST` | gold execution-state digest (64-char lowercase SHA-256 hex, **distinct from the base**) | operator | no |
 
 `protocol_version` is **not** operator-supplied: it is the repository constant
 `f2_protocol.F2_PROTOCOL_ID = "f2_experiment_j_v1"`. Do not set it.
+
+**All thirteen are process/session-only provisioned.** The `.env` file is not an
+authorized source for any of them (owner decision 2026-10-15; see
+`docs/EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md` §3.4): the preflight CLI
+imports only the receipt key and the seven child controls from `.env`, so a
+`.env`-only governed value cannot produce a misleading READY finding while the
+separately launched execution process would not receive it.
 
 **None of these may be provisioned by the implementation agent.** The
 authorization ledger states this repeatedly — *"no provisioning of
@@ -118,7 +136,7 @@ digest is a well-formed SHA-256 and explicitly does not print it.
 | Property | Value |
 |---|---|
 | Variable | `SWARM_RECEIPT_KEY` |
-| Status | **NOT PROVISIONED** — absent from `.env` and from Process/User/Machine scopes |
+| Status | **Presence is machine-checked only.** The gate observes whether the variable is present; this document neither asserts a state nor infers that a present entry is valid, trusted, or sufficient. The authoritative presence state is the machine report (`python -m qwen_train.f2_preflight`, finding `env.receipt_key`). |
 | Provision location | the operator's **`.env` only**, per the authorization ledger. Never the arm workspace, a task file, a log, the bundle payload, or a model prompt |
 | Presence check | preflight tests **presence only** and never prints the value |
 | Scope | **for the run only** - not persisted into tracked files |
@@ -142,7 +160,12 @@ Prohibited: `echo $env:SWARM_RECEIPT_KEY`, `Get-ChildItem Env:SWARM_RECEIPT_KEY`
 Until it is present, receipt authority **fails closed** and no promotion can occur.
 That is correct behaviour, not an error to work around. No agent may provision it.
 
-### 1.3 Evidence you must obtain from outside this repository (4)
+**Presence is not validity.** A receipt-key entry being present establishes only
+that the name is set; it does **not** establish that the key is the correct one,
+that it is trusted, or that it is sufficient for promotion. Only the receipt
+verification path (fail-closed on a wrong or tampered receipt) can establish that.
+
+### 1.3 Evidence you must obtain from outside this repository (5)
 
 | Item | What it is |
 |---|---|
@@ -150,8 +173,15 @@ That is correct behaviour, not an error to work around. No agent may provision i
 | **Q9 attestation** | produced by `python -m qwen_train.f2_isolation` **while enforcement is actually in force** |
 | **Genuine ACTIVE lesson** | produced by a real clean-room learning event; rehearsal does not count |
 | **Conversion record** | see §3 |
+| **Admitted population** | **zero** of the ≥ 300 admitted-pair target are admitted; admission is blocked on the S8 base/gold evidence (preflight `population.admission`, `EXTERNAL EVIDENCE REQUIRED`) |
 
-### 1.4 Authorization you must obtain (1)
+The count is five, matching the `EXTERNAL EVIDENCE REQUIRED` row of the §1
+summary table (`evidence.s8_base_gold`, `evidence.active_lesson`,
+`population.admission`, `evidence.q9_attestation`, `provenance.conversion`).
+Q9 and the conversion record are supplied as retained artifacts when they exist;
+the three others are produced by real execution.
+
+### 1.4 Authorization (0 outstanding — the acquisition authorization is RECORDED)
 
 **RECORDED 2026-10-07 as `F2-IMPL-AUTH-028`** (Rob, experiment authority). It
 authorizes acquisition and admission **screening** of the F2 task population from
@@ -162,18 +192,20 @@ retroactively authorized). Target: **≥ 300 admitted pairs**; **UNKNOWN contami
 is NOT CLEAN**. It does not authorize lowering the target, inventing criteria,
 executing tasks, running models, the VM, Q9, Q10, Q12, Q13, or declaring F2 READY.
 
-**Screening is authorized; admission is NOT satisfied.** The screening pass (read-only,
-no execution) found 1888 source rows / 223 repositories and **0 admitted**: S6 (R8
-relevant file set), S7 and S8 (base/gold execution evidence) fail for every row, one
-`instance_id` is duplicated (`conan-io__conan-18153`, so `PopulationManifest.verify()`
-fails closed), and **no model training cutoff is declared anywhere**, so all 1888 rows
-are `UNKNOWN` contamination. The admitted population therefore stays **zero**.
+**Screening is authorized; admission is NOT satisfied.** The current union (read-only,
+no execution) is **33,967 raw rows → 33,770 accepted → 9,268 metadata-eligible →
+3,828 registered**, and **0 admitted**: S8 (base/gold execution evidence) fails for every
+row, and no model training cutoff is declared, so no task is `CLEAN`. The within-source
+duplicate `conan-io__conan-18153` is removed by the union's conflict rule (all copies
+excluded), so it is not in the registration. The admitted population therefore stays
+**zero**.
 
-**Note on preflight:** `authz.population_acquisition` is hard-coded
-(`qwen_train/f2_preflight.py:391`) and does not read the ledger, so it still reports
-`not_authorized`; making it recognize `F2-IMPL-AUTH-028` is a code change that
-**REQUIRES AUTHORIZATION**. The checklist count above is unchanged because it mirrors
-preflight.
+**Note on the authorization count.** Preflight reports `AUTHORIZATION REQUIRED = 0` for
+population acquisition: the acquisition authorization is recorded
+(F2-IMPL-AUTH-028/029/031) and `authz.population_acquisition` is **no longer emitted**
+(`qwen_train/f2_preflight.py`; pinned by `tests/test_f2_preflight.py`). The §1 summary
+table mirrors the machine report. A recorded authorization is not a readiness claim, and
+no pilot or task execution is authorized by it.
 
 ### 1.5 Host control you must obtain (1)
 
