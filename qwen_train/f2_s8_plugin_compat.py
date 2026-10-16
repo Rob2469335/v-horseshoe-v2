@@ -242,6 +242,11 @@ def _slim_rows(selectable: set[str]) -> tuple[dict[str, dict[str, Any]], dict[st
     PASS_TO_PASS list can be 500 KB.
     """
     from qwen_train.f2_s8_acquisition import _canonical_row, _iter_acquired
+    from qwen_train.f2_population_build import SOURCE_PRIORITY
+
+    def _rank(source_key: str) -> int:
+        return (SOURCE_PRIORITY.index(source_key) if source_key in SOURCE_PRIORITY
+                else len(SOURCE_PRIORITY))
 
     out: dict[str, dict[str, Any]] = {}
     digests: dict[str, str] = {}
@@ -254,6 +259,14 @@ def _slim_rows(selectable: set[str]) -> tuple[dict[str, dict[str, Any]], dict[st
         for row in _iter_acquired(path):
             task_id = str(row.get("instance_id") or "")
             if task_id not in selectable:
+                continue
+            # The OPERATIVE row is the one the existing `SOURCE_PRIORITY` policy
+            # selects: keep the highest-priority source's row.  A plain
+            # ``out[task_id] = ...`` let the LAST source iterated (SWE-rebench-V2,
+            # the lower priority) overwrite the live row, so a cross-source id
+            # would have been classified from the source the union did NOT keep.
+            prior = out.get(task_id)
+            if prior is not None and _rank(prior["source"]) <= _rank(source_key):
                 continue
             canonical = _canonical_row(source_key, row)
             out[task_id] = {
@@ -437,11 +450,19 @@ def classify_population(*, limit: int | None = None) -> dict[str, Any]:
     recorded_set = set(recorded_ids)
     conflict_set = set(conflicts_in_registration)
 
-    # Overlap is reported, never assumed away: an id both conflicted and
-    # already recorded must not be subtracted twice.
+    # Conflict ids are NOT removed from the candidate population.  The union
+    # already resolved each one deterministically -- `SOURCE_PRIORITY` keeps the
+    # highest-priority source's record and marks the other
+    # `conflicting_cross_source_priority_selected` -- so the operative row is a
+    # legitimate registered task.  Removing them here subtracted 185 RESOLVED
+    # rows from the pool: a double subtraction against the registration's own
+    # accounting, which already counts them exactly once.
+    #
+    # Preserved: the LEDGER exclusion (a task already recorded is not
+    # re-selected) and the overlap report, so an id that is both a resolved
+    # conflict and already recorded is excluded from SELECTION exactly once.
     overlap = sorted(conflict_set & recorded_set)
-    selectable = [t for t in order
-                  if t not in conflict_set and t not in recorded_set]
+    selectable = [t for t in order if t not in recorded_set]
     if limit is not None:
         selectable = selectable[:int(limit)]
 
@@ -485,11 +506,19 @@ def classify_population(*, limit: int | None = None) -> dict[str, Any]:
             "conflicts_total_both_sources": len(conflicts),
             "conflicts_in_registration": len(conflicts_in_registration),
             "conflicts_already_recorded_overlap": len(overlap),
+            "conflict_resolution_policy": (
+                "SOURCE_PRIORITY: a cross-source conflict's operative row is the "
+                "highest-priority source's row; those ids ARE included and classified"
+            ),
+            "conflicts_included_in_population": len(conflicts_in_registration),
             "ledger_rows": ledger_rows,
             "ledger_distinct_task_ids": len(recorded_ids),
             "selectable": len(selectable),
             "classified": total,
         },
+        # Provenance: the exact ids the existing SOURCE_PRIORITY policy resolved
+        # and that are therefore classified here (retained, not discarded).
+        "resolved_by_source_priority": sorted(conflicts_in_registration),
         "counts": counts,
         "percentages": {cls: (round(100.0 * counts[cls] / total, 3) if total else 0.0)
                         for cls in CLASSES},
@@ -522,6 +551,9 @@ def classify_population(*, limit: int | None = None) -> dict[str, Any]:
             "Plugin-install coverage ONLY: this does not say a task builds, its "
             "declared nodes exist, its environment runs, or that it is "
             "scientifically analyzable.",
+            "Inclusion in this population is NOT admission, buildability, or "
+            "scientific analyzability. The SOURCE_PRIORITY-resolved cross-source "
+            "ids are ordinary candidates, classified like any other.",
             "UNKNOWN means the evidence is missing or not verifiable offline; it "
             "is never counted as compatible.",
             "A local clone is not evidence that anything was installed, and a "
@@ -563,6 +595,8 @@ def _write_report(report: Mapping[str, Any], output_dir: Path = OUTPUT_DIR) -> d
         f"| registered ids | {pop['registered']} |",
         f"| cross-source conflicts (both sources) | {pop['conflicts_total_both_sources']} |",
         f"| ...in the operative registration | {pop['conflicts_in_registration']} |",
+        f"| ...resolved by `SOURCE_PRIORITY` and INCLUDED in the population | "
+        f"{pop['conflicts_included_in_population']} |",
         f"| ledger rows | {pop['ledger_rows']} |",
         f"| ledger distinct task ids | {pop['ledger_distinct_task_ids']} |",
         f"| ...overlap with conflicts (not subtracted twice) | "

@@ -610,6 +610,13 @@ Whether to keep excluding them from selection is a **policy choice for the owner
 
 **Rule v1 -> v2 (why the verdicts moved).** The first full-population run used rule `f2-plugin-compat-v1` (27 COMPATIBLE / 23 INCOMPATIBLE / 3,586 UNKNOWN, generated 2026-10-15T16:28:48Z). Adversarial review of its 27 COMPATIBLE results found two false positives: `python-telegram-bot__python-telegram-bot-4617` and `pylint-dev__pylint-9346` declare pytest plugins ONLY in root `requirements*.txt` - a file the build contract never installs (this builder runs `pip install -e .` / `uv sync`, never `pip install -r`) - which v1 never read, so their declared-plugin lists were wrongly empty. Rule v2 therefore (a) reads root `requirements*.txt` from the same pinned local git objects via `git show` (no network, no checkout, no tree execution) and the SAME `parse_requirements_names()` path the builder uses, recording them as DECLARED-BUT-NEVER-INSTALLED sources, and (b) refuses to promote a requirements-only mismatch to a verdict under delegated metadata: when `dynamic` includes `dependencies`/`optional-dependencies` (or legacy setuptools delegation applies), `setup.py` may read requirements.txt at build time, so absence is NOT provable and the task stays UNKNOWN (`requirements_plugin_under_delegated_metadata`, 11 tasks). Only the rule changed; population, builder, and ledger are untouched.
 
+> **Superseded 2026-10-15 (owner decision).** The 185 in-registration cross-source
+> conflicts are records whose operative source the existing `SOURCE_PRIORITY`
+> policy already selected, so the classifier now **includes** them rather than
+> subtracting them. The `selectable`/`classified` figures and every count in this
+> section describe the pre-inclusion run and are retained as history; see **§16.10**
+> for the recomputed result.
+
 **Classifier result** (rule `f2-plugin-compat-v2`, generated 2026-10-15T16:57:42Z, elapsed 91.6 s, 3,636/3,636 classified; reproduced with `python -m qwen_train.f2_s8_plugin_compat`):
 
 | class | count | % |
@@ -630,3 +637,61 @@ Whether to keep excluding them from selection is a **policy choice for the owner
 **Evidence labels.** Counts and hashes above are `PROVEN IN CURRENT REVISION`. Per-task labels are `OBSERVED_*`/`UNKNOWN` under `f2-plugin-compat-v2` and cover PLUGIN-INSTALL COVERAGE ONLY: they do not say a task builds, that its declared nodes exist, that its environment runs, or that it is scientifically analyzable. A local clone is not proof of installation and a declared dependency is not proof of installation - only an install-plan mechanism is. Because 97% of the population has no local tree, population-wide plugin risk beyond the 50 evidence-backed tasks remains `NOT ESTABLISHED`.
 
 **Boundaries observed.** No pilot launched; no guest, service, worker or vCPU provisioned; ledger read-only and byte-identical; no network contact, no package installed, no project tree executed; the terminal django-guardian tasks untouched; nothing committed or pushed; PR #33 untouched.
+
+---
+
+### 16.10 (2026-10-15) — the 185 SOURCE_PRIORITY-resolved conflicts are INCLUDED; the population is recomputed
+
+**Owner decision (2026-10-15).** The 185 in-registration cross-source conflicts are
+records whose operative source has **already** been selected by the existing
+`SOURCE_PRIORITY` policy (`kept_source=swe-bench-live`, the other recorded as
+`conflicting_cross_source_priority_selected`; see §16.8). The classifier now
+**includes** them in the population instead of subtracting them — subtracting them
+had removed 185 *resolved* registered rows. Ledger exclusions are preserved, the
+overlap is reported so nothing is subtracted twice, and the resolved ids are
+retained as provenance (`resolved_by_source_priority`). The operative row is the
+highest-priority source's row, so the classifier reads the same row the union kept.
+
+**This is candidate selection only.** Inclusion is **NOT** admission, buildability,
+or scientific analyzability — it changes only which registered ids the offline
+plugin classifier considers.
+
+**Recomputed** (rule `f2-plugin-compat-v2`, generated `2026-10-16T00:27:23Z`,
+elapsed 104.4 s, `python -m qwen_train.f2_s8_plugin_compat`):
+
+| quantity | count |
+|---|---|
+| registered ids | 3,828 |
+| cross-source conflicts (both sources) | 196 |
+| …in the operative registration | 185 |
+| …resolved by `SOURCE_PRIORITY` and **INCLUDED** | 185 |
+| ledger rows / distinct task ids | 9 / 7 |
+| …overlap with conflicts (excluded once) | 0 |
+| **selectable** | **3,821** (= 3,828 − 7) |
+| classified | 3,821 |
+
+| class | count | % |
+|---|---|---|
+| OBSERVED_COMPATIBLE | 29 | 0.759 |
+| OBSERVED_INCOMPATIBLE | 30 | 0.785 |
+| UNKNOWN | 3,762 | 98.456 |
+| NOT_APPLICABLE | 0 | 0.00 |
+
+By source: `swe-bench-live` 29 compatible / 30 incompatible / 1,697 unknown
+(1,756 selectable); `swe-rebench-v2` 2,065 unknown (no local tree). Every decisive
+result remains `swe-bench-live`.
+
+**Delta vs §16.9 (pre-inclusion):** selectable 3,636 → **3,821** (+185); classified
+3,636 → 3,821; COMPATIBLE 25 → **29**; INCOMPATIBLE 25 → **30**; UNKNOWN 3,586 →
+**3,762**. Of the 185 newly-included ids, 9 became decisive (4 compatible,
+5 incompatible) and 176 stayed `UNKNOWN` (no local tree).
+
+**Provenance / integrity.** The ledger SHA-256 was captured **before and after** the
+run and is identical (`5fb0aa8e…`) — **zero mutations observed between the two
+captures**. Registration SHA-256 `35b704b7…`; corpus digests unchanged
+(`swe-bench-live 9f22aa07…`, `swe-rebench-v2 577b56ff…`). Report
+`plugin_compat_report.json` sha256 `f073cf31…`; companion `.md` sha256 `1cbfb89b…`.
+
+**Boundaries (unchanged from §16.9).** Read-only offline classification: no
+admission, no pilot, no Q10/Q12/Q13, no network, no package installed, no project
+tree executed; the terminal django-guardian tasks untouched.

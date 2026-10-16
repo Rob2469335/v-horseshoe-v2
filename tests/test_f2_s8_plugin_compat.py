@@ -560,6 +560,82 @@ class TestClassifier:
 # --------------------------------------------------------------------------
 # ledgers and report output (READ ONLY / tmp only)
 # --------------------------------------------------------------------------
+class TestSourcePriorityPopulation:
+    """The SOURCE_PRIORITY-resolved cross-source ids ARE classified.
+
+    They are legitimate registered rows, so removing them from the candidate
+    population subtracted resolved tasks (a double subtraction against the
+    registration's own accounting).  Inclusion is candidate selection only --
+    never admission, buildability, or scientific analyzability.
+    """
+
+    def test_the_operative_row_is_the_highest_priority_source(self, tmp_path, monkeypatch):
+        from qwen_train import f2_s8_plugin_compat as pc
+
+        common = {
+            "instance_id": "o__a-1", "repo": "o/a", "base_commit": "a" * 40,
+            "FAIL_TO_PASS": ["tests/t.py::x"], "PASS_TO_PASS": ["tests/t.py::y"],
+            "patch": "diff",
+        }
+        live = tmp_path / "live.jsonl"
+        reb = tmp_path / "reb.jsonl"
+        live.write_text(
+            json.dumps({**common, "test_cmds": ["pytest -q"]}) + "\n",
+            encoding="utf-8")
+        reb.write_text(
+            json.dumps({**common, "install_config": {"test_cmd": "npm test"}}) + "\n",
+            encoding="utf-8")
+        monkeypatch.setattr(pc, "CORPUS",
+                            {"swe-bench-live": live, "swe-rebench-v2": reb})
+
+        rows, _ = pc._slim_rows({"o__a-1"})
+        # The union keeps the highest-priority source; classification must read
+        # the SAME row, not whichever corpus happened to be iterated last.
+        assert rows["o__a-1"]["source"] == "swe-bench-live"
+        assert rows["o__a-1"]["test_cmd"] == "pytest -q"
+
+    def _population(self, monkeypatch, tmp_path, *, ordered, conflicts, recorded):
+        from qwen_train import f2_s8_plugin_compat as pc
+
+        order_file = tmp_path / "order.json"
+        order_file.write_text(
+            json.dumps([{"instance_id": t} for t in ordered]), encoding="utf-8")
+        monkeypatch.setattr(pc, "ORDER", order_file)
+        monkeypatch.setattr(pc, "CORPUS", {})
+        monkeypatch.setattr(pc, "scan_cross_source_conflicts",
+                            lambda corpus: dict(conflicts))
+        monkeypatch.setattr(pc, "_ledger_task_ids",
+                            lambda path: (list(recorded), len(recorded)))
+        return pc.classify_population()
+
+    def test_a_resolved_conflict_is_included_not_subtracted(self, tmp_path, monkeypatch):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b", "c"],
+                             conflicts={"b": "canonical records disagree"},
+                             recorded=["c"])
+        assert r["population"]["selectable"] == 2
+        assert r["population"]["conflicts_included_in_population"] == 1
+        assert r["resolved_by_source_priority"] == ["b"]
+        ids = {x["task_id"] for x in r["results"]}
+        assert ids == {"a", "b"}  # the conflict IS classified
+        assert "c" not in ids     # the recorded task is still excluded
+
+    def test_a_conflict_that_is_already_recorded_is_excluded_once(self, tmp_path, monkeypatch):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b"],
+                             conflicts={"b": "canonical records disagree"},
+                             recorded=["b"])
+        assert r["population"]["conflicts_already_recorded_overlap"] == 1
+        assert r["population"]["selectable"] == 1
+        assert {x["task_id"] for x in r["results"]} == {"a"}
+
+    def test_inclusion_is_candidate_selection_only(self, tmp_path, monkeypatch):
+        r = self._population(monkeypatch, tmp_path, ordered=["a", "b"],
+                             conflicts={"b": "canonical records disagree"},
+                             recorded=[])
+        # No corpus row -> UNKNOWN, never compatible; and nothing claims more.
+        assert all(x["classification"] == CLASS_UNKNOWN for x in r["results"])
+        assert any("NOT admission" in item for item in r["limitations"])
+
+
 class TestLedgerAndReport:
     def test_ledger_rows_and_distinct_task_ids_are_counted_separately(self, tmp_path):
         ledger = tmp_path / "ledger.jsonl"
@@ -581,8 +657,10 @@ class TestLedgerAndReport:
             "population": {"registered": 3828, "conflicts_total_both_sources": 196,
                            "conflicts_in_registration": 185,
                            "conflicts_already_recorded_overlap": 0,
+                           "conflict_resolution_policy": "SOURCE_PRIORITY: included",
+                           "conflicts_included_in_population": 185,
                            "ledger_rows": 9, "ledger_distinct_task_ids": 7,
-                           "selectable": 3636, "classified": 2},
+                           "selectable": 3821, "classified": 2},
             "counts": {CLASS_COMPATIBLE: 1, CLASS_INCOMPATIBLE: 1, CLASS_UNKNOWN: 0,
                        CLASS_NOT_APPLICABLE: 0},
             "percentages": {CLASS_COMPATIBLE: 50.0, CLASS_INCOMPATIBLE: 50.0,
