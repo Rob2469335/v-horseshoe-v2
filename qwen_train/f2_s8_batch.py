@@ -180,6 +180,18 @@ def reconcile_admissions_across_chains(
     chain's bytes.  A correction whose binding is absent, malformed or unproven
     aborts the reconciliation rather than being credited.
 
+    A cross-chain credit is authenticated against the EXACT prior record named by
+    ``correction_of_record_digest`` -- its ``outcome`` and ``outcome_class``, not
+    merely the first record seen for the task.  A correction may override a prior
+    **terminal scientific rejection** only when the earlier chain's FIRST
+    SCIENTIFIC record for that task (the canonical admission rule's deciding
+    record) is not an admission AND the task is the single code-pinned
+    grandfathered correction; an earlier infrastructure attempt can never shield a
+    later terminal scientific rejection.  The registered topology is exactly
+    ``REGISTERED_CHAINS`` in order (operative, then corrective): a correction may
+    only bind to the earlier registered chain, and no third or intermediate chain
+    is registrable without a policy change.
+
     ``chains`` is ordered: the first entry is the **operative** chain (the one
     the runbook pins with ``--ledger``), whose admitted set is returned
     separately as ``operative_admitted`` -- the code-bound canonical figure.
@@ -232,6 +244,7 @@ def reconcile_admissions_across_chains(
         # the verified prefix boundary.
         line_numbers: dict[str, int] = {}
         digests: dict[str, tuple[int, str]] = {}
+        records_by_digest: dict[str, Mapping[str, Any]] = {}
         number = 0
         for row in raw.splitlines():
             if not row.strip():
@@ -245,12 +258,14 @@ def reconcile_admissions_across_chains(
             if digest and digest not in digests:
                 digests[digest] = (number, str(parsed.get("task_id") or ""))
                 line_numbers[digest] = number
+                records_by_digest[digest] = parsed
         index = {
             "ledger": ledger,
             "records": records,
             "prefix_digests": _chain_prefix_digests(raw),
             "record_digests": set(digests),
             "record_task_and_line": digests,
+            "record_by_digest": records_by_digest,
         }
         indexes.append(index)
         by_name[ledger.path.name] = index
@@ -276,6 +291,11 @@ def reconcile_admissions_across_chains(
     corrections_verified = 0
     refused_override: list[dict[str, str]] = []
     prior_first: dict[str, tuple[str, Mapping[str, Any]]] = {}
+    # The FIRST SCIENTIFIC record for a task in an EARLIER chain -- the record the
+    # canonical admission rule decides on.  A terminal scientific rejection is
+    # read from HERE, so an earlier infrastructure attempt can never hide a later
+    # terminal scientific rejection for the same task.
+    prior_first_scientific: dict[str, tuple[str, Mapping[str, Any]]] = {}
 
     for index in indexes:
         ledger = index["ledger"]
@@ -308,7 +328,7 @@ def reconcile_admissions_across_chains(
             prior = prior_first.get(task_id)
             if prior is None:
                 continue
-            prior_chain, prior_rec = prior
+            prior_chain = prior[0]
             correction = corrected.get(task_id)
             if correction is None:
                 raise BatchError(
@@ -321,29 +341,45 @@ def reconcile_admissions_across_chains(
                 raise BatchError(
                     f"task {task_id!r} correction in chain {name!r} binds "
                     f"{bound!r}, not the earlier registered chain {prior_chain!r}")
+            # Authenticate the claimed prior fields against the EXACT record the
+            # correction names (correction_of_record_digest), NOT merely the first
+            # record seen for the task in that chain.  _require_correction_binding
+            # has already proved the digest exists in the named chain and refers to
+            # the same task, so this lookup is a total function of verified state.
+            target = by_name.get(bound) or by_name.get(Path(bound).name)
+            referenced = target["record_by_digest"].get(
+                str(correction.get("correction_of_record_digest") or "").strip())
+            if referenced is None:
+                raise BatchError(
+                    f"task {task_id!r} correction references a record that is not "
+                    f"present in chain {bound!r}; the prior record is not verified")
             claimed_prior = str(correction.get("prior_outcome") or "")
-            actual_prior = str(prior_rec.get("outcome") or "")
+            actual_prior = str(referenced.get("outcome") or "")
             if claimed_prior != actual_prior:
                 raise BatchError(
                     f"task {task_id!r} correction claims prior_outcome "
-                    f"{claimed_prior!r} but the earlier record is {actual_prior!r}")
+                    f"{claimed_prior!r} but the referenced record is {actual_prior!r}")
             claimed_class = str(correction.get("prior_outcome_class") or "")
-            actual_class = str(prior_rec.get("outcome_class") or "")
+            actual_class = str(referenced.get("outcome_class") or "")
             if claimed_class != actual_class:
                 raise BatchError(
                     f"task {task_id!r} correction claims prior_outcome_class "
-                    f"{claimed_class!r} but the earlier record is {actual_class!r}")
+                    f"{claimed_class!r} but the referenced record is {actual_class!r}")
             # A correction may override a TERMINAL SCIENTIFIC REJECTION only
             # through the one code-pinned historical exception; every other such
-            # attempt is REFUSED (never credited).
-            if (prior_rec.get("outcome_class") == "scientific"
-                    and actual_prior != ADMITTED_OUTCOME):
+            # attempt is REFUSED (never credited).  The rejection is taken from the
+            # earlier chain's FIRST SCIENTIFIC record for the task -- the canonical
+            # admission rule's deciding record -- so an earlier INFRASTRUCTURE
+            # attempt cannot shield a later terminal scientific rejection.
+            prior_sci = prior_first_scientific.get(task_id)
+            if (prior_sci is not None
+                    and str(prior_sci[1].get("outcome") or "") != ADMITTED_OUTCOME):
                 if not enforce_registered_chains or task_id not in GRANDFATHERED_CORRECTION_TASK_IDS:
                     refused_override.append({
                         "task_id": task_id,
                         "chain": name,
-                        "prior_chain": prior_chain,
-                        "prior_outcome": actual_prior,
+                        "prior_chain": prior_sci[0],
+                        "prior_outcome": str(prior_sci[1].get("outcome") or ""),
                         "reason": "terminal scientific rejection may only be "
                                   "overridden by the code-pinned grandfathered "
                                   "historical correction",
@@ -362,6 +398,10 @@ def reconcile_admissions_across_chains(
         # Record the FIRST record for each task in THIS chain for later chains.
         for record in records:
             prior_first.setdefault(str(record.get("task_id")), (name, record))
+        # Record the FIRST SCIENTIFIC record per task for later chains: this is the
+        # record a terminal scientific rejection is read from.
+        for task_id, record in first_scientific.items():
+            prior_first_scientific.setdefault(task_id, (name, record))
 
     return {
         "chains": per_chain,

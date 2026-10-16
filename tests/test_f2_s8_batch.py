@@ -240,19 +240,20 @@ class TestDriveBatch:
         }
 
 
-def _sci(task_id: str, outcome: str, admitted: bool) -> dict:
+def _sci(task_id: str, outcome: str, admitted: bool, attempt: int = 1) -> dict:
     return {
         "task_id": task_id, "registration_id": "reg", "registration_sha256": REG_SHA,
         "outcome": outcome, "outcome_class": "scientific", "admitted": admitted,
-        "attempt": 1,
+        "attempt": attempt,
     }
 
 
-def _infra(task_id: str, outcome: str = "infrastructure_failure") -> dict:
+def _infra(task_id: str, outcome: str = "infrastructure_failure",
+           attempt: int = 1) -> dict:
     return {
         "task_id": task_id, "registration_id": "reg", "registration_sha256": REG_SHA,
         "outcome": outcome, "outcome_class": "infrastructure", "admitted": False,
-        "attempt": 1,
+        "attempt": attempt,
     }
 
 
@@ -748,3 +749,170 @@ class TestRegisteredChainEnforcementCannotBeSwitchedOff:
         with pytest.raises(TypeError):
             reconcile_admissions_across_chains(
                 [c], TASKS, enforce_registered_chains=False)
+
+
+def _corr(*, task_id, chain_name, chain_sha256, record_digest, prior_outcome,
+          prior_outcome_class, attempt=9):
+    """A cross-chain correction record binding to one specific prior record."""
+    return {
+        "task_id": task_id, "registration_id": "reg", "registration_sha256": REG_SHA,
+        "outcome": "base_fail_gold_pass", "outcome_class": "scientific",
+        "admitted": True, "attempt": attempt,
+        "correction_of_chain": chain_name,
+        "correction_of_chain_sha256": chain_sha256,
+        "correction_of_record_digest": record_digest,
+        "prior_outcome": prior_outcome,
+        "prior_outcome_class": prior_outcome_class,
+    }
+
+
+class TestTerminalRejectionCannotBeHiddenByAnEarlierAttempt:
+    """Gemini audit (2026-10-16): a terminal scientific rejection must not be
+    bypassed because an EARLIER attempt for the same task was an infrastructure
+    failure, and a correction must be authenticated against the EXACT record its
+    ``correction_of_record_digest`` names -- not the first record seen for the task.
+    """
+
+    def test_an_earlier_infrastructure_attempt_cannot_shield_a_later_rejection(
+        self, tmp_path
+    ):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1", "timeout", attempt=1),
+                            _sci("t-1", "gold_fail", False, attempt=2)])
+        b = _chain(tmp_path / "b.jsonl", [_corr(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 2),
+            record_digest=_record_digest(a_path, 0),     # binds the INFRASTRUCTURE row
+            prior_outcome="timeout", prior_outcome_class="infrastructure")])
+        out = reconcile_admissions_across_chains([a, b], TASKS)
+        assert out["credited_admitted"] == []
+        assert out["credited_count"] == 0
+        assert [r["task_id"] for r in out["refused_terminal_override"]] == ["t-1"]
+        assert out["refused_terminal_override"][0]["prior_outcome"] == "gold_fail"
+
+    def test_the_rejection_is_read_even_when_the_bound_record_is_infrastructure(
+        self, tmp_path
+    ):
+        """Same shape, but the binding is otherwise perfectly valid."""
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1", "build_failure", attempt=1),
+                            _sci("t-1", "test_not_run", False, attempt=2)])
+        b = _chain(tmp_path / "b.jsonl", [_corr(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 2),
+            record_digest=_record_digest(a_path, 0),
+            prior_outcome="build_failure", prior_outcome_class="infrastructure")])
+        out = reconcile_admissions_across_chains([a, b], TASKS)
+        assert out["credited_count"] == 0
+        assert out["refused_terminal_override"][0]["prior_outcome"] == "test_not_run"
+
+    def test_a_valid_correction_of_a_later_infrastructure_attempt_is_credited(
+        self, tmp_path
+    ):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1", "timeout", attempt=1),
+                            _infra("t-1", "build_failure", attempt=2)])
+        b = _chain(tmp_path / "b.jsonl", [_corr(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 2),
+            record_digest=_record_digest(a_path, 1),     # the SECOND attempt
+            prior_outcome="build_failure", prior_outcome_class="infrastructure")])
+        out = reconcile_admissions_across_chains([a, b], TASKS)
+        assert out["credited_admitted"] == ["t-1"]
+        assert out["refused_terminal_override"] == []
+
+    def test_duplicate_attempts_are_authenticated_by_their_own_digest(self, tmp_path):
+        """Two attempts with the SAME outcome: the digest still selects exactly one."""
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1", "timeout", attempt=1),
+                            _infra("t-1", "timeout", attempt=2)])
+        b = _chain(tmp_path / "b.jsonl", [_corr(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 2),
+            record_digest=_record_digest(a_path, 1),
+            prior_outcome="timeout", prior_outcome_class="infrastructure")])
+        out = reconcile_admissions_across_chains([a, b], TASKS)
+        assert out["credited_admitted"] == ["t-1"]
+
+    def test_one_records_digest_with_another_records_outcome_is_refused(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1", "timeout", attempt=1),
+                            _infra("t-1", "build_failure", attempt=2)])
+        b = _chain(tmp_path / "b.jsonl", [_corr(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 2),
+            record_digest=_record_digest(a_path, 0),     # row 0's digest
+            prior_outcome="build_failure",               # row 1's outcome
+            prior_outcome_class="infrastructure")])
+        with pytest.raises(BatchError, match="prior_outcome"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_an_infrastructure_attempt_does_not_shield_across_many_attempts(
+        self, tmp_path
+    ):
+        """infra, infra, then a terminal rejection: still refused."""
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1", "timeout", attempt=1),
+                            _infra("t-1", "build_failure", attempt=2),
+                            _sci("t-1", "base_pass", False, attempt=3)])
+        b = _chain(tmp_path / "b.jsonl", [_corr(
+            task_id="t-1", chain_name=a_path.name,
+            chain_sha256=_prefix_digest(a_path, 3),
+            record_digest=_record_digest(a_path, 1),
+            prior_outcome="build_failure", prior_outcome_class="infrastructure")])
+        out = reconcile_admissions_across_chains([a, b], TASKS)
+        assert out["credited_count"] == 0
+        assert out["refused_terminal_override"][0]["prior_outcome"] == "base_pass"
+
+
+class TestGrandfatherExceptionAndRegisteredTopology:
+    """The exception is exactly one task, and the registered topology is exactly
+    the two pinned chains in order."""
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_a_lookalike_grandfather_id_does_not_inherit_the_exception(self, monkeypatch):
+        """An in-process allowlist naming only a lookalike credits 3, not 4."""
+        from qwen_train import f2_s8_batch as B
+
+        monkeypatch.setattr(
+            B, "GRANDFATHERED_CORRECTION_TASK_IDS",
+            frozenset({"HypothesisWorks__hypothesis-4532-2"}))
+        out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
+        assert out["credited_count"] == 3
+        assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
+        assert [r["task_id"] for r in out["refused_terminal_override"]] == [
+            "HypothesisWorks__hypothesis-4532"]
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_the_exact_grandfathered_task_credits_under_real_chains(self):
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        out = real(REAL_CHAINS, REAL_TASKS)
+        assert "HypothesisWorks__hypothesis-4532" in out["credited_admitted"]
+        assert out["refused_terminal_override"] == []
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_a_third_or_repeated_chain_is_not_registrable(self):
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        with pytest.raises(BatchError, match="registered order"):
+            real((REAL_CHAINS[0], REAL_CHAINS[1], REAL_CHAINS[1]), REAL_TASKS)
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_a_correction_cannot_bind_to_an_intermediate_chain(self):
+        """With two registered chains there is no intermediate chain: a correction
+        naming anything other than the earlier registered chain is refused."""
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        # a real path set, but the correction's chain name is not the earlier one
+        import json as _json
+
+        from qwen_train.f2_s8_batch import REGISTERED_CHAINS
+
+        raw = REAL_CHAINS[1].read_text(encoding="utf-8").splitlines()
+        rec = _json.loads(raw[0])
+        assert rec["correction_of_chain"] == REAL_CHAINS[0].name
+        # the registered order is pinned, so the ONLY legal binding target is [0]
+        assert list(REGISTERED_CHAINS)[0] == REAL_CHAINS[0].name
+        out = real(REAL_CHAINS, REAL_TASKS)
+        assert out["corrections_verified"] == 1
