@@ -67,6 +67,21 @@ crediting on trust:
    correction time** (the first N non-empty rows, line endings included); later appends grow the
    chain, so the recorded value is a *historical line-prefix* digest of the current file.
 
+**A binding alone does not authorise overriding a terminal scientific rejection.** When the
+earlier registered chain's **first scientific record** for the task — the record the canonical
+admission rule decides on — is a scientific outcome other than `base_fail_gold_pass`, the
+correction is refused and the task is **not** credited. The rejection is read from that deciding
+record, so an earlier **infrastructure** attempt for the same task can never shield a later
+terminal scientific rejection, and the claimed `prior_outcome`/`prior_outcome_class` must match
+the **exact** record named by `correction_of_record_digest`, not merely the first record seen for
+the task. The **sole** exception is the single code-pinned grandfathered task of §4
+(`GRANDFATHERED_CORRECTION_TASK_IDS` in `qwen_train/f2_s8_batch.py`), which must still satisfy every
+registered-chain and binding condition above; no other task inherits it, no lookalike identifier is
+accepted, and it is never read from this document at runtime.
+
+A correction of an **infrastructure** outcome is *not* a terminal-rejection override: it needs the
+binding above, but not the §4 exception.
+
 Enforced by `qwen_train/f2_s8_batch.py::reconcile_admissions_across_chains` +
 `_require_correction_binding` (read-only; no ledger is mutated, no admission predicate changes).
 
@@ -107,6 +122,14 @@ verifier: the per-task `EvidenceRecord` was never persisted, and the ledger row 
 is missing is the *per-task* binding.)
 Nothing here rewrites a ledger row or an evidence artifact, and no missing historical field may be
 back-filled.
+
+**Do not confuse this with the terminal-scientific-rejection exception.** This section grandfathers
+the *evidence contract* for four historical pairs — the retained JUnit/report/governance artifacts
+stand in for a per-task `EvidenceRecord`. That is a **different** thing from the permission to
+override a terminal scientific rejection, which is exactly one task,
+`HypothesisWorks__hypothesis-4532`, enforced in code via `GRANDFATHERED_CORRECTION_TASK_IDS` and
+never read from this document. The three operative-chain pairs below are grandfathered for
+*evidence* only and carry no rejection override; the corrective pair is the one row that is both.
 
 ## 5. Counting today
 
