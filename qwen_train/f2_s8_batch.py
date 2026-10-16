@@ -124,9 +124,34 @@ def reconcile_counts(
     }
 
 
+#: REGISTERED chains, code-pinned (owner-authorized OD-2). The key is the exact
+#: ledger FILENAME; the value is the SHA-256 of that chain's registered historical
+#: LINE PREFIX - the cumulative digest over the file's leading non-empty lines,
+#: line endings included (see :func:`_chain_prefix_digests`). The operative chain
+#: is index 0. A future append grows the operative chain while this historical
+#: prefix digest stays valid; a reordered, swapped or altered chain does not.
+REGISTERED_CHAINS: dict[str, str] = {
+    "s8_pilot_ledger.jsonl":
+        "5fb0aa8eda37f220ea2fce5ca96688bb4a7edf94576b73b32b1678c1a1971430",
+    "s8_pilot_ledger_corrected.jsonl":
+        "e030c05a21fd22baf840f80a9cbd4645dd6c1aa8492350281f563a835f96d5ae",
+}
+
+#: The ONE grandfathered historical correction (owner-authorized OD-2, option
+#: b-2). Exactly this task may override a prior TERMINAL SCIENTIFIC REJECTION
+#: through its recorded correction; every other such attempt is refused. The set
+#: is code-pinned - the runtime policy is never read from a Markdown document -
+#: and a test proves it agrees with the counting rule's grandfathering table.
+GRANDFATHERED_CORRECTION_TASK_IDS: frozenset[str] = frozenset({
+    "HypothesisWorks__hypothesis-4532",
+})
+
+
 def reconcile_admissions_across_chains(
     chains: Sequence[AppendOnlyLedger | Path | str],
     ordered_task_ids: Sequence[str],
+    *,
+    enforce_registered_chains: bool = True,
 ) -> dict[str, Any]:
     """Credit admissions across the registered chains (owner rule, option B).
 
@@ -156,6 +181,25 @@ def reconcile_admissions_across_chains(
     if not chains:
         raise BatchError("cross-chain reconciliation needs at least one chain")
     universe = set(ordered_task_ids)
+
+    # REGISTERED-CHAIN ENFORCEMENT (owner-authorized OD-2). The supplied chains
+    # must be exactly the code-pinned registered set, in registered order, and
+    # each must actually CONTAIN its registered historical prefix digest. A
+    # caller-supplied name or digest that merely "looks valid" is never accepted.
+    if enforce_registered_chains:
+        supplied = [
+            (c.path if isinstance(c, AppendOnlyLedger) else Path(c)).name
+            for c in chains
+        ]
+        unknown = [n for n in supplied if n not in REGISTERED_CHAINS]
+        if unknown:
+            raise BatchError(
+                f"unregistered chain(s) {unknown}; registered chains are "
+                f"{list(REGISTERED_CHAINS)}")
+        if supplied != list(REGISTERED_CHAINS):
+            raise BatchError(
+                "chains must be supplied in registered order "
+                f"{list(REGISTERED_CHAINS)}; got {supplied}")
 
     # Pass 1: verify and index EVERY chain first, so a correction row can be
     # resolved against the chain it names even when that chain appears later.
@@ -197,18 +241,39 @@ def reconcile_admissions_across_chains(
         by_name[ledger.path.name] = index
         by_name[str(ledger.path)] = index
 
-    # Pass 2: validate every correction binding (fail closed), then credit.
+    # Pass 2: validate registrations, bindings and the grandfather exception
+    # (all fail closed), then credit.
+    registered_names = [idx["ledger"].path.name for idx in indexes]
+    if enforce_registered_chains:
+        for index in indexes:
+            name = index["ledger"].path.name
+            pinned = REGISTERED_CHAINS[name]
+            if pinned not in index["prefix_digests"]:
+                raise BatchError(
+                    f"chain {name!r} does not contain its registered historical "
+                    f"prefix digest {pinned}; the chain content is not the "
+                    "registered history")
+
     per_chain: list[dict[str, Any]] = []
     credited: set[str] = set()
     in_multiple: set[str] = set()
     unregistered: set[str] = set()
     corrections_verified = 0
+    refused_override: list[dict[str, str]] = []
+    prior_first: dict[str, tuple[str, Mapping[str, Any]]] = {}
+
     for index in indexes:
         ledger = index["ledger"]
+        name = ledger.path.name
         records = index["records"]
+
+        # Validated corrections in THIS chain (verified binding), by task.
+        corrected: dict[str, Mapping[str, Any]] = {}
         for record in records:
             if _require_correction_binding(record, by_name=by_name):
                 corrections_verified += 1
+                corrected[str(record.get("task_id"))] = record
+
         # The canonical admission rule (AppendOnlyLedger.admitted): the FIRST
         # scientific record for a task decides, and only ADMITTED_OUTCOME
         # credits.  Computed in one pass; a test pins it to the per-task method.
@@ -222,6 +287,48 @@ def reconcile_admissions_across_chains(
             for task_id, record in first_scientific.items()
             if record.get("outcome") == ADMITTED_OUTCOME
         }
+
+        # --- CROSS-CHAIN CREDIT RULES (owner-authorized OD-2) ----------------
+        for task_id in sorted(admitted_all):
+            prior = prior_first.get(task_id)
+            if prior is None:
+                continue
+            prior_chain, prior_rec = prior
+            correction = corrected.get(task_id)
+            if correction is None:
+                raise BatchError(
+                    f"task {task_id!r} is admitted in chain {name!r} but already "
+                    f"appears in the earlier registered chain {prior_chain!r} "
+                    "without a verified correction binding; a cross-chain credit "
+                    "requires one")
+            bound = str(correction.get("correction_of_chain") or "").strip()
+            if bound != prior_chain:
+                raise BatchError(
+                    f"task {task_id!r} correction in chain {name!r} binds "
+                    f"{bound!r}, not the earlier registered chain {prior_chain!r}")
+            claimed_prior = str(correction.get("prior_outcome") or "")
+            actual_prior = str(prior_rec.get("outcome") or "")
+            if claimed_prior != actual_prior:
+                raise BatchError(
+                    f"task {task_id!r} correction claims prior_outcome "
+                    f"{claimed_prior!r} but the earlier record is {actual_prior!r}")
+            # A correction may override a TERMINAL SCIENTIFIC REJECTION only
+            # through the one code-pinned historical exception; every other such
+            # attempt is REFUSED (never credited).
+            if (prior_rec.get("outcome_class") == "scientific"
+                    and actual_prior != ADMITTED_OUTCOME):
+                if not enforce_registered_chains or task_id not in GRANDFATHERED_CORRECTION_TASK_IDS:
+                    refused_override.append({
+                        "task_id": task_id,
+                        "chain": name,
+                        "prior_chain": prior_chain,
+                        "prior_outcome": actual_prior,
+                        "reason": "terminal scientific rejection may only be "
+                                  "overridden by the code-pinned grandfathered "
+                                  "historical correction",
+                    })
+                    admitted_all = admitted_all - {task_id}
+
         unregistered |= {t for t in admitted_all if t not in universe}
         admitted = admitted_all & universe
         in_multiple |= credited & admitted
@@ -231,13 +338,19 @@ def reconcile_admissions_across_chains(
             "rows": len(records),
             "admitted": sorted(admitted),
         })
+        # Record the FIRST record for each task in THIS chain for later chains.
+        for record in records:
+            prior_first.setdefault(str(record.get("task_id")), (name, record))
+
     return {
         "chains": per_chain,
+        "registered_chains": registered_names,
         "operative_admitted": per_chain[0]["admitted"],
         "credited_admitted": sorted(credited),
         "credited_count": len(credited),
         "credited_in_multiple_chains": sorted(in_multiple),
         "unregistered_admitted": sorted(unregistered),
+        "refused_terminal_override": sorted(refused_override, key=lambda r: r["task_id"]),
         "corrections_verified": corrections_verified,
         "registered": len(ordered_task_ids),
     }

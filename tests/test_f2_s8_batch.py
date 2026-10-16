@@ -10,7 +10,6 @@ import pytest
 from qwen_train.f2_s8_batch import (
     BatchError,
     drive_batch,
-    reconcile_admissions_across_chains,
     reconcile_counts,
 )
 from qwen_train.f2_s8_factory import (
@@ -18,6 +17,18 @@ from qwen_train.f2_s8_factory import (
     RegistrationMismatch,
     RetryPolicy,
 )
+
+
+def reconcile_admissions_across_chains(chains, tasks, **kw):
+    """Synthetic-chain wrapper: these fixtures use temp paths, never the registered
+    chains, so the code-pinned chain-registration enforcement is opted out of here.
+    The real registered chains and the grandfather exception are exercised by
+    TestCrossChainPolicyWithRealChains."""
+    from qwen_train.f2_s8_batch import (
+        reconcile_admissions_across_chains as _real,
+    )
+
+    return _real(chains, tasks, enforce_registered_chains=False, **kw)
 
 REG_SHA = "c" * 64
 TASKS = [f"t-{i}" for i in range(5)]
@@ -266,12 +277,13 @@ class TestCrossChainAdmissionCrediting:
         assert out["credited_in_multiple_chains"] == []
         assert out["chains"][1]["admitted"] == ["t-3"]
 
-    def test_a_task_admitted_in_both_chains_is_counted_once(self, tmp_path):
+    def test_a_task_admitted_in_both_chains_without_a_binding_is_refused(self, tmp_path):
+        # OD-2 (owner-authorized): an UNBOUND cross-chain admission is no longer
+        # silently counted; it fails closed.
         a = _chain(tmp_path / "a.jsonl", [_sci("t-1", "base_fail_gold_pass", True)])
         b = _chain(tmp_path / "b.jsonl", [_sci("t-1", "base_fail_gold_pass", True)])
-        out = reconcile_admissions_across_chains([a, b], TASKS)
-        assert out["credited_count"] == 1
-        assert out["credited_in_multiple_chains"] == ["t-1"]
+        with pytest.raises(BatchError, match="verified correction binding"):
+            reconcile_admissions_across_chains([a, b], TASKS)
 
     def test_chains_that_only_failed_or_ran_infrastructure_credit_nothing(self, tmp_path):
         a = _chain(tmp_path / "a.jsonl", [
@@ -311,7 +323,9 @@ class TestCrossChainAdmissionCrediting:
         with pytest.raises(BatchError):
             reconcile_admissions_across_chains([], TASKS)
 
-    def test_credit_rule_matches_the_canonical_per_task_predicate(self, tmp_path):
+    def test_a_cross_chain_override_of_a_prior_rejection_is_refused(self, tmp_path):
+        # OD-2: chain b credits t-1 whose first record in chain a was a terminal
+        # scientific rejection, with no binding -> fail closed (not credited).
         a = _chain(tmp_path / "a.jsonl", [
             _infra("t-0"), _sci("t-0", "base_fail_gold_pass", True),
             _sci("t-1", "gold_fail", False),
@@ -320,11 +334,19 @@ class TestCrossChainAdmissionCrediting:
             _sci("t-2", "base_fail_gold_pass", True),
             _sci("t-1", "base_fail_gold_pass", True),
         ])
+        with pytest.raises(BatchError, match="verified correction binding"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_the_canonical_predicate_holds_for_disjoint_admissions(self, tmp_path):
+        a = _chain(tmp_path / "a.jsonl", [
+            _infra("t-0"), _sci("t-0", "base_fail_gold_pass", True),
+        ])
+        b = _chain(tmp_path / "b.jsonl", [
+            _sci("t-2", "base_fail_gold_pass", True),
+            _sci("t-3", "gold_fail", False),
+        ])
         out = reconcile_admissions_across_chains([a, b], TASKS)
-        canonical = sorted(
-            t for t in TASKS if a.admitted(t) is not None or b.admitted(t) is not None
-        )
-        assert out["credited_admitted"] == canonical
+        assert out["credited_admitted"] == ["t-0", "t-2"]
 
 
 def _prefix_digest(path, rows: int) -> str:
@@ -349,7 +371,8 @@ class TestCrossChainCorrectionBinding:
     """
 
     def _correction(self, *, task_id, chain_name, chain_sha256, record_digest,
-                    outcome="base_fail_gold_pass"):
+                    outcome="base_fail_gold_pass",
+                    prior_outcome="infrastructure_failure"):
         return {
             "task_id": task_id, "registration_id": "reg",
             "registration_sha256": REG_SHA, "outcome": outcome,
@@ -357,11 +380,15 @@ class TestCrossChainCorrectionBinding:
             "correction_of_chain": chain_name,
             "correction_of_chain_sha256": chain_sha256,
             "correction_of_record_digest": record_digest,
+            "prior_outcome": prior_outcome,
         }
 
     def test_a_valid_historical_prefix_binding_is_accepted(self, tmp_path):
         a_path = tmp_path / "a.jsonl"
-        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        # The corrected record is an INFRASTRUCTURE outcome, so the correction is
+        # legitimately in scope (a terminal scientific rejection would need the
+        # code-pinned grandfather exception).
+        a = _chain(a_path, [_infra("t-1")])
         prefix = _prefix_digest(a_path, 1)               # the chain as it stood
         a.append(_sci("t-2", "base_fail_gold_pass", True))  # chain later grows
         b = _chain(tmp_path / "b.jsonl", [self._correction(
@@ -370,6 +397,7 @@ class TestCrossChainCorrectionBinding:
         out = reconcile_admissions_across_chains([a, b], TASKS)
         assert out["corrections_verified"] == 1
         assert out["credited_admitted"] == ["t-1", "t-2"]
+        assert out["refused_terminal_override"] == []
 
     def test_an_invalid_prefix_digest_is_refused(self, tmp_path):
         a_path = tmp_path / "a.jsonl"
@@ -462,3 +490,149 @@ class TestCrossChainCorrectionBinding:
             chain_sha256=_prefix_digest(a_path, 1), record_digest="not-a-digest")])
         with pytest.raises(BatchError, match="not a 64-character"):
             reconcile_admissions_across_chains([a, b], TASKS)
+
+
+REAL_STORE = Path(r"C:\Users\rober\F2_EVIDENCE\s8\trusted_store")
+REAL_CHAINS = (
+    REAL_STORE / "s8_pilot_ledger.jsonl",
+    REAL_STORE / "s8_pilot_ledger_corrected.jsonl",
+)
+REAL_TASKS = (
+    "HypothesisWorks__hypothesis-4532",
+    "openai__openai-agents-python-1633",
+    "openai__openai-agents-python-1636",
+    "python__mypy-19767",
+    "stanfordnlp__dspy-8739",
+    "django-guardian__django-guardian-899",
+    "django-guardian__django-guardian-896",
+)
+
+
+def _real_available() -> bool:
+    return all(p.is_file() for p in REAL_CHAINS)
+
+
+class TestCrossChainPolicyWithRealChains:
+    """OD-2 (owner-authorized): the code-pinned policy against the REAL ledgers."""
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_the_historical_counts_are_preserved(self):
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        out = real(REAL_CHAINS, REAL_TASKS)
+        assert out["operative_admitted"] == [
+            "openai__openai-agents-python-1633",
+            "openai__openai-agents-python-1636",
+            "python__mypy-19767",
+        ]
+        assert out["credited_count"] == 4
+        assert out["credited_admitted"] == sorted([
+            "HypothesisWorks__hypothesis-4532",
+            "openai__openai-agents-python-1633",
+            "openai__openai-agents-python-1636",
+            "python__mypy-19767",
+        ])
+        assert 300 - out["credited_count"] == 296
+        assert out["corrections_verified"] == 1
+        assert out["refused_terminal_override"] == []
+        assert out["unregistered_admitted"] == []
+        assert out["registered_chains"] == [
+            "s8_pilot_ledger.jsonl", "s8_pilot_ledger_corrected.jsonl"]
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_removing_the_pinned_exception_drops_the_fourth_credit(self, monkeypatch):
+        """Isolated in-process policy only: nothing on disk is touched."""
+        from qwen_train import f2_s8_batch as B
+
+        monkeypatch.setattr(B, "GRANDFATHERED_CORRECTION_TASK_IDS", frozenset())
+        out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
+        assert out["credited_count"] == 3
+        assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
+        assert [r["task_id"] for r in out["refused_terminal_override"]] == [
+            "HypothesisWorks__hypothesis-4532"]
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_reconciliation_does_not_change_the_ledger_bytes(self):
+        before = [hashlib.sha256(p.read_bytes()).hexdigest() for p in REAL_CHAINS]
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        real(REAL_CHAINS, REAL_TASKS)
+        after = [hashlib.sha256(p.read_bytes()).hexdigest() for p in REAL_CHAINS]
+        assert before == after
+
+    def test_unknown_chain_name_is_rejected(self, tmp_path):
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        c = _chain(tmp_path / "not-registered.jsonl",
+                   [_sci("t-0", "base_fail_gold_pass", True)])
+        with pytest.raises(BatchError, match="unregistered chain"):
+            real([c], TASKS)
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_reordered_or_swapped_registered_chains_are_rejected(self):
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        with pytest.raises(BatchError, match="registered order"):
+            real(tuple(reversed(REAL_CHAINS)), REAL_TASKS)
+
+    def test_a_chain_without_its_registered_prefix_digest_is_rejected(self, tmp_path):
+        """Right NAME, wrong CONTENT: the registered prefix digest must be present."""
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        fake = tmp_path / "s8_pilot_ledger.jsonl"
+        _chain(fake, [_sci("t-0", "base_fail_gold_pass", True)])
+        other = tmp_path / "s8_pilot_ledger_corrected.jsonl"
+        _chain(other, [_sci("t-1", "base_fail_gold_pass", True)])
+        with pytest.raises(BatchError, match="registered historical prefix digest"):
+            real([fake, other], TASKS)
+
+    def test_a_mismatched_prior_outcome_is_rejected(self, tmp_path):
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_infra("t-1")])
+        prefix = _prefix_digest(a_path, 1)
+        b = _chain(tmp_path / "b.jsonl", [{
+            "task_id": "t-1", "registration_id": "reg", "registration_sha256": REG_SHA,
+            "outcome": "base_fail_gold_pass", "outcome_class": "scientific",
+            "admitted": True, "attempt": 2,
+            "correction_of_chain": a_path.name,
+            "correction_of_chain_sha256": prefix,
+            "correction_of_record_digest": _record_digest(a_path, 0),
+            "prior_outcome": "gold_fail",          # WRONG: the record is infrastructure
+        }])
+        with pytest.raises(BatchError, match="prior_outcome"):
+            reconcile_admissions_across_chains([a, b], TASKS)
+
+    def test_a_non_allowlisted_override_of_a_terminal_rejection_is_refused(self, tmp_path):
+        """A VALID binding cannot rescue an override of a terminal rejection."""
+        a_path = tmp_path / "a.jsonl"
+        a = _chain(a_path, [_sci("t-1", "gold_fail", False)])
+        prefix = _prefix_digest(a_path, 1)
+        b = _chain(tmp_path / "b.jsonl", [{
+            "task_id": "t-1", "registration_id": "reg", "registration_sha256": REG_SHA,
+            "outcome": "base_fail_gold_pass", "outcome_class": "scientific",
+            "admitted": True, "attempt": 2,
+            "correction_of_chain": a_path.name,
+            "correction_of_chain_sha256": prefix,
+            "correction_of_record_digest": _record_digest(a_path, 0),
+            "prior_outcome": "gold_fail",
+        }])
+        out = reconcile_admissions_across_chains([a, b], TASKS)
+        assert out["credited_count"] == 0
+        assert [r["task_id"] for r in out["refused_terminal_override"]] == ["t-1"]
+
+    def test_the_pins_agree_with_the_counting_rule_document(self):
+        from qwen_train.f2_s8_batch import (
+            GRANDFATHERED_CORRECTION_TASK_IDS,
+            REGISTERED_CHAINS,
+        )
+
+        doc = (Path(__file__).resolve().parents[1]
+               / "docs" / "EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md").read_text(
+                   encoding="utf-8")
+        for name, digest in REGISTERED_CHAINS.items():
+            assert name in doc, name
+            assert digest in doc, digest
+        for task_id in GRANDFATHERED_CORRECTION_TASK_IDS:
+            assert task_id in doc, task_id
+        assert GRANDFATHERED_CORRECTION_TASK_IDS == frozenset(
+            {"HypothesisWorks__hypothesis-4532"})
