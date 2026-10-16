@@ -46,17 +46,27 @@ the documents above and are referenced, not duplicated.
 
 > **What exactly must I provide or do before we are allowed to run the experiment?**
 
-Eighteen items are outstanding. Preflight reports them as **18 blocking findings**,
+Twenty items are outstanding. Preflight reports them as **20 blocking findings**,
 exit code non-zero. Current categories:
 
 | Category | Count | Who |
 |---|---|---|
-| `OPERATOR ACTION REQUIRED` | 12 | operator |
-| `EXTERNAL EVIDENCE REQUIRED` | 4 | external evidence source / operator |
+| `OPERATOR ACTION REQUIRED` | 14 | operator |
+| `EXTERNAL EVIDENCE REQUIRED` | 5 | external evidence source / operator |
 | `PRIVILEGED HOST ACTION REQUIRED` | 1 | privileged administrator |
-| `AUTHORIZATION REQUIRED` | 1 | experiment authority |
+| `AUTHORIZATION REQUIRED` | 0 | experiment authority |
 | `NOT EXECUTED` | 2 | operator (authorize) |
 | `IMPLEMENTED` | 16 | done |
+
+> **Refreshed 2026-10-15 from `python -m qwen_train.f2_preflight`.** The count is
+> now 20, not 18: preflight also reports the **three S8-only governed inputs**
+> (`env.s8_environment_identity`, `env.s8_base_state_digest`,
+> `env.s8_gold_state_digest`) whose names come from `qwen_train/f2_s8_compose.py`
+> — see `docs/EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md` §1–§2.
+> `AUTHORIZATION REQUIRED` is now 0 because population acquisition is recorded
+> (F2-IMPL-AUTH-028/029/031) and preflight no longer reports it as unauthorized,
+> so the §1.4 note about a hard-coded `authz.population_acquisition` finding is
+> stale. A green environment check is still never authorization to execute.
 
 Run this yourself — it is read-only and safe:
 

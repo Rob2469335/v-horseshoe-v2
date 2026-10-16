@@ -8,9 +8,9 @@
 
 ## 1. Overview & Purpose
 
-The F2 execution harness and automated preflight (`python -m qwen_train.f2_preflight`) evaluate 10 operational environment variables. These settings configure live evaluation identity, evaluator binding, artifact retention, and evidence emission.
+The F2 execution harness and automated preflight (`python -m qwen_train.f2_preflight`) evaluate 13 operational environment variables: the ten F2 settings of the specification table below, and the three **S8-only** governed inputs (table rows 11–13) that have no F2 fallback and are required by the S8 composition root. These settings configure live evaluation identity, evaluator binding, artifact retention, and evidence emission (and, for the S8 inputs, the governed base/gold execution-state identity).
 
-All 10 settings belong to the preflight category `OPERATOR ACTION REQUIRED`. They are deliberately kept out of tracked source control to ensure runtime parameters are explicitly and intentionally provisioned for live experimental operations.
+All 13 settings belong to the preflight category `OPERATOR ACTION REQUIRED`: a missing or malformed setting blocks. They are deliberately kept out of tracked source control so runtime parameters are explicitly and intentionally provisioned for live experimental operations. A preflight finding here is **readiness only** — a green environment check is never authorization to execute.
 
 ---
 
@@ -28,6 +28,9 @@ All 10 settings belong to the preflight category `OPERATOR ACTION REQUIRED`. The
 | 8 | `SWARM_F2_EMIT_BUNDLE` | `1` | Must be `"1"`; enforces that child execution emits verifiable deterministic bundles. | `qwen_train/f2_protocol.py` |
 | 9 | `SWARM_F2_TASK_OUTCOME_REPORT` | Absolute path (e.g. `C:\Users\rober\F2_ARTIFACTS\task_outcome_report.json`) | Destination path where the evaluator writes the task outcome report. | `qwen_train/f2_evaluator.py` |
 | 10 | `SWARM_F2_EVALUATOR_IMPL` | Absolute path (e.g. `C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\f2_evaluator.py`) | Must point to an existing, readable file on disk. Preflight computes its SHA-256 digest dynamically (`f2_preflight.py:249-266`). | `f2_preflight.py:249` |
+| 11 | `SWARM_S8_ENVIRONMENT_IDENTITY` | Execution-environment identity (non-empty string) | S8-only: **no F2 fallback**. Must be non-empty; read by `f2_s8_compose.load_governance_from_env`. Reported by preflight as `env.s8_environment_identity`. | `qwen_train/f2_s8_compose.py` `S8_GOVERNANCE_ENV` |
+| 12 | `SWARM_S8_BASE_STATE_DIGEST` | 64-character lowercase SHA-256 hex | S8-only: **no F2 fallback**. Must be a well-formed digest and must differ from the gold digest. Reported by preflight as `env.s8_base_state_digest`. | `qwen_train/f2_s8_compose.py` `S8_GOVERNANCE_ENV` |
+| 13 | `SWARM_S8_GOLD_STATE_DIGEST` | 64-character lowercase SHA-256 hex | S8-only: **no F2 fallback**. Must be a well-formed digest, distinct from the base digest (identical digests cannot describe two execution states). Reported by preflight as `env.s8_gold_state_digest`. | `qwen_train/f2_s8_compose.py` `S8_GOVERNANCE_ENV` |
 
 ---
 
@@ -52,36 +55,40 @@ Preflight check `env.controls` enforces that the following 7 controls are config
 - `SWARM_NO_TOASTS=1`
 - `SWARM_F1_NO_WEB_TOOLS=1`
 
-### 3.4 Provisioning-location conflict (UNRESOLVED — REQUIRES AUTHORIZATION)
+### 3.4 Provisioning location — RESOLVED: process/session-only for governed execution
 
-Section 4 of this specification permits the runtime parameters to be populated
-into the operator's local `.env` **or** exported in the execution shell.
-`docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` section 1.1 states instead that they
-are *"set in the process environment for the run only"* and that *"none of these
-may be provisioned by the implementation agent"*; section 1.2 places only the
-receipt key in the operator's `.env`.
+`docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` section 1.1 requires the execution
+variables to be set in the process environment for the run only, and section 1.2
+places only the receipt key in the operator's `.env`. Section 4 of this
+specification previously also offered the operator's local `.env` as a location;
+a prior session that appended the ten `SWARM_F2_*`/`SWARM_DISTILLER_*` variables
+to `.env` was **reverted** as a section 1.1 violation (see `WORK_LOG.md`,
+2026-10-14).
 
-The two positions are **not reconciled by existing governance**, and a prior
-session that appended the ten `SWARM_F2_*`/`SWARM_DISTILLER_*` variables to
-`.env` was **reverted** as a section 1.1 violation (see `WORK_LOG.md`,
-2026-10-14). The implemented behaviour therefore **preserves fail-closed
-semantics**:
+**Owner decision (2026-10-15): process/session-only provisioning for governed
+execution inputs.** The `.env` option is **withdrawn** for those inputs; `.env`
+support is not to be expanded without separate authorization, and `.env` contents
+and secrets are never read, printed, or exposed. The implemented behaviour
+already matches the decision:
 
-* `qwen_train/f2_preflight.py` self-loads `.env` **without overriding** an
-  explicit process variable (`_load_operator_env`); and
 * the S8 governed-loading path reads the **process environment only**
   (`qwen_train/f2_s8_compose.load_governance_from_env`) and refuses, naming each
-  missing input, when one is absent.
-
-**This conflict is documented, not resolved.** Deciding which location governs
-(and whether the S8 path should also self-load `.env`) is an owner decision:
-**REQUIRES AUTHORIZATION**. No agent may settle it by editing the loader.
+  missing input, when one is absent; and
+* `qwen_train/f2_preflight.py` still self-loads `.env` **without overriding** an
+  explicit process variable (`_load_operator_env`) — a non-overriding *diagnostic*
+  for the receipt key (section 1.2) and the seven controls (section 3.3). It
+  provisions nothing for execution: a `.env`-only value does not satisfy the
+  governed execution path.
 
 ---
 
 ## 4. Operator Configuration Template
 
-When authorized to stage the live operational environment, the following template can be populated into the Operator's local `.env` (or exported in the execution shell):
+When authorized to stage the live operational environment, the following template
+is **exported into the execution session (process environment) for the run**. It
+is **not** populated into `.env` for the governed execution inputs (section 3.4);
+only the receipt key has a separate `.env` provision location (handoff section
+1.2):
 
 ```dotenv
 # ==============================================================================

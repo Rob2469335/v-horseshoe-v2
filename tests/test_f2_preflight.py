@@ -25,6 +25,8 @@ def clean_env(monkeypatch):
         "SWARM_F2_ARTIFACT_RETENTION_DAYS", "SWARM_F2_EMIT_BUNDLE",
         "SWARM_F2_TASK_OUTCOME_REPORT", "SWARM_RECEIPT_KEY",
         "SWARM_F2_EVALUATOR_IMPL",
+        "SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+        "SWARM_S8_GOLD_STATE_DIGEST",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("SWARM_DISTILLER_MODEL", "robs4b")
@@ -36,6 +38,9 @@ def clean_env(monkeypatch):
     monkeypatch.setenv("SWARM_F2_ARTIFACT_RETENTION_DAYS", "365")
     monkeypatch.setenv("SWARM_F2_EMIT_BUNDLE", "1")
     monkeypatch.setenv("SWARM_F2_TASK_OUTCOME_REPORT", "C:/trusted/f2/outcome.json")
+    monkeypatch.setenv("SWARM_S8_ENVIRONMENT_IDENTITY", "s8-test-env")
+    monkeypatch.setenv("SWARM_S8_BASE_STATE_DIGEST", "b" * 64)
+    monkeypatch.setenv("SWARM_S8_GOLD_STATE_DIGEST", "c" * 64)
     return monkeypatch
 
 
@@ -152,6 +157,79 @@ class TestEnvChecking:
         rep = pf.run_preflight()
         by = {f["id"]: f for f in rep["findings"]}
         assert by["env.evaluator_impl"]["status"] == "missing"
+
+
+class TestS8EnvChecking:
+    """The three S8-only governed inputs, reported fail-closed by preflight.
+
+    They have no F2 fallback, so ``f2_s8_compose.load_governance_from_env``
+    refuses without them.  Preflight must surface them rather than let the
+    operator discover them only at launch -- but a green S8 finding is READINESS,
+    never authorization to execute.
+    """
+
+    S8_VARS = (
+        "SWARM_S8_ENVIRONMENT_IDENTITY",
+        "SWARM_S8_BASE_STATE_DIGEST",
+        "SWARM_S8_GOLD_STATE_DIGEST",
+    )
+
+    def test_reported_names_are_the_authoritative_s8_only_set(self):
+        from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
+
+        expected = {
+            "env.s8_" + name.removeprefix("SWARM_S8_").lower()
+            for name, _ in S8_GOVERNANCE_ENV if name not in S8_ENV_FALLBACKS
+        }
+        rep = pf.run_preflight()
+        reported = {f["id"] for f in rep["findings"] if f["id"].startswith("env.s8_")}
+        assert reported == expected
+        # The six F2-fallback inputs are NOT re-reported here.
+        assert len(expected) == 3
+
+    def test_all_three_are_ready_when_provisioned(self, clean_env):
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        for name in self.S8_VARS:
+            ident = "env.s8_" + name.removeprefix("SWARM_S8_").lower()
+            assert by[ident]["category"] == pf.READY, name
+
+    def test_an_absent_input_is_operator_action_with_an_action(self, clean_env):
+        clean_env.delenv("SWARM_S8_ENVIRONMENT_IDENTITY", raising=False)
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        f = by["env.s8_environment_identity"]
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert f["status"] == "absent"
+        assert "SWARM_S8_ENVIRONMENT_IDENTITY" in f["action"]
+
+    def test_a_malformed_digest_is_blocking_not_accepted(self, clean_env):
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST", "not-a-sha256")
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        f = by["env.s8_base_state_digest"]
+        assert f["category"] == pf.OPERATOR_ACTION
+        assert f["status"] == "malformed"
+
+    def test_identical_state_digests_are_blocking(self, clean_env):
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST", "b" * 64)  # == base
+        rep = pf.run_preflight()
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_gold_state_digest"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.s8_gold_state_digest"]["status"] == "identical"
+
+    def test_no_s8_value_is_ever_reported(self, clean_env):
+        secretish = "s8-identity-do-not-print-1234567890"
+        clean_env.setenv("SWARM_S8_ENVIRONMENT_IDENTITY", secretish)
+        blob = json.dumps(pf.run_preflight())
+        assert secretish not in blob
+        assert "value not printed" in blob
+
+    def test_s8_findings_are_readiness_never_authorization(self, clean_env):
+        rep = pf.run_preflight()
+        cats = {f["category"] for f in rep["findings"] if f["id"].startswith("env.s8_")}
+        assert cats <= {pf.READY, pf.OPERATOR_ACTION}
+        assert pf.AUTHORIZATION not in cats
 
 
 class TestEnvControlsFinding:

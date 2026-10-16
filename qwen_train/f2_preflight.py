@@ -282,6 +282,69 @@ def _env_findings() -> list[Finding]:
     return out
 
 
+def _is_lower_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _s8_env_findings() -> list[Finding]:
+    """The S8-only governed inputs (no F2 fallback): presence AND shape.
+
+    Names and labels are taken from the AUTHORITATIVE contract
+    (``qwen_train.f2_s8_compose.S8_GOVERNANCE_ENV`` minus the entries that have an
+    F2 fallback), so this gate and the loader cannot disagree about WHICH inputs
+    the governed S8 path needs.  The shape rule mirrors
+    ``load_governance_from_env``: the environment identity is a non-empty string,
+    a ``*_DIGEST`` is a 64-character lowercase SHA-256, and the two state digests
+    must differ (they cannot describe one execution state).
+
+    Only presence and shape are ever reported -- never a value -- and a finding
+    here is READINESS, never authorization to execute: clearing these checks does
+    not authorize the pilot or any task run.
+    """
+    try:
+        from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return [Finding(OPERATOR_ACTION, "env.s8_contract", "MISSING",
+                        f"the S8 governance contract could not be read: {exc}",
+                        "restore qwen_train/f2_s8_compose.py")]
+
+    s8_only = [(name, label) for name, label in S8_GOVERNANCE_ENV
+               if name not in S8_ENV_FALLBACKS]
+    values = {name: _env(name) for name, _ in s8_only}
+
+    out: list[Finding] = []
+    for name, label in s8_only:
+        ident = "env.s8_" + name.removeprefix("SWARM_S8_").lower()
+        value = values[name]
+        if not value:
+            out.append(Finding(
+                OPERATOR_ACTION, ident, "absent",
+                f"{name} is not set ({label})",
+                f"set {name} for the run"))
+        elif name.endswith("_DIGEST") and not _is_lower_sha256_hex(value):
+            out.append(Finding(
+                OPERATOR_ACTION, ident, "malformed",
+                f"{name} is not a 64-character lowercase SHA-256 hex digest "
+                f"({label}); value not printed",
+                f"set {name} to the {label} as sha256 hex"))
+        else:
+            out.append(Finding(
+                READY, ident, "set",
+                f"{name} is set ({label}); value not printed", ""))
+
+    digest_names = [name for name, _ in s8_only if name.endswith("_DIGEST")]
+    if len(digest_names) == 2:
+        base_v, gold_v = (values[digest_names[0]], values[digest_names[1]])
+        if base_v and gold_v and base_v == gold_v:
+            last = out[-1]
+            out[-1] = Finding(
+                OPERATOR_ACTION, last.ident, "identical",
+                "the base and gold state digests are identical; they cannot "
+                "describe two distinct execution states",
+                f"set {digest_names[1]} to a digest distinct from the base state")
+    return out
+
+
 def _env_control_findings(
     root: Path,
     adapter_controls: Mapping[str, str] | None = None,
@@ -713,6 +776,7 @@ def run_preflight(
     findings: list[Finding] = []
     findings += _code_findings()
     findings += _env_findings()
+    findings += _s8_env_findings()
     findings += _env_control_findings(repo, adapter_controls=adapter_controls)
     findings += _evidence_findings(repo)
     # Q9: the privileged control and its attestation evidence are one gate,

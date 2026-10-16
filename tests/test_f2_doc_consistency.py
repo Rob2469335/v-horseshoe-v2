@@ -356,29 +356,36 @@ class TestPilotPackageMatchesCode:
         assert "hatchling" in text, "the runbook never names the build backend"
         assert WHEELHOUSE in text, "the runbook never names the wheelhouse path"
 
-class TestEnvSpecRecordsTheProvisioningConflict:
-    """The `.env` vs process-environment conflict must stay RECORDED, not decided.
+class TestEnvSpecRecordsTheProvisioningDecision:
+    """The provisioning-location decision must stay RECORDED.
 
-    Section 4 of the operational environment spec permits `.env` provisioning;
-    ``OPERATOR_HANDOFF.md`` section 1.1 requires the process environment and
-    forbids agent provisioning; a prior ``.env`` append was reverted as a
-    section 1.1 violation (``WORK_LOG.md`` 2026-10-14).  The spec must record the
-    conflict and preserve fail-closed behaviour rather than silently choosing a
-    side -- and this guard fails if that record is removed.
+    Owner decision 2026-10-15: process/session-only provisioning for governed
+    execution inputs (``OPERATOR_HANDOFF.md`` 1.1); the spec's earlier ``.env``
+    option is withdrawn and a prior ``.env`` append was reverted (``WORK_LOG.md``
+    2026-10-14).  This guard fails if the record is removed or the unresolved
+    wording returns.
     """
 
     def test_env_spec_is_present(self):
         assert ENV_SPEC.is_file(), "the operational environment spec is missing"
 
-    def test_conflict_is_recorded_and_left_unresolved(self):
+    def test_conflict_is_recorded_as_resolved_process_session_only(self):
         text = read(ENV_SPEC)
-        assert "REQUIRES AUTHORIZATION" in text
-        assert "not reconciled by existing governance" in text
-        # It must name the conflicting authority and the reverted append.
+        assert "RESOLVED" in text
+        assert "process/session-only" in text
+        assert "not reconciled by existing governance" not in text
+        # It must name the governing authority and the reverted append.
         assert "EXPERIMENT_J_F2_OPERATOR_HANDOFF.md" in text
         assert "reverted" in text
-        # And preserve fail-closed: the S8 path reads the process env only.
+        # And the executed mechanism: the S8 path reads the process env only.
         assert "f2_s8_compose.load_governance_from_env" in text
+
+    def test_spec_records_the_three_s8_only_inputs(self):
+        text = read(ENV_SPEC)
+        for var in ("SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+                    "SWARM_S8_GOLD_STATE_DIGEST"):
+            assert var in text, var
+        assert "no F2 fallback" in text
 
 
 class TestCrossSourceConflictPolicyIsRecorded:

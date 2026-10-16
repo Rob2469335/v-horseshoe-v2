@@ -293,6 +293,49 @@ class TestEnvironmentLoader:
         inputs = load_governance_from_env(env)
         assert inputs.store.root == tmp_path / "s8store"
 
+    def test_a_dotenv_file_does_not_satisfy_the_loader(self, tmp_path, monkeypatch):
+        """Decision (2026-10-15): governed execution inputs are process/session-only.
+
+        A `.env` beside the working directory carrying EVERY input must not
+        satisfy the loader: it reads ``os.environ`` only, so a `.env`-only value
+        does not provision the governed execution path (and `.env` support is not
+        to be expanded without separate authorization).
+        """
+        (tmp_path / ".env").write_text(
+            "\n".join([
+                f"SWARM_S8_ARTIFACT_ROOT={tmp_path / 'store'}",
+                "SWARM_S8_ARTIFACT_RETENTION_DAYS=30",
+                f"SWARM_S8_EVALUATOR_ID={EVAL['evaluator_id']}",
+                f"SWARM_S8_EVALUATOR_VERSION={EVAL['version']}",
+                f"SWARM_S8_EVALUATOR_IMPL={Path(evaluator.__file__).resolve()}",
+                f"SWARM_S8_EVALUATOR_PROCEDURE={EVAL['procedure_id']}",
+                "SWARM_S8_ENVIRONMENT_IDENTITY=env-1",
+                "SWARM_S8_BASE_STATE_DIGEST=" + "a" * 64,
+                "SWARM_S8_GOLD_STATE_DIGEST=" + "b" * 64,
+                # the F2 fallbacks too, so no fallback can rescue the loader
+                f"SWARM_F2_ARTIFACT_ROOT={tmp_path / 'store'}",
+                "SWARM_F2_ARTIFACT_RETENTION_DAYS=30",
+                f"SWARM_F2_EVALUATOR_ID={EVAL['evaluator_id']}",
+                f"SWARM_F2_EVALUATOR_VERSION={EVAL['version']}",
+                f"SWARM_F2_EVALUATOR_IMPL={Path(evaluator.__file__).resolve()}",
+                f"SWARM_F2_EVALUATOR_PROCEDURE={EVAL['procedure_id']}",
+            ]) + "\n", encoding="utf-8")
+
+        for name in (
+            "SWARM_S8_ARTIFACT_ROOT", "SWARM_S8_ARTIFACT_RETENTION_DAYS",
+            "SWARM_S8_EVALUATOR_ID", "SWARM_S8_EVALUATOR_VERSION",
+            "SWARM_S8_EVALUATOR_IMPL", "SWARM_S8_EVALUATOR_PROCEDURE",
+            "SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+            "SWARM_S8_GOLD_STATE_DIGEST",
+            "SWARM_F2_ARTIFACT_ROOT", "SWARM_F2_ARTIFACT_RETENTION_DAYS",
+            "SWARM_F2_EVALUATOR_ID", "SWARM_F2_EVALUATOR_VERSION",
+            "SWARM_F2_EVALUATOR_IMPL", "SWARM_F2_EVALUATOR_PROCEDURE",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(S8ComposeError):
+            load_governance_from_env()
+
 
 class TestJunitToAdmission:
     """The full production chain: raw JUnit bytes -> evaluator -> bundle -> admit.
