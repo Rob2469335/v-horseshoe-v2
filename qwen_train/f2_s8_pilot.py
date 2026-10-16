@@ -213,6 +213,57 @@ def stage_spec_for_guest(
     return remote
 
 
+def _utc_now() -> str:
+    """ISO-8601 UTC timestamp (second resolution), the run-log convention."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+#: Cap on the retained guest console output in a run log. A log is a byproduct,
+#: not the evidence; it is bounded so one pathological task cannot balloon the
+#: retained bundle.
+MAX_LOG_BYTES = 64 * 1024
+
+
+def _execution_log(
+    *,
+    side: str,
+    task_id: str,
+    command: str,
+    stdout: str,
+    stderr: str,
+    provenance: Mapping[str, Any],
+    artifact: Mapping[str, Any],
+    started_at: str,
+    finished_at: str,
+) -> bytes:
+    """A TRUTHFUL run log built from the actual execution.
+
+    Everything here is either the command that ran, the guest executor's own
+    console output/error stream, the fields the guest itself reported
+    (``exit_status``/``timed_out``/``junit_present``), or the host-observed
+    timestamps. Nothing is invented; there is no ``"<side> run log"`` placeholder.
+    """
+    head = "\n".join([
+        f"task_id={task_id}",
+        f"side={side}",
+        f"started_at={started_at}",
+        f"finished_at={finished_at}",
+        f"command={command}",
+        f"exit_status={provenance.get('exit_status')}",
+        f"timed_out={bool(provenance.get('timed_out'))}",
+        f"junit_present={bool(provenance.get('junit_present'))}",
+        f"artifact_name={artifact.get('name')}",
+        f"artifact_sha256={artifact.get('sha256')}",
+        f"artifact_size_bytes={artifact.get('size_bytes')}",
+    ])
+    body = f"{head}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}\n"
+    raw = body.encode("utf-8")
+    if len(raw) > MAX_LOG_BYTES:
+        marker = f"\n[truncated at {MAX_LOG_BYTES} bytes]\n".encode("utf-8")
+        raw = raw[: MAX_LOG_BYTES - len(marker)] + marker
+    return raw
+
+
 def _is_safe_artifact_basename(name: str) -> bool:
     """True only for a plain basename that cannot escape the guest artifact dir.
 
@@ -271,6 +322,7 @@ def run_pilot_task(
     provenance: dict[str, Any] = {}
 
     for side in ("base", "gold"):
+        side_started = _utc_now()
         job_id = f"{spec.task_id}#{side}#{job_nonce or int(time.time())}"
         # The envelope is built host-side (this process owns the channel
         # staging area) and then PUT into the guest, because the guest executor
@@ -322,7 +374,7 @@ def run_pilot_task(
             f"--junit-dir '{guest_dir}'{workdir_arg}"
         )
         command = " ".join(script)
-        status, _out, err = channel.run(command)
+        status, guest_stdout, guest_stderr = channel.run(command)
         if status != 0:
             failure_class = f"guest_exit_{status}"
             break
@@ -390,8 +442,13 @@ def run_pilot_task(
         try:
             sides[side] = guest_evidence_from_junit(
                 spec=spec, side=side, junit_bytes=junit_bytes,
-                run_log=f"{side} run log".encode("utf-8"),
-                started_at="t0", finished_at="t1",
+                run_log=_execution_log(
+                    side=side, task_id=spec.task_id, command=command,
+                    stdout=guest_stdout, stderr=guest_stderr,
+                    provenance=provenance, artifact=artifact,
+                    started_at=side_started, finished_at=_utc_now(),
+                ),
+                started_at=side_started, finished_at=_utc_now(),
             )
         except Exception as exc:  # noqa: BLE001 - evaluator refused the evidence
             failure_class = f"evaluator_refused_{side}_{type(exc).__name__}"

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -308,6 +309,34 @@ def _artifact_ref(name: str, data: bytes, role: str) -> evidence.ArtifactRef:
     )
 
 
+#: A run log that is only a placeholder is NOT evidence; nor is a placeholder
+#: timestamp.  The prospective evidence contract requires the actual execution log
+#: and real ISO-8601 UTC timestamps, so a bundle that carries placeholders must
+#: never be assembled into governed evidence.
+_PLACEHOLDER_LOGS = frozenset({b"base run log", b"gold run log"})
+_PLACEHOLDER_TIMESTAMPS = frozenset({"", "t0", "t1"})
+_ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def require_authentic_evidence(guest: "GuestEvidence", *, side: str) -> None:
+    """Fail closed on placeholder or absent execution evidence.
+
+    Refuses a 12-byte ``"<side> run log"`` placeholder, an empty log, and a
+    ``t0``/``t1``/empty timestamp (anything that is not ISO-8601 UTC).
+    """
+    log = bytes(guest.run_log or b"")
+    if not log.strip() or log.strip() in _PLACEHOLDER_LOGS:
+        raise S8ComposeError(
+            f"{side} run log is absent or a placeholder; the prospective evidence "
+            "contract requires the actual execution log")
+    for label, value in (("started_at", guest.started_at),
+                         ("finished_at", guest.finished_at)):
+        if str(value or "") in _PLACEHOLDER_TIMESTAMPS or not _ISO_UTC.match(str(value or "")):
+            raise S8ComposeError(
+                f"{side} {label} is not an ISO-8601 UTC timestamp ({value!r}); "
+                "placeholder timestamps are not evidence")
+
+
 def assemble_governed_bundle(
     *,
     spec: TaskSpec,
@@ -328,6 +357,7 @@ def assemble_governed_bundle(
             f"{side} reported infrastructure failure {guest.failure_class!r}; "
             "an infrastructure outcome is never assemblable as scientific evidence"
         )
+    require_authentic_evidence(guest, side=side)
     try:
         payload = evaluator.parse_report(guest.report)
     except evaluator.EvaluatorError as exc:

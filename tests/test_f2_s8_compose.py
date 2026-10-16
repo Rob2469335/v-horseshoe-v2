@@ -99,6 +99,12 @@ def _report_bytes(root: Path, spec, side: str, xml: str) -> bytes:
     return out.read_bytes()
 
 
+#: Real (non-placeholder) evidence fields for the synthetic fixtures: the
+#: prospective contract refuses ``"<side> run log"`` and ``t0``/``t1``.
+_REAL_LOG = b"task_id=synthetic\nside=base\nstarted_at=2026-10-16T00:00:00Z\n"
+_TS0, _TS1 = "2026-10-16T00:00:00Z", "2026-10-16T00:00:01Z"
+
+
 def _execute(root: Path, spec, *, base_xml=JUNIT_BASE, gold_xml=JUNIT_GOLD, fail_side=None):
     def execute(_spec, side):
         if side == fail_side:
@@ -107,8 +113,8 @@ def _execute(root: Path, spec, *, base_xml=JUNIT_BASE, gold_xml=JUNIT_GOLD, fail
         xml = base_xml if side == "base" else gold_xml
         return GuestEvidence(
             report=_report_bytes(root, spec, side, xml),
-            run_log=f"{side} log".encode("utf-8"),
-            started_at="t0", finished_at="t1",
+            run_log=_REAL_LOG,
+            started_at=_TS0, finished_at=_TS1,
         )
     return execute
 
@@ -220,7 +226,8 @@ class TestFailClosed:
         with pytest.raises(S8ComposeError, match="authentic evaluator report"):
             assemble_governed_bundle(
                 spec=spec, side="base",
-                guest=GuestEvidence(report=tampered, run_log=b"x", started_at="", finished_at=""),
+                guest=GuestEvidence(report=tampered, run_log=_REAL_LOG,
+                                    started_at=_TS0, finished_at=_TS1),
                 inputs=_inputs(tmp_path),
             )
 
@@ -353,8 +360,8 @@ class TestJunitToAdmission:
             xml = JUNIT_BASE if side == "base" else JUNIT_GOLD
             return guest_evidence_from_junit(
                 spec=spec, side=side, junit_bytes=xml.encode("utf-8"),
-                run_log=f"{side} log".encode("utf-8"),
-                started_at="t0", finished_at="t1",
+                run_log=_REAL_LOG,
+                started_at=_TS0, finished_at=_TS1,
             )
 
         res = _run(tmp_path, spec, _inputs(tmp_path), execute)

@@ -225,7 +225,9 @@ class TestEndToEndHostPath:
         junit = tmp_path / f"out-{side}" / "evidence" / f"{spec.task_id}.junit.xml"
         return guest_evidence_from_junit(
             spec=spec, side=side, junit_bytes=junit.read_bytes(),
-            run_log=b"host-run", started_at="t0", finished_at="t1",
+            run_log=b"task_id=synthetic\nside=%s\nstarted_at=2026-10-16T00:00:00Z\n"
+                    % side.encode("utf-8"),
+            started_at="2026-10-16T00:00:00Z", finished_at="2026-10-16T00:00:01Z",
         )
 
     def test_reaches_admission_through_the_real_verifiers(self, tmp_path):
