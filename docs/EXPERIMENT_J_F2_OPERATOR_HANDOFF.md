@@ -206,10 +206,12 @@ base/gold execution evidence, so nothing is ADMITTED at the census tier. Separat
 the governed S8 ledger holds admitted records: **3 distinct tasks** in the operative
 chain (`openai__openai-agents-python-1633`, `-1636`, `python__mypy-19767`), or **4**
 if the corrective chain's `HypothesisWorks__hypothesis-4532` record is credited
-across chains. The cross-chain aggregate rule has **no authoritative in-repository
-source** (`GOVERNANCE GAP`); the operative-chain figure of 3 is the code-bound
-canonical count. Neither figure satisfies the **≥ 300 admitted pairs** target, and no
-count of candidates, attempts, or compatible classifications is an admission.
+across chains. The cross-chain counting rule is now recorded in-repository
+(`docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md`, owner-adopted 2026-10-16); the
+operative-chain figure of 3 remains the code-bound canonical count and both figures
+are always reported separately. Neither figure satisfies the **≥ 300 admitted pairs**
+target, and no count of candidates, attempts, or compatible classifications is an
+admission.
 
 **Shape is not authenticity.** Preflight validates the *syntax* of the governed
 values it is given (a 64-character lowercase SHA-256 for each state digest, base ≠

@@ -32,8 +32,14 @@ SHA-256 at registration. As of 2026-10-16:
 | 1 | Operative chain (the code-bound canonical count) | `C:\Users\rober\F2_EVIDENCE\s8\trusted_store\s8_pilot_ledger.jsonl` | `5fb0aa8eda37f220ea2fce5ca96688bb4a7edf94576b73b32b1678c1a1971430` |
 | 2 | Corrective chain (one sanctioned correction) | `C:\Users\rober\F2_EVIDENCE\s8\trusted_store\s8_pilot_ledger_corrected.jsonl` | `e030c05a21fd22baf840f80a9cbd4645dd6c1aa8492350281f563a835f96d5ae` |
 
-A chain that is not named above **does not credit**, and is reported as
-`unregistered_admitted` rather than silently added.
+A chain that is not named above **does not credit**. Note on enforcement: the helper
+currently reports `unregistered_admitted` for tasks **absent from the operative
+registration**; it does **not** yet enforce the chain-name allowlist or the SHA-256
+pins above in code, and it does not refuse an *unbound* cross-chain override (a
+second-chain admission for a task that already holds a terminal non-admitted record
+in an earlier chain, carrying no `correction_of_*` fields). Enforcing either is a
+change to the credited set and therefore **REQUIRES AUTHORIZATION**; §1's union rule
+is what the code implements today.
 
 ## 2. Cross-chain credit requires a proven binding
 
