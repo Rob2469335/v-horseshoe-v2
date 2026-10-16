@@ -7,6 +7,7 @@ produces a stable machine-readable result.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -257,6 +258,119 @@ class TestS8EnvChecking:
         cats = {f["category"] for f in rep["findings"] if f["id"].startswith("env.s8_")}
         assert cats <= {pf.READY, pf.OPERATOR_ACTION}
         assert pf.AUTHORIZATION not in cats
+
+
+class TestPreflightCompositionRootParity:
+    """Preflight and the ACTUAL S8 composition root must agree.
+
+    Preflight reports whether governed inputs are provisioned; the S8 governed
+    path (``f2_s8_compose.load_governance_from_env``) consumes the SAME process
+    environment.  If preflight reported every governed input ready while the
+    composition root refused -- or a ``.env`` value satisfied preflight but not
+    the composition root -- the readiness signal would be false.
+    """
+
+    GOVERNED = (
+        "SWARM_DISTILLER_MODEL", "SWARM_DISTILLER_WEIGHTS_DIGEST",
+        "SWARM_F2_EVALUATOR_ID", "SWARM_F2_EVALUATOR_VERSION",
+        "SWARM_F2_EVALUATOR_PROCEDURE", "SWARM_F2_EVALUATOR_IMPL",
+        "SWARM_F2_ARTIFACT_ROOT", "SWARM_F2_ARTIFACT_RETENTION_DAYS",
+        "SWARM_F2_EMIT_BUNDLE", "SWARM_F2_TASK_OUTCOME_REPORT",
+        "SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+        "SWARM_S8_GOLD_STATE_DIGEST",
+    )
+
+    def _governed_findings(self, report):
+        return {f["id"]: f for f in report["findings"]
+                if f["id"].startswith("env.")
+                and f["id"] not in ("env.controls", "env.receipt_key")}
+
+    def _provision(self, monkeypatch, tmp_path):
+        for name in self.GOVERNED:
+            monkeypatch.delenv(name, raising=False)
+        impl = str(Path(fe.__file__).resolve())
+        for name, value in (
+            ("SWARM_DISTILLER_MODEL", "robs4b"),
+            ("SWARM_DISTILLER_WEIGHTS_DIGEST", "a" * 64),
+            ("SWARM_F2_EVALUATOR_ID", fe.EVALUATOR_ID),
+            ("SWARM_F2_EVALUATOR_VERSION", fe.EVALUATOR_VERSION),
+            ("SWARM_F2_EVALUATOR_PROCEDURE", fe.PROCEDURE_ID),
+            ("SWARM_F2_EVALUATOR_IMPL", impl),
+            ("SWARM_F2_ARTIFACT_ROOT", str(tmp_path / "store")),
+            ("SWARM_F2_ARTIFACT_RETENTION_DAYS", "365"),
+            ("SWARM_F2_EMIT_BUNDLE", "1"),
+            ("SWARM_F2_TASK_OUTCOME_REPORT", str(tmp_path / "out.json")),
+            ("SWARM_S8_ENVIRONMENT_IDENTITY", "env-1"),
+            ("SWARM_S8_BASE_STATE_DIGEST", "b" * 64),
+            ("SWARM_S8_GOLD_STATE_DIGEST", "c" * 64),
+        ):
+            monkeypatch.setenv(name, value)
+
+    def test_all_governed_findings_ready_implies_the_composition_root_succeeds(
+        self, tmp_path, monkeypatch
+    ):
+        from qwen_train.f2_s8_compose import load_governance_from_env
+
+        self._provision(monkeypatch, tmp_path)
+        not_ready = {i: f["status"]
+                     for i, f in self._governed_findings(pf.run_preflight()).items()
+                     if f["category"] != pf.READY}
+        assert not not_ready, not_ready
+        inputs = load_governance_from_env()          # must not raise
+        assert inputs.environment_identity == "env-1"
+
+    def test_a_missing_s8_only_input_blocks_preflight_and_the_composition_root(
+        self, tmp_path, monkeypatch
+    ):
+        from qwen_train.f2_s8_compose import S8ComposeError, load_governance_from_env
+
+        self._provision(monkeypatch, tmp_path)
+        monkeypatch.delenv("SWARM_S8_GOLD_STATE_DIGEST", raising=False)
+        by = self._governed_findings(pf.run_preflight())
+        assert by["env.s8_gold_state_digest"]["category"] == pf.OPERATOR_ACTION
+        with pytest.raises(S8ComposeError):
+            load_governance_from_env()
+
+    def test_a_malformed_digest_blocks_preflight_and_the_composition_root(
+        self, tmp_path, monkeypatch
+    ):
+        from qwen_train.f2_s8_compose import S8ComposeError, load_governance_from_env
+
+        self._provision(monkeypatch, tmp_path)
+        monkeypatch.setenv("SWARM_S8_BASE_STATE_DIGEST", "not-hex")
+        by = self._governed_findings(pf.run_preflight())
+        assert by["env.s8_base_state_digest"]["status"] == "malformed"
+        with pytest.raises(S8ComposeError):
+            load_governance_from_env()
+
+    def test_a_dotenv_only_governed_input_blocks_the_cli_and_the_composition_root(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from qwen_train.f2_s8_compose import S8ComposeError, load_governance_from_env
+
+        repo_root = tmp_path / "repo"
+        (repo_root / "qwen_train").mkdir(parents=True, exist_ok=True)
+        (repo_root / ".env").write_text("\n".join([
+            "SWARM_F2_EVALUATOR_ID=" + fe.EVALUATOR_ID,
+            "SWARM_F2_EVALUATOR_IMPL=" + str(Path(fe.__file__).resolve()),
+            "SWARM_F2_ARTIFACT_ROOT=" + str(tmp_path / "store"),
+            "SWARM_S8_ENVIRONMENT_IDENTITY=env-1",
+            "SWARM_S8_BASE_STATE_DIGEST=" + "b" * 64,
+            "SWARM_S8_GOLD_STATE_DIGEST=" + "c" * 64,
+        ]) + "\n", encoding="utf-8")
+        for name in self.GOVERNED:
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setattr(
+            pf, "__file__", str(repo_root / "qwen_train" / "f2_preflight.py"))
+        monkeypatch.setattr(pf, "_provenance_findings", lambda *a, **k: [])
+
+        pf.main(["--json"])
+        by = self._governed_findings(json.loads(capsys.readouterr().out))
+        assert by["env.s8_environment_identity"]["category"] == pf.OPERATOR_ACTION
+        assert by["env.evaluator_id"]["category"] == pf.OPERATOR_ACTION
+        # ...and the composition root, reading the SAME process env, refuses.
+        with pytest.raises(S8ComposeError):
+            load_governance_from_env()
 
 
 class TestEnvControlsFinding:
