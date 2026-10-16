@@ -33,6 +33,7 @@ no subprocess, no Hyper-V, no network and no credential.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -472,22 +473,56 @@ def build_governed_verifiers(
         )
         return "pass" if ok else "fail"
 
+    def _refs_ok(refs: Mapping[str, Any]) -> bool:
+        """Every bound artifact ref must resolve and hash-match IN THE STORE."""
+        for ref in (refs or {}).values():
+            if not ref:
+                return False
+            try:
+                ok, _why = inputs.store.verify_ref(
+                    evidence.ArtifactRef(
+                        name=str(ref.get("name") or ""),
+                        digest=str(ref.get("sha256") or ""),
+                        size_bytes=int(ref.get("size_bytes") or 0),
+                        role=evidence.ROLE_TEST_OUTPUT,
+                    ),
+                    allowed_roles=(evidence.ROLE_TEST_OUTPUT,),
+                )
+            except Exception:  # noqa: BLE001 - fail closed
+                return False
+            if not ok:
+                return False
+        return True
+
     def verify_evidence(active: TaskSpec, _result: ExecutionResult) -> bool:
-        # Bind the ROW to the records it claims: the digest over the canonical
-        # base+gold records and the environment identity must agree with the
-        # result, or the evidence is not the evidence it says it is.
-        base_bytes = evidence._canonical_bytes(_record_for(base_bundle).to_dict())
-        gold_bytes = evidence._canonical_bytes(_record_for(gold_bundle).to_dict())
-        if hashlib.sha256(base_bytes + gold_bytes).hexdigest() != _result.evidence_record_digest:
+        # DISK-BACKED verification (audit TD-1): read the PERSISTED per-side
+        # EvidenceRecord files back from the trusted store and bind them to the
+        # row. Re-hashing an in-memory object against another in-memory object
+        # derived from the same variable would be a tautology that never notices a
+        # deleted, truncated or corrupted record on disk.
+        base_disk, _ = inputs.store.read_bytes(
+            f"{active.task_id}.base.evidence_record.json")
+        gold_disk, _ = inputs.store.read_bytes(
+            f"{active.task_id}.gold.evidence_record.json")
+        if base_disk is None or gold_disk is None:
+            return False
+        if hashlib.sha256(base_disk + gold_disk).hexdigest() != _result.evidence_record_digest:
+            return False
+        if not _refs_ok(_result.artifacts):
             return False
         if _result.environment_identity != inputs.environment_identity:
+            return False
+        try:
+            base_rec = evidence.EvidenceRecord.from_dict(json.loads(base_disk))
+            gold_rec = evidence.EvidenceRecord.from_dict(json.loads(gold_disk))
+        except Exception:  # noqa: BLE001 - fail closed
             return False
         verification = evidence.verify_task_evidence(
             task_id=active.task_id,
             repository=str(active.payload["repo"]),
             base_commit=str(active.payload["base_commit"]),
-            base_evidence=_record_for(base_bundle),
-            gold_evidence=_record_for(gold_bundle),
+            base_evidence=base_rec,
+            gold_evidence=gold_rec,
             artifact_root=inputs.store.root,
             authorized_evaluators=inputs.registry.as_s8_allowlist(),
         )

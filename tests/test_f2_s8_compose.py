@@ -374,3 +374,69 @@ class TestJunitToAdmission:
             guest_evidence_from_junit(
                 spec=spec, side="base", junit_bytes=b"", run_log=b"x",
             )
+
+
+class TestDiskBackedEvidenceVerification:
+    """Audit TD-1: the verifier must read the PERSISTED records back from the store.
+
+    Re-hashing an in-memory object against another in-memory object derived from
+    the same variable is a tautology; a deleted, corrupted or tampered bundle must
+    fail verification.
+    """
+
+    def _bundles_and_result(self, root, spec):
+        from qwen_train.f2_s8_compose import (
+            _result_from_bundles, assemble_governed_bundle, build_governed_verifiers,
+        )
+
+        inputs = _inputs(root)
+        execute = _execute(root, spec)
+        base_b = assemble_governed_bundle(
+            spec=spec, side="base", guest=execute(spec, "base"), inputs=inputs)
+        gold_b = assemble_governed_bundle(
+            spec=spec, side="gold", guest=execute(spec, "gold"), inputs=inputs)
+        result = _result_from_bundles(spec, base_b, gold_b, attempt=1,
+                                      repository_revision="a" * 40)
+        verifiers = build_governed_verifiers(
+            spec=spec, inputs=inputs, base_bundle=base_b, gold_bundle=gold_b)
+        return inputs, result, verifiers
+
+    def test_a_healthy_bundle_verifies(self, tmp_path):
+        root = tmp_path / "c"
+        root.mkdir()
+        spec = _spec()
+        _inp, result, (evaluate, verify_evidence, verify_pair) = \
+            self._bundles_and_result(root, spec)
+        assert evaluate(spec, result) == "pass"
+        assert verify_evidence(spec, result) is True
+        assert verify_pair(spec, result) is True
+
+    def test_a_deleted_persisted_record_fails_verification(self, tmp_path):
+        root = tmp_path / "c"
+        root.mkdir()
+        spec = _spec()
+        inputs, result, (_, verify_evidence, _) = self._bundles_and_result(root, spec)
+        (inputs.store.root / f"{spec.task_id}.gold.evidence_record.json").unlink()
+        assert verify_evidence(spec, result) is False
+
+    def test_a_corrupted_persisted_record_fails_verification(self, tmp_path):
+        root = tmp_path / "c"
+        root.mkdir()
+        spec = _spec()
+        inputs, result, (_, verify_evidence, _) = self._bundles_and_result(root, spec)
+        p = inputs.store.root / f"{spec.task_id}.base.evidence_record.json"
+        p.write_bytes(p.read_bytes() + b" ")          # still parses, no longer binds
+        assert verify_evidence(spec, result) is False
+
+    def test_a_tampered_artifact_ref_fails_verification(self, tmp_path):
+        import dataclasses
+
+        root = tmp_path / "c"
+        root.mkdir()
+        spec = _spec()
+        _inp, result, (_, verify_evidence, _) = self._bundles_and_result(root, spec)
+        artifacts = dict(result.artifacts)
+        artifacts["base_run_log"] = {"name": "base_run_log.bin",
+                                     "sha256": "0" * 64, "size_bytes": 1}
+        tampered = dataclasses.replace(result, artifacts=artifacts)
+        assert verify_evidence(spec, tampered) is False

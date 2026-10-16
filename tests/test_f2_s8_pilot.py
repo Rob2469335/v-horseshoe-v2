@@ -955,3 +955,35 @@ class TestLedgerRefusalIsAClassifiedOutcome:
         assert (out / "t1.refused.txt").is_file()
         assert not list(out.glob("*.fault.txt")), "a refusal is not a driver fault"
         assert payload["totals"]["infrastructure_invalid"] >= 0
+
+
+class TestGuestOutputReachesTheRunLog:
+    """Audit TD-2 seam: the guest's echoed execution summary must land in the
+    persisted run log (guest `_emit_execution_summary` -> host `_execution_log`)."""
+
+    def test_the_guest_summary_is_embedded_in_the_run_log(self, capsys):
+        import json as _json
+
+        from qwen_train import f2_s8_guest as G
+        from qwen_train.f2_s8_pilot import MAX_LOG_BYTES, _execution_log
+
+        G._emit_execution_summary(G.CommandResult(
+            exit_status=1, stdout=b"1 failed, 88 passed in 3.1s\n", stderr=b"boom\n"))
+        guest_stdout = capsys.readouterr().out
+
+        log = _execution_log(
+            side="gold", task_id="t-1", command="pytest -q", stdout=guest_stdout,
+            stderr="", provenance={"exit_status": 1, "timed_out": False,
+                                   "junit_present": True},
+            artifact={"name": "t-1.gold.junit.xml", "sha256": "a" * 64,
+                      "size_bytes": 10},
+            started_at="2026-10-16T00:00:00Z", finished_at="2026-10-16T00:00:01Z",
+        )
+        assert b"guest_execution" in log
+        assert b"1 failed, 88 passed" in log
+        assert len(log) <= MAX_LOG_BYTES
+        # The embedded summary is valid JSON (it was never sliced in half).
+        embedded = _json.loads(log.decode("utf-8").split("--- stdout ---")[1]
+                               .split("--- stderr ---")[0].strip())
+        assert embedded["guest_execution"]["stdout_total_bytes"] == 28
+        assert embedded["guest_execution"]["stderr"] == "boom\n"
