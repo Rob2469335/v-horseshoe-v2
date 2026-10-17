@@ -141,15 +141,35 @@ class TestValidRequestStillRequiresAuthorization:
         }), encoding="utf-8")
         return d
 
+    def test_a_built_entry_without_a_workspace_is_refused_before_consumption(self, tmp_path):
+        """A selected entry must be able to supply its workspace.
+
+        `build_specs` accepts any object with status="built", but `per_task_env`
+        reads `entry["workspace"]` once per task *after* consumption -- so a built
+        entry carrying no workspace consumed the single-use grant and then aborted
+        the whole run with a KeyError. Refused here, before consumption.
+        """
+        msg = _run(tmp_path, manifest_text=json.dumps({"t1": {"status": "built"}}),
+                   inputs_dir=self._inputs(tmp_path))
+        assert "workspace" in msg, msg
+        assert "No grant was consumed" in msg
+        assert "authorization" not in msg.lower(), (
+            f"validation must precede consumption; got {msg!r}")
+
     def test_valid_manifest_passes_validation_and_is_refused_later(self, tmp_path):
         """A valid request must NOT be refused by validation, and must still be
         refused by a later gate (readiness or authorization). Nothing here is
         consumed: with no governed env the run is refused BEFORE consumption --
         which is the point of the correction."""
-        msg = _run(tmp_path, manifest_text=json.dumps({"t1": {"status": "built"}}),
+        msg = _run(tmp_path,
+                   manifest_text=json.dumps(
+                       {"t1": {"status": "built",
+                               "workspace": str(tmp_path / "ws")}}),
                    inputs_dir=self._inputs(tmp_path))
         assert "zero runnable tasks" not in msg, (
             f"a valid build manifest must pass validation; got {msg!r}")
+        assert "no 'workspace'" not in msg, (
+            f"a well-formed built entry must pass validation; got {msg!r}")
         low = msg.lower()
         assert any(k in low for k in (
             "authorization", "s8-001", "governance", "trusted", "env", "swarm_")), (

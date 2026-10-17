@@ -316,6 +316,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             "full task records (with test_cmds/FAIL_TO_PASS). No grant was consumed."
         )
 
+    # A selected entry must be able to SUPPLY its workspace. `build_specs` accepts
+    # any object with status="built", but `per_task_env` reads entry["workspace"]
+    # once per task AFTER consumption -- so a built entry carrying no workspace
+    # consumed the single-use grant and then crashed the whole run with a KeyError
+    # (outside the per-task try, so it aborted every remaining task too). That is
+    # the same defect class as the ordering above: a readiness failure must never
+    # burn the grant. Refused here, before consumption and before any guest work.
+    missing_workspace = sorted(
+        spec.task_id for spec in specs
+        if not str((manifest.get(spec.task_id) or {}).get("workspace") or "").strip()
+    )
+    if missing_workspace:
+        raise SystemExit(
+            "REFUSING: built manifest entr(y/ies) carry no 'workspace', so the task "
+            f"environment cannot be resolved (manifest={args.manifest!r}, "
+            f"tasks={missing_workspace!r}). The manifest is the Stage-1 deliverable; "
+            "rebuild those tasks. No grant was consumed."
+        )
+
     # Fail closed before touching the guest: the governed path needs a real
     # trusted store and a real authorized evaluator, none of which this module
     # invents. This is a readiness precondition, so it must also run BEFORE

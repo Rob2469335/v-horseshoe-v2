@@ -29,8 +29,13 @@ def _gates(tmp_path: Path) -> Path:
 
 def _manifest(tmp_path: Path, name: str = "build_manifest.json") -> Path:
     p = tmp_path / name
-    p.write_text(json.dumps({"openai__openai-agents-python-1636": {"status": "built"}}),
-                 encoding="utf-8")
+    # A built entry must also carry a `workspace` (the runner refuses one that
+    # cannot supply its task environment BEFORE consuming the grant), so the
+    # manifest here must be otherwise well-formed for these authorization tests.
+    p.write_text(json.dumps(
+        {"openai__openai-agents-python-1636": {
+            "status": "built", "workspace": str(tmp_path / "ws")}}),
+        encoding="utf-8")
     return p
 
 
