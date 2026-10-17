@@ -2582,7 +2582,11 @@ workspace entered the runnable set the S8-001 grant is bound to.
    atomic, still single-use, still before any guest work, and the consumed binding
    (`candidate_manifest_digest`, `registration_sha256`) is unchanged. `build_specs`
    no longer treats a non-object manifest value (a scheduler/planning document) as a
-   per-task entry. Every refusal states that no grant was consumed.
+   per-task entry. Every refusal states that no grant was consumed. A selected
+   `status="built"` entry that carries no `workspace` is refused by the same
+   non-consuming precondition: `per_task_env` reads `entry["workspace"]` once per
+   task **after** consumption, so such an entry previously consumed the grant and
+   then aborted the run with a `KeyError` raised outside the per-task handler.
    *Tests:* `tests/test_f2_s8_runner_validation_order.py` (new),
    `tests/test_f2_s8_pilot_live_authorization.py`.
 2. **Evidence-role check made non-vacuous** (`qwen_train/f2_s8_compose.py`).
