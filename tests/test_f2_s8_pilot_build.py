@@ -10,6 +10,7 @@ be pointed at a phase's own inputs without disturbing the pilot's defaults.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -114,3 +115,107 @@ class TestDeclaredCommandAndUvOwnership:
         }
         for task_id, command in commands.items():
             assert uses_uv_environment(command) == (task_id in UV_ALL_EXTRAS)
+
+
+class TestManifestIsScopedToTheRun:
+    """The written manifest names EXACTLY the tasks this run built.
+
+    The builder previously merged into whatever manifest was already on disk, so a
+    subset build silently carried forward every earlier ``status="built"`` entry.
+    The runner selects every ``status="built"`` entry
+    (``f2_s8_pilot_live.build_specs``), so a stale entry put an unbuilt or
+    unauthorized workspace into the runnable set the single-use S8-001 grant is
+    bound to. The manifest is the Stage-1 deliverable the grant binds; it must not
+    accumulate entries this run did not build.
+    """
+
+    @staticmethod
+    def _stub_build(monkeypatch) -> None:
+        """Replace the real clone/venv build -- these tests must never touch a network."""
+        from qwen_train import f2_s8_pilot_build as pb
+
+        monkeypatch.setattr(
+            pb, "resolve_repo_url",
+            lambda task_id, inputs: f"https://github.com/example/{task_id}.git")
+        monkeypatch.setattr(
+            pb, "build",
+            lambda task_id, url, **kw: {
+                "task_id": task_id,
+                "workspace": str(Path(kw["inputs"]).parent / task_id),
+                "base_commit": "a" * 40,
+                "elapsed_s": 0,
+            })
+
+    @staticmethod
+    def _argv(tmp_path) -> list[str]:
+        return [
+            "--manifest", str(tmp_path / "build_manifest.json"),
+            "--inputs", str(tmp_path / "inputs"),
+            "--patches", str(tmp_path / "patches"),
+        ]
+
+    def test_a_stale_built_entry_is_not_carried_forward(self, tmp_path, monkeypatch, capsys):
+        from qwen_train.f2_s8_pilot_build import main
+
+        (tmp_path / "inputs").mkdir()
+        (tmp_path / "patches").mkdir()
+        manifest = tmp_path / "build_manifest.json"
+        manifest.write_text(json.dumps({
+            "stale__task-1": {"status": "built", "workspace": "C:\\f2_pilot\\stale"},
+            "built__task-2": {"status": "built", "workspace": "C:\\f2_pilot\\old"},
+        }), encoding="utf-8")
+        self._stub_build(monkeypatch)
+
+        assert main(self._argv(tmp_path) + ["built__task-2"]) == 0
+
+        written = json.loads(manifest.read_text(encoding="utf-8"))
+        assert set(written) == {"built__task-2"}, written
+        assert written["built__task-2"]["status"] == "built"
+        assert "NOT CARRIED FORWARD" in capsys.readouterr().out
+
+    def test_the_manifest_names_only_this_runs_tasks(self, tmp_path, monkeypatch):
+        from qwen_train.f2_s8_pilot_build import main
+
+        (tmp_path / "inputs").mkdir()
+        (tmp_path / "patches").mkdir()
+        self._stub_build(monkeypatch)
+
+        assert main(self._argv(tmp_path) + ["built__task-2"]) == 0
+        assert main(self._argv(tmp_path) + ["built__task-3"]) == 0
+
+        written = json.loads(
+            (tmp_path / "build_manifest.json").read_text(encoding="utf-8"))
+        assert set(written) == {"built__task-3"}, written
+
+    def test_a_failed_task_is_recorded_not_dropped(self, tmp_path, monkeypatch):
+        from qwen_train import f2_s8_pilot_build as pb
+
+        (tmp_path / "inputs").mkdir()
+        (tmp_path / "patches").mkdir()
+        monkeypatch.setattr(pb, "resolve_repo_url",
+                            lambda task_id, inputs: "https://example/r.git")
+
+        def _boom(task_id, url, **kw):
+            raise RuntimeError("clone failed")
+
+        monkeypatch.setattr(pb, "build", _boom)
+        assert pb.main(self._argv(tmp_path) + ["built__task-2"]) == 0
+
+        written = json.loads(
+            (tmp_path / "build_manifest.json").read_text(encoding="utf-8"))
+        assert written["built__task-2"]["status"] == "build_failure"
+        assert "clone failed" in written["built__task-2"]["detail"]
+
+    def test_an_unreadable_manifest_is_replaced_not_merged(self, tmp_path, monkeypatch):
+        """A corrupt manifest must not abort the run nor be merged forward."""
+        from qwen_train.f2_s8_pilot_build import main
+
+        (tmp_path / "inputs").mkdir()
+        (tmp_path / "patches").mkdir()
+        (tmp_path / "build_manifest.json").write_text('{"a": ', encoding="utf-8")
+        self._stub_build(monkeypatch)
+
+        assert main(self._argv(tmp_path) + ["built__task-2"]) == 0
+        written = json.loads(
+            (tmp_path / "build_manifest.json").read_text(encoding="utf-8"))
+        assert set(written) == {"built__task-2"}, written

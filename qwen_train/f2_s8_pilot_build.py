@@ -355,9 +355,31 @@ def main(argv=None) -> int:
     manifest_path = Path(args.manifest)
     inputs = Path(args.inputs)
     patches = Path(args.patches)
-    manifest = {}
+
+    # The manifest this run writes describes EXACTLY the tasks this run was asked
+    # to build. Merging into whatever manifest was already on disk let a subset
+    # build carry every earlier ``status="built"`` entry forward -- and the runner
+    # selects every ``status="built"`` entry, so a stale or unauthorized workspace
+    # entered the runnable set that the single-use S8-001 grant is bound to
+    # (docs/EXPERIMENT_J_F2_S8_EXECUTION_REVISION_AND_CHECKOUT_PLAN.md §3.4). A
+    # manifest is the Stage-1 deliverable the grant binds; it must not accumulate
+    # entries this authorization did not name.
+    carried_forward: list[str] = []
     if manifest_path.is_file():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        try:
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - unreadable is not a licence to merge
+            previous = {}
+        if isinstance(previous, dict):
+            requested = set(ids)
+            carried_forward = sorted(str(k) for k in previous if k not in requested)
+    if carried_forward:
+        print(
+            "NOT CARRIED FORWARD (not part of this run, so not part of the manifest "
+            "the grant binds): " + ", ".join(carried_forward),
+            flush=True,
+        )
+    manifest: dict[str, Any] = {}
 
     for task_id in ids:
         url = resolve_repo_url(task_id, inputs)
