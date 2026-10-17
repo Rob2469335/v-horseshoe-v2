@@ -43,7 +43,11 @@ from typing import Any, Callable, Mapping
 from qwen_train import f2_evaluator as evaluator
 from qwen_train import f2_evidence as evidence
 from qwen_train import f2_governance as governance
-from qwen_train.f2_s8_factory import ADMITTED_OUTCOME, ExecutionResult
+from qwen_train.f2_s8_factory import (
+    ADMITTED_OUTCOME,
+    REQUIRED_EVIDENCE_ROLES,
+    ExecutionResult,
+)
 from qwen_train.f2_s8_runner import publish_atomic
 from qwen_train.f2_s8_session import (
     SessionError,
@@ -474,8 +478,18 @@ def build_governed_verifiers(
         return "pass" if ok else "fail"
 
     def _refs_ok(refs: Mapping[str, Any]) -> bool:
-        """Every bound artifact ref must resolve and hash-match IN THE STORE."""
-        for ref in (refs or {}).values():
+        """Every bound artifact ref must resolve and hash-match IN THE STORE.
+
+        The mapping KEY is the artifact's evidence role (the factory iterates the
+        same way), and it is passed through rather than pinned to one constant.
+        ``TrustedArtifactStore.verify_ref`` performs NO stored-role comparison --
+        its role test is only ``ref.role in allowed_roles`` -- so hard-coding a
+        single role for both sides makes that test vacuous for every ref. The
+        allowed set is the closed ``REQUIRED_EVIDENCE_ROLES``, so a ref whose key
+        is not a required evidence role fails closed instead of being silently
+        re-labelled as the one hard-coded role.
+        """
+        for role, ref in (refs or {}).items():
             if not ref:
                 return False
             try:
@@ -484,9 +498,9 @@ def build_governed_verifiers(
                         name=str(ref.get("name") or ""),
                         digest=str(ref.get("sha256") or ""),
                         size_bytes=int(ref.get("size_bytes") or 0),
-                        role=evidence.ROLE_TEST_OUTPUT,
+                        role=str(role),
                     ),
-                    allowed_roles=(evidence.ROLE_TEST_OUTPUT,),
+                    allowed_roles=tuple(REQUIRED_EVIDENCE_ROLES),
                 )
             except Exception:  # noqa: BLE001 - fail closed
                 return False

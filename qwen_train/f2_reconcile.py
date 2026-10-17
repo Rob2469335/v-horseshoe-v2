@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import collections
+import os
 from pathlib import Path
 
 from qwen_train.f2_population_build import source_to_screen_row, _payload_key
@@ -34,6 +35,81 @@ SOURCES = [
 ]
 
 REG_MANIFEST = ROOT / "qwen_train" / "curriculum" / "f2_registration" / "registration_manifest.json"
+
+#: Registered-chain root. The chains live OUTSIDE the repository (they are
+#: governed evidence, not code), so the root is not derived from ROOT. It is
+#: overridable so this tool is not welded to one host.
+_DEFAULT_TRUSTED_STORE = Path(r"C:\Users\rober\F2_EVIDENCE\s8\trusted_store")
+
+
+def _trusted_store_root() -> Path:
+    return Path(os.environ.get("SWARM_F2_TRUSTED_STORE") or _DEFAULT_TRUSTED_STORE)
+
+
+def _admission_accounting(census_admitted: int) -> dict:
+    """The counting rule's own figures, kept strictly separate from the census.
+
+    ``docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md`` measures the target as the
+    DEDUPLICATED CREDITED UNION across the registered chains -- never the
+    registration/census count, never metadata eligibility, and never a raw ledger
+    row count. Read-only: the registered chains are verified by the reconciler,
+    which fails closed on a malformed chain, an unregistered name or a broken
+    digest chain.
+
+    When the chains cannot be read the ledger figures are ``None`` WITH a reason.
+    They are NEVER defaulted to ``0``: "not measured" and "zero admitted" are
+    different claims, and conflating them is the defect this field exists to
+    remove.
+    """
+    out = {
+        "basis": "docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md",
+        "target": 300,
+        "census_admitted": census_admitted,
+        "operative_ledger_admissions": None,
+        "corrective_ledger_admissions": None,
+        "credited_admission_union": None,
+        "remaining_to_target": None,
+        "refused_terminal_overrides": None,
+        "verified_corrections": None,
+        "unavailable_reason": "",
+    }
+    try:
+        from qwen_train.f2_s8_batch import (
+            REGISTERED_CHAINS,
+            reconcile_admissions_across_chains,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        out["unavailable_reason"] = f"admission reconciler unavailable: {exc}"
+        return out
+    store = _trusted_store_root()
+    chains = [store / name for name in REGISTERED_CHAINS]
+    missing = [str(p) for p in chains if not p.is_file()]
+    if missing:
+        out["unavailable_reason"] = ("registered chain(s) not present: "
+                                     + ", ".join(missing))
+        return out
+    try:
+        # The universe is the chains' own task ids: the chains are the registered
+        # admission record, and this tool has no separate task universe.
+        registered = sorted({
+            json.loads(line)["task_id"]
+            for p in chains
+            for line in p.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        })
+        rec = reconcile_admissions_across_chains(chains, registered)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        out["unavailable_reason"] = f"registered chains did not reconcile: {exc}"
+        return out
+    credited = int(rec["credited_count"])
+    operative = len(rec["operative_admitted"])
+    out["operative_ledger_admissions"] = operative
+    out["corrective_ledger_admissions"] = max(0, credited - operative)
+    out["credited_admission_union"] = credited
+    out["remaining_to_target"] = max(0, 300 - credited)
+    out["refused_terminal_overrides"] = len(rec["refused_terminal_override"])
+    out["verified_corrections"] = rec["corrections_verified"]
+    return out
 
 
 def _sha256_file(p: Path) -> str:
@@ -221,7 +297,14 @@ def main() -> int:
         json.dumps(recon, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     # ---------------------------- capacity report ---------------------------
-    admitted = reg_manifest["counts"].get("admitted", 0)
+    # `admitted` comes from the REGISTRATION manifest, which carries no
+    # "admitted" key: registration is an INPUT candidate count, and eligibility
+    # never depends on a run outcome. The `.get(..., 0)` therefore means "this
+    # manifest does not measure admission", NOT "zero were admitted". The two are
+    # different questions and are reported separately below.
+    census_admitted = reg_manifest["counts"].get("admitted", 0)
+    admission_accounting = _admission_accounting(census_admitted)
+    analyzable = 0
     capacity = {
         "schema": "f2_capacity_report_v1",
         "counts_distinct": {
@@ -232,12 +315,15 @@ def main() -> int:
             "metadata_eligible": len(meta_eligible),
             "evaluator_compatible": len(evaluator_ok),
             "registered": len(registered),
-            "admitted": admitted,
-            "analyzable_pairs": 0,
+            # CENSUS screening figure only (registration manifest). It is NOT the
+            # admission count -- see `admission_accounting` for that.
+            "admitted": census_admitted,
+            "analyzable_pairs": analyzable,
             "completed_pairs": 0,
         },
+        "admission_accounting": admission_accounting,
         "target_analyzable_pairs": 300,
-        "shortfall_to_300_analyzable": 300,
+        "shortfall_to_300_analyzable": max(0, 300 - analyzable),
         "pool_sufficient_under_eligibility": len(registered) >= 300,
         "pool_sufficiency_evidence": (
             f"{len(registered)} registered pytest-compatible candidates >= 300 target; "

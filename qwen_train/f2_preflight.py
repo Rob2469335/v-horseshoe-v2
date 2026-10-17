@@ -472,7 +472,152 @@ def _env_control_findings(
     )]
 
 
-def _evidence_findings(root: Path) -> list[Finding]:
+def _s8_base_gold_finding(s8_evidence: Any) -> Finding:
+    """``evidence.s8_base_gold`` -- verified by the AUTHORITATIVE verifier.
+
+    A supplied document is a mapping ``{"tasks": [ {task_id, repository,
+    base_commit, base_evidence, gold_evidence, artifact_root?,
+    authorized_evaluators?, expected_gold_state_digest?}, ... ]}``. Each pair is
+    run through ``qwen_train.f2_evidence.verify_task_evidence`` -- the same
+    machine-verifiable contract the S8 screen uses. Presence of a document, a
+    ledger count, or a bare digest is NEVER accepted as provenance: a digest
+    establishes integrity only. Anything unreadable, malformed, or unverified
+    leaves the gate BLOCKED.
+    """
+    ident = "evidence.s8_base_gold"
+    default_detail = (
+        "no verified base/gold execution pair is present; S8 requires real "
+        "base=FAIL and gold=PASS executions with retained output, run log and "
+        "evaluator bytes")
+    default_action = (
+        "run the authorized base and gold executions and retain the evidence in "
+        "the trusted store")
+    if s8_evidence is None:
+        return Finding(EXTERNAL_EVIDENCE, ident, "absent", default_detail,
+                       default_action)
+    try:
+        if isinstance(s8_evidence, (str, Path)):
+            doc = json.loads(Path(s8_evidence).read_text(encoding="utf-8"))
+        else:
+            doc = dict(s8_evidence)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unreadable",
+                       f"the supplied S8 evidence could not be read ({exc})",
+                       default_action)
+    tasks = doc.get("tasks") if isinstance(doc, Mapping) else None
+    if not isinstance(tasks, list) or not tasks:
+        return Finding(EXTERNAL_EVIDENCE, ident, "unusable",
+                       "the supplied S8 evidence carries no non-empty 'tasks' list",
+                       default_action)
+    try:
+        from qwen_train.f2_evidence import verify_task_evidence
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable",
+                       f"the S8 evidence verifier is unavailable ({exc})",
+                       default_action)
+
+    verified: list[str] = []
+    rejected: list[str] = []
+    for entry in tasks:
+        if not isinstance(entry, Mapping):
+            rejected.append("<non-object task entry>")
+            continue
+        tid = str(entry.get("task_id") or "")
+        try:
+            verdict = verify_task_evidence(
+                task_id=tid,
+                repository=str(entry.get("repository") or ""),
+                base_commit=str(entry.get("base_commit") or ""),
+                base_evidence=entry.get("base_evidence"),
+                gold_evidence=entry.get("gold_evidence"),
+                artifact_root=entry.get("artifact_root"),
+                authorized_evaluators=entry.get("authorized_evaluators"),
+                expected_gold_state_digest=entry.get("expected_gold_state_digest"),
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            rejected.append(f"{tid or '?'}: verifier error: {exc}")
+            continue
+        if verdict.ok:
+            verified.append(tid or "?")
+        else:
+            rejected.append(f"{tid or '?'}: {verdict.state}: {verdict.detail}")
+    if not verified:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverified",
+            f"0 of {len(tasks)} supplied base/gold pair(s) verified; "
+            f"first rejection: {rejected[0] if rejected else 'none'}",
+            default_action)
+    return Finding(
+        READY, ident, "present",
+        f"{len(verified)} base/gold pair(s) verified (base=FAIL, gold=PASS) by "
+        f"qwen_train.f2_evidence.verify_task_evidence; "
+        f"{len(rejected)} rejected",
+        "")
+
+
+def _population_admission_finding(
+    ledgers: Sequence[Path | str] | None,
+    registered_tasks: Sequence[str] | None,
+) -> Finding:
+    """``population.admission`` -- the counting rule's own implementation.
+
+    Admission is measured ONLY by ``f2_s8_batch.reconcile_admissions_across_chains``
+    (``docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md``). Registration or
+    metadata eligibility is NEVER counted as admission, and the credited union --
+    not a raw ledger row count -- is the figure compared against the target.
+    Every chain is verified by the reconciler first; a malformed chain, an
+    unregistered name, or a broken digest chain leaves the gate BLOCKED.
+    """
+    ident = "population.admission"
+    action = ("produce S8 base/gold evidence for the metadata-eligible tasks so "
+              "they can be admitted")
+    if not ledgers:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "insufficient",
+            "population acquisition IS authorized (F2-IMPL-AUTH-028/029/031); no "
+            "admission ledger was supplied, so admission is NOT established "
+            "(pass --admission-ledger, and --registered-tasks, to evaluate the "
+            "registered chains)",
+            action)
+    if not registered_tasks:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unusable",
+            "an admission ledger was supplied without --registered-tasks, so the "
+            "registered task universe the counting rule reconciles against cannot "
+            "be established",
+            action)
+    try:
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable",
+                       f"the admission reconciler is unavailable ({exc})", action)
+    try:
+        out = reconcile_admissions_across_chains(
+            [Path(p) for p in ledgers], list(registered_tasks))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverifiable",
+            f"the supplied admission ledger(s) did not reconcile ({exc})", action)
+    credited = int(out["credited_count"])
+    operative = len(out["operative_admitted"])
+    remaining = max(0, 300 - credited)
+    detail = (
+        f"operative-chain admissions {operative}; credited union {credited} "
+        f"(each task once); remaining to 300 = {remaining}; "
+        f"refused terminal overrides {len(out['refused_terminal_override'])}; "
+        f"verified corrections {out['corrections_verified']}")
+    if credited >= 300:
+        return Finding(READY, ident, "sufficient", detail, "")
+    return Finding(EXTERNAL_EVIDENCE, ident, "insufficient", detail, action)
+
+
+def _evidence_findings(
+    root: Path,
+    *,
+    ledgers: Sequence[Path | str] | None = None,
+    registered_tasks: Sequence[str] | None = None,
+    s8_evidence: Any = None,
+) -> list[Finding]:
     """External evidence and authorization gates that no repository change can
     satisfy.
 
@@ -483,25 +628,23 @@ def _evidence_findings(root: Path) -> list[Finding]:
     by :func:`_q9_findings`. Listing ``evidence.q9_attestation`` here as a fixed
     ``not_supplied`` gate produced a report in which the same id appeared twice
     -- once permanently ``not_supplied`` and once ``verified``.
+
+    ``ledgers`` / ``registered_tasks`` / ``s8_evidence`` are OPTIONAL, EXPLICIT
+    inputs. With none supplied the findings are exactly the fail-closed defaults
+    (and the pinning tests assert that). When supplied, each gate is evaluated by
+    the AUTHORITATIVE path -- never by a literal, and never by presence alone. A
+    malformed ledger, a missing store, an invalid hash or an unverified record
+    leaves the gate BLOCKED; a positive ledger count never establishes base/gold
+    provenance.
     """
     return [
-        Finding(EXTERNAL_EVIDENCE, "evidence.s8_base_gold", "absent",
-                "no verified base/gold execution pair is present; S8 requires "
-                "real base=FAIL and gold=PASS executions with retained output, "
-                "run log and evaluator bytes",
-                "run the authorized base and gold executions and retain the "
-                "evidence in the trusted store"),
+        _s8_base_gold_finding(s8_evidence),
         Finding(EXTERNAL_EVIDENCE, "evidence.active_lesson", "absent",
                 "no genuine ACTIVE lesson is established, so T cannot be frozen "
                 "and X cannot be derived from it",
                 "perform the authorized clean-room learning event (requires Q9 "
                 "isolation, the receipt key, and an admitted population)"),
-        Finding(EXTERNAL_EVIDENCE, "population.admission", "insufficient",
-                "population acquisition IS authorized (F2-IMPL-AUTH-028/029/031); "
-                "0 tasks are ADMITTED because S8 base/gold execution evidence is "
-                "absent (see evidence.s8_base_gold)",
-                "produce S8 base/gold evidence for the metadata-eligible tasks so "
-                "they can be admitted"),
+        _population_admission_finding(ledgers, registered_tasks),
         Finding(NOT_EXECUTED, "run.q10_calibration", "not_executed",
                 "calibration (Q10) is implemented but was not executed; it is not "
                 "authorized in this repository state",
@@ -784,6 +927,9 @@ def run_preflight(
     conversion_record: Path | Mapping[str, Any] | str | None = None,
     env: dict[str, str] | None = None,
     adapter_controls: dict[str, str] | None = None,
+    ledgers: Sequence[Path | str] | None = None,
+    registered_tasks: Sequence[str] | None = None,
+    s8_evidence: Path | Mapping[str, Any] | str | None = None,
 ) -> dict[str, Any]:
     """Run every preflight check and return a deterministic report.
 
@@ -811,7 +957,9 @@ def run_preflight(
     findings += _env_findings()
     findings += _s8_env_findings()
     findings += _env_control_findings(repo, adapter_controls=adapter_controls)
-    findings += _evidence_findings(repo)
+    findings += _evidence_findings(repo, ledgers=ledgers,
+                                   registered_tasks=registered_tasks,
+                                   s8_evidence=s8_evidence)
     # Q9: the privileged control and its attestation evidence are one gate,
     # VERIFIED (never trusted) from the single supplied artifact, with the host
     # capture the consuming gate also takes.
@@ -957,6 +1105,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                          "supplied attestation (requires --attestation)")
     ap.add_argument("--conversion-record", default=None,
                     help="path to a conversion record JSON to verify")
+    ap.add_argument("--admission-ledger", action="append", default=None,
+                    help="registered admission ledger chain (repeatable, in "
+                         "registration order); requires --registered-tasks. "
+                         "Admissions are then measured by "
+                         "f2_s8_batch.reconcile_admissions_across_chains")
+    ap.add_argument("--registered-tasks", default=None,
+                    help="path to a JSON list of registered task ids (the universe "
+                         "the counting rule reconciles against)")
+    ap.add_argument("--s8-evidence", default=None,
+                    help="path to a JSON document {\"tasks\": [...]} of S8 base/gold "
+                         "evidence records to verify with "
+                         "qwen_train.f2_evidence.verify_task_evidence")
     ap.add_argument("--provenance", action="store_true",
                     help="print only the conversion-chain verdict")
     args = ap.parse_args(list(argv) if argv is not None else None)
@@ -968,6 +1128,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.admission_ledger and not args.registered_tasks:
+        print(
+            "error: --admission-ledger requires --registered-tasks: the counting "
+            "rule reconciles the credited union against the registered task "
+            "universe, so a ledger alone cannot establish admission",
+            file=sys.stderr,
+        )
+        return 2
+
+    registered_tasks = None
+    if args.registered_tasks:
+        try:
+            registered_tasks = json.loads(
+                Path(args.registered_tasks).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            print(f"error: --registered-tasks could not be read ({exc})",
+                  file=sys.stderr)
+            return 2
+        if not isinstance(registered_tasks, list):
+            print("error: --registered-tasks must be a JSON list of task ids",
+                  file=sys.stderr)
+            return 2
 
     root = Path(__file__).resolve().parents[1]
     _load_operator_env(root)
@@ -984,7 +1167,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     report = run_preflight(root=root, attestation=att,
                            enforcement_capture=cap,
-                           conversion_record=conv_path)
+                           conversion_record=conv_path,
+                           ledgers=args.admission_ledger,
+                           registered_tasks=registered_tasks,
+                           s8_evidence=(Path(args.s8_evidence)
+                                        if args.s8_evidence else None))
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
