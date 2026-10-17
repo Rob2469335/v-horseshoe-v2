@@ -2538,3 +2538,112 @@ frozen element changed.
 `population.admission` (`EXTERNAL EVIDENCE REQUIRED`, status `insufficient`), which
 still blocks until S8 evidence exists. Preflight remains not-READY; no other gate is
 relaxed.
+
+---
+
+### F2-IMPL-AUTH-035 - S8 runner/evidence hardening: validate before consuming, source checks from the authoritative verifiers, and stop carrying stale workspaces
+
+**Author:** Rob (human operator)
+
+**Date:** 2026-10-16
+
+**Authority.** Recorded on the operator's explicit instruction of 2026-10-16
+("prioritize reaching 300 valid admissions"; "Immediately execute authorized
+engineering work"; "Implement the authorized runner and evidence-role hardening";
+"Investigate and test the stale-build-manifest risk, especially the October 13
+workspaces and the manifest's merge behavior"), entered by the implementation agent.
+The change set it grants is exactly the one identified in
+`docs/EXPERIMENT_J_F2_S8_RUNNER_HARDENING_AUTHORIZATION_REQUEST.md` §3, which this
+entry converts from a request into an authorization. It records engineering controls
+only: it authorizes **no** protected-stage execution (S8-001 / POP-001 / EXPL-001 /
+CONF-001, Q10/Q12/Q13 and the T/X arms remain governed by their own authorizations),
+**no** Stage-1 acquisition/build network reach, and **no** merge of PR #33.
+
+**Issue.** Three defects on the S8 admission path were demonstrated against current
+code. (1) `f2_s8_pilot_live.main` consumed the single-use S8-001 grant **before**
+validating the manifest, the `--only` selection, the runnable set and the governed
+environment, so a request that could never run still spent the grant — while
+`F2-IMPL-AUTH-033` §2 itself states the governing principle ("a readiness failure
+never burns the grant"). (2) `f2_s8_compose._refs_ok` pinned one artifact role on
+both sides of `TrustedArtifactStore.verify_ref`'s allowlist test, which performs no
+stored-role comparison (its role test is only `ref.role in allowed_roles`), making
+that test **vacuously true for every ref** on the evidence path admission depends on.
+(3) `f2_s8_pilot_build.main` **merged** into whatever manifest was already on disk, so
+a subset build silently carried forward every earlier `status="built"` entry — and
+the runner selects **every** `status="built"` entry, so a stale or unauthorized
+workspace entered the runnable set the S8-001 grant is bound to.
+
+**Authoritative decision and implementation.**
+
+1. **Validate before consuming** (`qwen_train/f2_s8_pilot_live.py`). `main()`
+   parses and validates the manifest, resolves the runnable specs, refuses an unknown
+   `--only` selection, refuses a zero-runnable manifest, and loads the governed
+   environment — all **before** `verify_and_consume`. Consumption is unchanged: still
+   atomic, still single-use, still before any guest work, and the consumed binding
+   (`candidate_manifest_digest`, `registration_sha256`) is unchanged. `build_specs`
+   no longer treats a non-object manifest value (a scheduler/planning document) as a
+   per-task entry. Every refusal states that no grant was consumed.
+   *Tests:* `tests/test_f2_s8_runner_validation_order.py` (new),
+   `tests/test_f2_s8_pilot_live_authorization.py`.
+2. **Evidence-role check made non-vacuous** (`qwen_train/f2_s8_compose.py`).
+   `_refs_ok` passes the real artifact-role key and the closed
+   `REQUIRED_EVIDENCE_ROLES` allowlist to `verify_ref`, so a ref whose role is not a
+   required evidence role fails closed instead of being silently re-labelled.
+   *Tests:* `tests/test_f2_preflight_evidence_sources.py::TestD3RefsRoleHardening`.
+3. **Preflight and census report sourced from the authoritative verifiers**
+   (`qwen_train/f2_preflight.py`, `qwen_train/f2_reconcile.py`). `_evidence_findings`
+   evaluates **supplied** sources through `f2_evidence.verify_task_evidence` and
+   `f2_s8_batch.reconcile_admissions_across_chains` (new `--admission-ledger`,
+   `--registered-tasks`, `--s8-evidence`); with nothing supplied the findings are the
+   same fail-closed defaults. `_admission_accounting` reports the counting rule's own
+   figures separately from the registration census, and reports `None` — never a
+   defaulted `0` — when unmeasured. Neither gate can be satisfied by a digest, a
+   count, or a filename alone.
+   *Tests:* `tests/test_f2_preflight_evidence_sources.py`.
+4. **Gold-state digest domain documented** (`qwen_train/f2_evidence.py`, docstring
+   only). `expected_gold_state_digest` is an execution-state digest; the Q8
+   `reference_digest` (a SHA-256 over `repo@commit`) is a different semantic domain
+   and MUST NOT be passed. No behaviour changes.
+   *Tests:* `tests/test_f2_sota_decisions.py`.
+5. **Stale-build-manifest guard** (`qwen_train/f2_s8_pilot_build.py`). The manifest
+   written by a run describes **exactly** the tasks that run was asked to build;
+   pre-existing entries for any other task are dropped with an explicit notice
+   instead of being merged forward, so an unbuilt or unauthorized workspace can no
+   longer enter the runnable set.
+   *Tests:* `tests/test_f2_s8_pilot_build.py`.
+
+**Publication.** Feature-branch commits only, one logical change per commit, on
+`agent/q9-classification-sota`. PR #33 remains **OPEN and unmerged**. This entry
+authorizes **no** push and **no** merge (the operator's instruction of 2026-10-16
+reserves push/merge authority).
+
+**File boundary.** `qwen_train/f2_s8_pilot_live.py`, `qwen_train/f2_s8_compose.py`,
+`qwen_train/f2_preflight.py`, `qwen_train/f2_reconcile.py`,
+`qwen_train/f2_evidence.py`, `qwen_train/f2_s8_pilot_build.py`,
+`tests/test_f2_s8_pilot_live_authorization.py`,
+`tests/test_f2_s8_runner_validation_order.py` (new),
+`tests/test_f2_preflight_evidence_sources.py` (new),
+`tests/test_f2_sota_decisions.py` (new), `tests/test_f2_s8_pilot_build.py`, and this
+document. No frozen artifact, F0/F1 document, Experiment J authority document,
+protected decision record, dependency, CI configuration or `.env` is changed.
+
+**Explicit non-authorization.** This entry does NOT authorize: merging PR #33;
+amending `docs/EXPERIMENT_J_F2_S8_IPV6_GATE_DECISION_RECORD.md` or
+`docs/EXPERIMENT_J_F2_S8_OFFLINE_EVALUATION_ISOLATION_PLAN.md`; the Stage-1
+acquisition/build network reach (repository cloning, dependency download/install),
+which remains a separate and **ungranted** authorization
+(`docs/EXPERIMENT_J_F2_S8_STAGE1_BUILD_AUTHORIZATION_REQUEST.md`); any protected-stage
+execution; creating, signing or consuming any trust root, grant or attestation;
+provisioning any operator variable, credential or secret; any VM, guest, firewall,
+ACL, route or NAT change; any model, Q10, Q12, Q13 or T/X arm; and weakening,
+skipping or deleting any gate, or marking any task admitted or the population READY.
+
+**What the tests prove / do not prove.** They prove: validation precedes consumption,
+and a malformed, zero-runnable, unknown-`--only` or unready request leaves the grant
+unspent; consumption itself remains single-use and durable (asserted at the consumer
+boundary); the evidence-role check is non-vacuous and closed; preflight and the census
+report fail closed on absent, malformed, unreadable or unreconcilable sources; and a
+non-object manifest is not reinterpreted as a build manifest. They do **not** prove:
+that a real Stage-1 build succeeds; that a real signing ceremony occurred; that
+isolation holds; or that any task is admitted. No test fabricates a production trust
+root, signature, attestation, evidence record or admission.
