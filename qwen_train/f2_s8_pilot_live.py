@@ -160,6 +160,14 @@ def build_specs(manifest: dict[str, Any], inputs_dir: Path,
     specs = []
     for task_id in manifest:
         entry = manifest[task_id]
+        if not isinstance(entry, dict):
+            # A manifest whose top-level values are not per-task objects (e.g. a
+            # scheduler/planning document with "purpose"/"selection"/"notes") is
+            # not a build manifest. Skipping it yields zero specs and the caller's
+            # zero-runnable refusal, instead of an AttributeError part-way through
+            # -- and the runner must never reinterpret such a document as a build
+            # manifest.
+            continue
         if entry.get("status") != "built":
             continue
         rec = json.loads((inputs_dir / f"{task_id}.json").read_text(encoding="utf-8"))
@@ -261,6 +269,60 @@ def main(argv: Sequence[str] | None = None) -> int:
     # hashing and use, which would let a swapped manifest run under the grant).
     manifest_bytes = Path(args.manifest).read_bytes()
     manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+
+    # --- NON-CONSUMING PRECONDITIONS -----------------------------------------
+    # Every check below is host-side validation, NOT guest work, and every one of
+    # them can fail. `F2-IMPL-AUTH-033` fixes the governing principle: consumption
+    # happens "immediately before the child spawn (a readiness failure never burns
+    # the grant)". Consuming first therefore let a malformed manifest, an empty
+    # runnable set, a bad --only selection, or missing governed env burn a
+    # single-use grant and then refuse -- spending authorization without
+    # performing a protected operation. Validation now precedes consumption; the
+    # consumption itself is unchanged (still atomic, still single-use, still
+    # before any guest work), and no binding, signature, scope or replay check is
+    # relaxed.
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
+    specs = build_specs(manifest, Path(args.inputs), args.registration_sha256,
+                        args.registration_id)
+    if args.only:
+        requested = set(args.only)
+        unknown_only = sorted(requested - {s.task_id for s in specs})
+        specs = [s for s in specs if s.task_id in requested]
+    else:
+        unknown_only = []
+    if unknown_only:
+        raise SystemExit(
+            "REFUSING: --only names task(s) with no runnable spec "
+            f"(manifest={args.manifest!r}, unknown={unknown_only!r}). No grant "
+            "was consumed."
+        )
+
+    # A run that resolves to zero specs must FAIL, not quietly succeed. Without
+    # this guard a manifest whose entries are not ``status="built"`` -- e.g. a
+    # dry-run result (``status="dryrun_complete"``) -- produced an empty run that
+    # printed "pilot: 0 tasks" and wrote a results file, which is indistinguishable
+    # from a completed pilot at the report level. Zero specs is never a valid pilot.
+    if not specs:
+        statuses = sorted(
+            {str(v.get("status")) for v in manifest.values() if isinstance(v, dict)}
+        )
+        raise SystemExit(
+            "REFUSING: the manifest resolves to zero runnable tasks "
+            f"(manifest={args.manifest!r}, entries={len(manifest)}, "
+            f"statuses={statuses}, inputs={args.inputs!r}"
+            + (f", only={sorted(set(args.only))!r}" if args.only else "")
+            + "). A run manifest's entries must have status='built'; a dry-run "
+            "result is not a run manifest, and the inputs directory must hold the "
+            "full task records (with test_cmds/FAIL_TO_PASS). No grant was consumed."
+        )
+
+    # Fail closed before touching the guest: the governed path needs a real
+    # trusted store and a real authorized evaluator, none of which this module
+    # invents. This is a readiness precondition, so it must also run BEFORE
+    # consumption -- otherwise an unprovisioned environment burns the grant.
+    inputs = load_governance_from_env()
+
+    # --- SINGLE-USE CONSUMPTION (unchanged) ----------------------------------
     try:
         # SINGLE-USE, durable consumption (Decision 2): `verify_and_consume`
         # verifies the grant AND durably consumes it BEFORE any guest work, so a
@@ -284,37 +346,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     # ledger record (Decision 3) so a record names the code that produced it.
     authorized_revision = str(
         (getattr(verified, "record", {}) or {}).get("repository_revision") or "")
-
-    # Fail closed before touching the guest: the governed path needs a real
-    # trusted store and a real authorized evaluator, none of which this module
-    # invents.
-    inputs = load_governance_from_env()
-
-    # Parse the SAME bytes whose digest the authorization was bound to.
-    manifest = json.loads(manifest_bytes.decode("utf-8"))
-    specs = build_specs(manifest, Path(args.inputs), args.registration_sha256,
-                        args.registration_id)
-    if args.only:
-        specs = [s for s in specs if s.task_id in set(args.only)]
-
-    # A run that resolves to zero specs must FAIL, not quietly succeed. Without
-    # this guard a manifest whose entries are not ``status="built"`` -- e.g. a
-    # dry-run result (``status="dryrun_complete"``) -- produced an empty run that
-    # printed "pilot: 0 tasks" and wrote a results file, which is indistinguishable
-    # from a completed pilot at the report level. Zero specs is never a valid pilot.
-    if not specs:
-        statuses = sorted(
-            {str(v.get("status")) for v in manifest.values() if isinstance(v, dict)}
-        )
-        raise SystemExit(
-            "REFUSING: the manifest resolves to zero runnable tasks "
-            f"(manifest={args.manifest!r}, entries={len(manifest)}, "
-            f"statuses={statuses}, inputs={args.inputs!r}"
-            + (f", only={sorted(set(args.only))!r}" if args.only else "")
-            + "). A run manifest's entries must have status='built'; a dry-run "
-            "result is not a run manifest, and the inputs directory must hold the "
-            "full task records (with test_cmds/FAIL_TO_PASS)."
-        )
 
     staging = Path(args.staging)
     staging.mkdir(parents=True, exist_ok=True)
