@@ -59,9 +59,12 @@ __all__ = [
     "AcquisitionError",
     "TaskInputs",
     "BUILDER_SOURCE",
+    "TEST_DEPENDENCY_SOURCE_NAMES",
     "builder_install_plan",
     "declared_test_plugins",
     "declared_test_plugins_report",
+    "declared_test_requirements",
+    "parse_requirements_lines",
     "dependency_inputs_from_pyproject",
     "dependency_metadata_status",
     "install_context_from_pyproject",
@@ -89,7 +92,16 @@ ACQUISITION_SCHEMA = "f2_s8_acquisition_v1"
 
 #: The builder identity folded into every build identity.  Changing the builder
 #: MUST change the identity, so a stale workspace can never be reused silently.
-BUILDER_SOURCE = "qwen_train/f2_s8_acquisition.py + qwen_train/f2_s8_pilot_build.py"
+#:
+#: ``declared-test-deps v2`` marks the addition of declared test dependency
+#: resolution (``declared_test_requirements``): a workspace built before that
+#: change did NOT install the project's declared test extra/group, so its
+#: identity MUST differ from one built after it -- reusing it would silently
+#: re-run collection against an environment the new contract never produced.
+BUILDER_SOURCE = (
+    "qwen_train/f2_s8_acquisition.py + qwen_train/f2_s8_pilot_build.py"
+    " (declared-test-deps v2)"
+)
 
 #: Declarative, reproducible exceptions.  Each is a *build* decision, recorded in
 #: the build identity; none changes a declared command, test list or patch.
@@ -661,6 +673,30 @@ def parse_requirements_names(text: str) -> list[str]:
     return names
 
 
+def parse_requirements_lines(text: str) -> tuple[list[str], list[str]]:
+    """``(requirements, skipped_options)`` for ONE requirements file's text.
+
+    Keeps the declaration EXACTLY as written (specifier, extras and marker
+    included) so pip receives the project's own constraint rather than a
+    re-derived name.  Option lines (``-r``/``-e``/``--index-url``/...) are
+    SPLIT OUT and returned as ``skipped_options`` instead of being followed:
+    an include, an editable target or an alternate index is a build-system
+    decision this acquisition layer does not make, and silently honouring one
+    would install a tree this contract never identified.
+    """
+    requirements: list[str] = []
+    skipped: list[str] = []
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("-"):
+            skipped.append(line)
+            continue
+        requirements.append(line)
+    return requirements, skipped
+
+
 def runtime_dependencies_from_pyproject(data: Mapping[str, Any]) -> list[str]:
     """``[project].dependencies`` verbatim -- the project install brings these in.
 
@@ -1144,6 +1180,196 @@ def declared_test_plugins(
     )["plugins"])
 
 
+#: Normalised names of declared dependency sources that denote a project's OWN
+#: test environment.  Deliberately narrow and name-based: the contract installs
+#: what the project declares *for testing*, never "every optional dependency".
+#: PEP 735 requires group names to be normalised before comparison, so the
+#: comparison set and the names it is compared against share one normaliser.
+TEST_DEPENDENCY_SOURCE_NAMES: frozenset[str] = frozenset({
+    "test", "tests", "testing", "test-deps", "test-dependencies",
+    "test-requirements", "test-reqs", "test-suite", "testsuite", "testenv",
+})
+
+
+def _norm_source_name(name: Any) -> str:
+    """PEP 503 normalisation, so ``Test_Deps`` and ``test-deps`` are one name."""
+    return canonicalize_name(str(name))
+
+
+def declared_test_requirements(
+    dependency_inputs: Mapping[str, Any],
+    *,
+    groups: Sequence[str] = (),
+    extras: Sequence[str] = (),
+    auto: bool = True,
+    project: Path | None = None,
+) -> dict[str, Any]:
+    """The project's OWN declared test requirements -- resolved, never invented.
+
+    Why this exists
+    ---------------
+    ``pip install -e .`` installs ``[project].dependencies`` and NO extra
+    (PEP 621: "Optional dependencies are thus only considered for installation
+    if the associated extra name is requested"), and a PEP 735 dependency group
+    is installed only when a tool is told to install it -- the PyPA dependency
+    groups specification notes that testing with a group such as ``test``
+    requires the toolchain to also install ``.``.  The builder already installs
+    ``.``; it previously installed no test extra and no test group, so a project
+    that declares its test-only imports there (QuantEcon declares ``pandas``
+    solely under ``[project.optional-dependencies].testing``) built an
+    environment whose collection aborted with ``ModuleNotFoundError``.
+
+    What it reads (all authoritative project metadata, none of it executed):
+
+    =========================  ==============================================
+    ``[dependency-groups]``    PEP 735 groups, ``include-group`` expanded by
+                               :func:`resolve_dependency_groups` (cycle- and
+                               missing-target-safe)
+    ``[project.optional-      PEP 621 extras, verbatim PEP 508 declarations
+    dependencies]``
+    ``requirements*.txt``      only when ``project`` is given: file names that
+                               themselves denote the test environment; option
+                               lines are reported, never followed
+    =========================  ==============================================
+
+    Selection is either explicit (``groups``/``extras`` -- a named source that
+    does not exist is a BLOCKING problem, never a silent no-op) or automatic
+    (``auto``: a source whose normalised name is in
+    :data:`TEST_DEPENDENCY_SOURCE_NAMES`).  Nothing else is selected, so a
+    ``docs``/``dev``/``lint`` extra is left alone.
+
+    Returns ``{"requirements", "sources", "problems", "groups", "extras"}``.
+    Declarations are preserved verbatim and returned in declaration order with
+    first-occurrence de-duplication; a BLOCKING problem means the caller must
+    fail closed rather than install a partially resolved set.
+
+    Limitation, stated rather than hidden: a declaration carrying an
+    ``extra == "..."`` marker refers to the requesting context.  Passed to pip
+    as a top-level requirement that marker evaluates out of context, so such a
+    declaration is reported as an advisory problem instead of being dropped
+    silently.  ``dependency_inputs`` itself is NEVER mutated -- it is folded
+    into ``build_identity`` and adding a key would invalidate recorded
+    identities.
+    """
+    raw_groups: Mapping[str, Any] = dependency_inputs.get("groups") or {}
+    raw_extras: Mapping[str, Any] = dependency_inputs.get("extras") or {}
+    problems: list[dict[str, str]] = []
+
+    expanded, group_problems = resolve_dependency_groups(raw_groups)
+    problems.extend(group_problems)
+
+    group_index = {_norm_source_name(k): str(k) for k in expanded}
+    extra_index = {_norm_source_name(k): str(k) for k in raw_extras}
+
+    wanted_groups: list[str] = []
+    wanted_extras: list[str] = []
+
+    def _want(kind: str, table: Mapping[str, str], declared: Any,
+              wanted: list[str]) -> None:
+        key = _norm_source_name(declared)
+        if key not in table:
+            problems.append({
+                "code": "declared_test_source_missing", "scope": "blocking",
+                "detail": f"{kind}:{declared}",
+            })
+            return
+        if key not in wanted:
+            wanted.append(key)
+
+    for name in groups:
+        _want("dependency_group", group_index, name, wanted_groups)
+    for name in extras:
+        _want("optional_dependency", extra_index, name, wanted_extras)
+    if auto:
+        for key in sorted(group_index):
+            if key in TEST_DEPENDENCY_SOURCE_NAMES and key not in wanted_groups:
+                wanted_groups.append(key)
+        for key in sorted(extra_index):
+            if key in TEST_DEPENDENCY_SOURCE_NAMES and key not in wanted_extras:
+                wanted_extras.append(key)
+
+    requirements: list[str] = []
+    sources: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    counts: dict[tuple[str, str], int] = {}
+
+    def _push(raw: Any, kind: str, name: str) -> None:
+        text = str(raw).strip()
+        if not text:
+            problems.append({"code": "empty_requirement", "scope": "blocking",
+                             "detail": f"{kind}:{name}"})
+            return
+        # An ``extra ==`` marker cannot be evaluated out of its requesting
+        # context; report it rather than hand pip a declaration it will
+        # silently skip as unevaluable.
+        if re.search(r"(^|;)\s*extra\s*==", text):
+            problems.append({"code": "test_dependency_marker_out_of_context",
+                             "scope": "advisory", "detail": f"{kind}:{name}:{text}"})
+        if text not in seen:
+            seen.add(text)
+            requirements.append(text)
+        key = (kind, name)
+        counts[key] = counts.get(key, 0) + 1
+
+    for key in wanted_groups:
+        original = group_index[key]
+        for entry in expanded[original] or ():
+            _push(entry, "dependency_group", original)
+    for key in wanted_extras:
+        original = extra_index[key]
+        for entry in raw_extras[original] or ():
+            _push(entry, "optional_dependency", original)
+
+    # Keyed on (kind, name): a project may declare a group AND an extra of the
+    # same test-ish name, and collapsing them would lose which one contributed.
+    for (kind, name), count in counts.items():
+        sources.append({"kind": kind, "name": name, "requirements": count})
+
+    if project is not None:
+        root = Path(project)
+        # Bind every pyproject-declared source to the FILE it was read from, so
+        # the recorded provenance can be re-checked against a later checkout
+        # instead of trusting that the file has not moved underneath the build.
+        pyproject = root / "pyproject.toml"
+        if pyproject.is_file():
+            origin = {"file": str(pyproject), "sha256": _sha256_file(pyproject)}
+            for source in sources:
+                source.update(origin)
+        for path in sorted(root.glob("requirements*.txt")):
+            key = _norm_source_name(path.stem)
+            # ``requirements-test`` -> ``requirements-test``; only files whose
+            # own name denotes the test environment are in scope.
+            if key not in TEST_DEPENDENCY_SOURCE_NAMES and not any(
+                key.startswith(t + "-") or key.endswith("-" + t)
+                for t in TEST_DEPENDENCY_SOURCE_NAMES
+            ):
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            lines, options = parse_requirements_lines(text)
+            for opt in options:
+                problems.append({
+                    "code": "requirements_option_not_followed",
+                    "scope": "advisory",
+                    "detail": f"{path.name}:{opt}",
+                })
+            before = len(requirements)
+            for line in lines:
+                _push(line, "requirements_file", path.name)
+            sources.append({
+                "kind": "requirements_file", "name": path.name,
+                "requirements": max(0, len(requirements) - before),
+                "sha256": _sha256_file(path),
+            })
+
+    return {
+        "requirements": requirements,
+        "sources": sources,
+        "problems": problems,
+        "groups": list(wanted_groups),
+        "extras": list(wanted_extras),
+    }
+
+
 def builder_install_plan(
     dependency_inputs: Mapping[str, Any],
     *,
@@ -1153,6 +1379,7 @@ def builder_install_plan(
     runtime_dependencies: Sequence[str] = (),
     mode: str = "pip",
     uv_default_groups: Sequence[str] = ("dev",),
+    test_requirements: Sequence[str] = (),
 ) -> dict[str, Any]:
     """The packages the pilot builder's environment actually gets -- ONE code path.
 
@@ -1166,6 +1393,11 @@ def builder_install_plan(
     ``pinned``             the builder's pinned pytest baseline (explicit arg)
     ``task_extra_deps``    the hand-declared per-task collection requirements
                             (explicit arg)
+    ``declared_test_dep``  the project's OWN declared test dependencies, as
+                            selected by :func:`declared_test_requirements`
+                            (PEP 621 test extra / PEP 735 test group / a
+                            test-named requirements file) -- explicit arg, so
+                            this function still resolves nothing itself
     ``dependency_group``   PEP 735 group members -- pip mode installs ONLY the
                             declared pytest plugins (narrow by design); uv mode
                             installs the whole of uv's default groups
@@ -1195,6 +1427,13 @@ def builder_install_plan(
     """
     if mode not in ("pip", "uv"):
         raise AcquisitionError(f"unknown install mode {mode!r}; expected 'pip' or 'uv'")
+    if mode == "uv" and test_requirements:
+        # ``uv sync --frozen --all-extras`` owns its own resolution; accepting
+        # an explicit test set here would record a requirement uv never
+        # installs, so it is refused rather than silently dropped.
+        raise AcquisitionError(
+            "test_requirements is not meaningful in uv mode: uv resolves the "
+            "environment itself")
     if mode == "uv":
         # ``uv sync --frozen --all-extras``: extras are always in scope, and uv
         # -- not pip -- owns that environment, so nothing is shelled out here.
@@ -1233,6 +1472,7 @@ def builder_install_plan(
     # kept; none is dropped in favour of another (see _combine_declarations).
     explicit_entries: dict[str, list[tuple[str, str]]] = {}
     plugin_arg_names: set[str] = set()
+    test_arg_names: set[str] = set()
 
     if mode == "pip":
         # ONE parse per declaration: ``_name`` already runs ``_requirement`` and
@@ -1249,6 +1489,13 @@ def builder_install_plan(
             explicit_entries.setdefault(name, []).append(
                 ("task_extra_deps", text))
             _install(name, "task_extra_deps")
+        for req in test_requirements:
+            text = str(req).strip()
+            name = _name(text, "declared_test_dependency")
+            explicit_entries.setdefault(name, []).append(
+                ("declared_test_dependency", text))
+            _install(name, "declared_test_dependency")
+            test_arg_names.add(name)
         for name in sorted(plugins):
             info = plugins[name]
             for kind, mechanism in (("group", "dependency_group"),
@@ -1302,6 +1549,7 @@ def builder_install_plan(
         "mode": mode,
         "explicit_requirements": args,
         "plugin_requirements": [arg_for[n] for n in sorted(plugin_arg_names)],
+        "test_requirements": [arg_for[n] for n in sorted(test_arg_names)],
         "plugins": sorted(plugins),
         "installed_packages": {n: sorted(m) for n, m in sorted(installed.items())},
         "packages": sorted(installed),

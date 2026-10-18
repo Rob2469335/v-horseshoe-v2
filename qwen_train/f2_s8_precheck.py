@@ -105,6 +105,22 @@ REASON_COLLECT_TIMEOUT = "COLLECT_TIMEOUT"
 REASON_COLLECT_ERROR = "COLLECT_ERROR"
 REASON_ENVIRONMENT_COLLECTION = "ENVIRONMENT_COLLECTION_ERROR"
 REASON_UNKNOWN_COLLECTION = "UNKNOWN_COLLECTION_ERROR"
+#: A declared collection target needed a distribution the built environment does
+#: not provide.  Emitted alongside the environment-collection cause so a
+#: dependency gap is separable from an unrelated environment defect; the module
+#: is named because pytest only imports what the DECLARED targets require, so an
+#: import that failed during collection is by construction part of the declared
+#: dependency surface of this task.
+REASON_MISSING_DECLARED_DEPENDENCY = "MISSING_DECLARED_DEPENDENCY"
+#: The collector could not be run at all (spawn/IO failure) rather than running
+#: and reporting a repository problem.  Never a PASS, and never used for a
+#: genuine collection error -- that keeps D1 cause classification honest.
+REASON_COLLECT_INFRASTRUCTURE = "COLLECT_INFRASTRUCTURE_FAILURE"
+#: A selected task produced no result record.  Raised, never counted.
+REASON_UNEXPLAINED_SKIP = "UNEXPLAINED_SKIP"
+#: A PASS whose backing record is incomplete (no recorded command or
+#: interpreter) is downgraded rather than trusted.
+REASON_INVALID_EVIDENCE = "INVALID_EVIDENCE"
 REASON_GOLD_PROJECT_COLLECTION = "GOLD_PROJECT_COLLECTION_ERROR"
 REASON_TARGET_NOT_COLLECTED = "TARGET_NOT_COLLECTED"
 REASON_NO_TESTS = "NO_TESTS_COLLECTED"
@@ -338,6 +354,29 @@ def _target_collected(target: str, nodes: Sequence[str]) -> bool:
     return False
 
 
+_MODULE_NOT_FOUND = re.compile(
+    r"ModuleNotFoundError(?:\s*:\s*No module named ['\"])(?P<name>[^'\"]+)|"
+    r"No module named ['\"](?P<name2>[^'\"]+)"
+)
+
+
+def missing_dependency_modules(text: str) -> list[str]:
+    """Module names a collection error proves absent from the built environment.
+
+    Deliberately narrow: only an explicit module-not-found shapes the answer, so
+    a syntax error, a raised assertion at import time or a plugin crash is never
+    reported as a missing dependency.  A dotted name contributes its ROOT
+    (``pkg.sub`` -> ``pkg``) because the distribution owns the root.
+    """
+    found: list[str] = []
+    for match in _MODULE_NOT_FOUND.finditer(text or ""):
+        raw = match.group("name") or match.group("name2") or ""
+        root = raw.split(".")[0].strip()
+        if root and root not in found:
+            found.append(root)
+    return found
+
+
 def _classify_side(
     *,
     side: str,
@@ -378,8 +417,16 @@ def _classify_side(
             return {**base, "status": SIDE_FAIL,
                     "reason_codes": [REASON_GOLD_PROJECT_COLLECTION]}
         if cause == "environment":
-            return {**base, "status": SIDE_FAIL,
-                    "reason_codes": [REASON_ENVIRONMENT_COLLECTION]}
+            codes = [REASON_ENVIRONMENT_COLLECTION]
+            modules = missing_dependency_modules(base.get("error_text", ""))
+            if modules:
+                # The environment lacks a distribution the declared targets
+                # need.  Named separately so a dependency gap (fixable by the
+                # builder installing the project's OWN declared test set) is
+                # never folded into an undifferentiated "environment broke".
+                codes.append(REASON_MISSING_DECLARED_DEPENDENCY)
+                base["missing_modules"] = modules
+            return {**base, "status": SIDE_FAIL, "reason_codes": codes}
         return {**base, "status": SIDE_INCONCLUSIVE,
                 "reason_codes": [REASON_UNKNOWN_COLLECTION]}
     if returncode == 5 or (not nodes and "no tests ran" in (stdout + stderr).lower()):
@@ -426,6 +473,49 @@ def _default_runner(cmd: Sequence[str], cwd: Path, env: Mapping[str, str], timeo
         list(cmd), cwd=cwd, env=dict(env), capture_output=True, text=True,
         timeout=timeout,
     )
+
+
+def _validate_task_results(
+    task_results: list[dict[str, Any]],
+    selected: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Fail-closed integrity of the collection record, before any verdict rolls up.
+
+    Two properties, deliberately different in shape:
+
+    **No unexplained skip.**  Every selected task must have produced a result.
+    A task that was selected and then silently vanished would leave the reported
+    denominators smaller than the selection, so the run is REFUSED rather than
+    published.  This is a harness bug when it fires, and a bug that must not be
+    able to hide behind a smaller denominator.
+
+    **No unevidenced PASS.**  A PASS whose sides do not each record the exact
+    command and interpreter that produced it is downgraded to INCONCLUSIVE and
+    parked.  Collection success must be reconstructible from the record; an
+    assertion with no way to say what ran is not evidence.
+    """
+    seen = {str(r.get("task_id")) for r in task_results}
+    unexplained = [str(t) for t in selected if str(t) not in seen]
+    if unexplained:
+        raise PrecheckError(
+            f"{REASON_UNEXPLAINED_SKIP}: selected task(s) produced no result: "
+            + ", ".join(sorted(unexplained)))
+    for record in task_results:
+        if record.get("status") != SIDE_PASS:
+            continue
+        sides = record.get("sides") or {}
+        incomplete = [
+            name for name in ("base", "gold")
+            if not (sides.get(name) or {}).get("command")
+            or not (sides.get(name) or {}).get("venv_python")
+        ]
+        if len(sides) < 2 or incomplete:
+            record["status"] = SIDE_INCONCLUSIVE
+            record["parked"] = True
+            record["reason_codes"] = sorted(
+                set(record.get("reason_codes") or []) | {REASON_INVALID_EVIDENCE})
+            record["invalid_evidence_sides"] = sorted(incomplete)
+    return task_results
 
 
 def run_precheck(
@@ -590,9 +680,17 @@ def run_precheck(
                 side_statuses.append(SIDE_INCONCLUSIVE)
                 continue
             except Exception as exc:  # noqa: BLE001
+                # The collector never produced output, so nothing here can be a
+                # repository or collection defect -- this is the harness side.
+                # Kept as INCONCLUSIVE (never PASS) and tagged twice: the
+                # pre-existing generic code for current consumers, and the
+                # specific one so infrastructure is separable from a real
+                # collection failure without changing either verdict.
                 task_result["sides"][side] = {
                     "side": side, "status": SIDE_INCONCLUSIVE,
-                    "reason_codes": [REASON_COLLECT_ERROR], "detail": str(exc),
+                    "reason_codes": sorted(
+                        {REASON_COLLECT_ERROR, REASON_COLLECT_INFRASTRUCTURE}),
+                    "detail": str(exc),
                 }
                 side_statuses.append(SIDE_INCONCLUSIVE)
                 continue
@@ -619,6 +717,8 @@ def run_precheck(
         task_result["reason_codes"] = sorted(set(codes))
         task_result["parked"] = task_result["status"] != SIDE_PASS
         task_results.append(task_result)
+
+    _validate_task_results(task_results, selected)
 
     failed = [t for t in task_results if t["status"] == SIDE_FAIL]
     inconclusive = [t for t in task_results if t["status"] == SIDE_INCONCLUSIVE]

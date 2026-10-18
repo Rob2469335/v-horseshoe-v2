@@ -30,7 +30,9 @@ from typing import Any, Mapping
 
 from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_s8_acquisition import (
+    DECLARED_ADJUSTMENTS,
     builder_install_plan,
+    declared_test_requirements,
     project_install_context,
     repo_url_for,
 )
@@ -346,6 +348,12 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
 
     base_python = pick_interpreter(project)
     extra = EXTRA_DEPS.get(task_id, [])
+    # The declared (never invented) per-task build adjustments.  ``groups`` /
+    # ``extras`` name the project's OWN dependency groups and extras; they were
+    # recorded in ``build_identity`` before but never acted on by the installer,
+    # so an adjustment naming ``test`` installed nothing beyond the pytest
+    # plugins that happen to live there.
+    adjustment: dict[str, Any] = dict(DECLARED_ADJUSTMENTS.get(task_id, {}))
     # UNION the plugins the project's OWN pytest configuration demands.  The
     # hard-coded table above is keyed by instance id and goes stale the moment a
     # DIFFERENT instance of the same project is built (the phase-2 set contains
@@ -396,19 +404,70 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
             # ``[project.optional-dependencies]`` extra -- "uv does not sync
             # extras by default" is the same rule for the uv path.
             context = project_install_context(proj)
+            # The project's OWN declared test dependencies (PEP 621 test extra /
+            # PEP 735 test group / a test-named requirements file).  ``pip
+            # install -e .`` installs ``[project].dependencies`` and NO extra, so
+            # a project that declares a test-only import under
+            # ``[project.optional-dependencies]`` -- QuantEcon declares ``pandas``
+            # only in its ``testing`` extra -- previously built an environment
+            # whose collection aborted with ``ModuleNotFoundError`` and was
+            # classified as an environment collection error.  Selection is
+            # name-gated in :func:`declared_test_requirements`; a named source
+            # that does not exist is BLOCKING here rather than a silent no-op.
+            declared = declared_test_requirements(
+                context["dependency_inputs"],
+                groups=[str(g) for g in (adjustment.get("groups") or ())],
+                extras=[str(e) for e in (adjustment.get("extras") or ())],
+                project=proj,
+            )
+            blocking = [p for p in declared["problems"] if p.get("scope") == "blocking"]
+            if blocking:
+                detail = "; ".join(
+                    f"{p.get('code')}:{p.get('detail')}" for p in blocking)
+                raise RuntimeError(
+                    f"declared test dependencies cannot be resolved: {detail}")
             plan = builder_install_plan(
                 context["dependency_inputs"],
                 pinned=[PYTEST_PIN],
                 extra_deps=extra,
                 runtime_dependencies=context["runtime_dependencies"],
+                test_requirements=declared["requirements"],
             )
+            plan["declared_test_sources"] = declared["sources"]
+            plan["declared_test_problems"] = declared["problems"]
             install_plan[label] = plan
             if plan["plugin_requirements"]:
                 run([str(vpy), "-m", "pip", "install", "--quiet",
                      "--disable-pip-version-check", *plan["plugin_requirements"]],
                     timeout=3600)
+            # Declared test dependencies go in beside the plugins, BEFORE the
+            # editable install, which is the pairing the PyPA dependency-groups
+            # specification requires (a ``test`` group only works when the
+            # toolchain also installs ``.``).
+            if plan["test_requirements"]:
+                run([str(vpy), "-m", "pip", "install", "--quiet",
+                     "--disable-pip-version-check", *plan["test_requirements"]],
+                    timeout=3600)
             run([str(vpy), "-m", "pip", "install", "--quiet",
                  "--disable-pip-version-check", "-e", str(proj)], timeout=3600)
+            # The plan above records what was ASKED for; this records what pip
+            # actually RESOLVED (name + version of every installed distribution).
+            # Without it a manifest digest cannot be checked against a later
+            # environment, so "offline recreation verified" would be a claim
+            # rather than a comparison.  A failed listing is recorded as a
+            # problem rather than an empty dict, because an empty dict is
+            # indistinguishable from an empty environment.
+            try:
+                listed = run(
+                    [str(vpy), "-m", "pip", "list", "--format=json",
+                     "--disable-pip-version-check"], timeout=300).stdout
+                plan["resolved_distributions"] = {
+                    str(d.get("name")): str(d.get("version"))
+                    for d in (json.loads(listed) or [])
+                }
+            except Exception as exc:  # noqa: BLE001 - observational, must not mask a real build error
+                plan["resolved_distributions"] = {}
+                plan["resolved_distributions_error"] = str(exc)[:500]
             envs[label] = str(vpy)
 
     # Syncing here -- on the acquisition host, with the network -- populates the
@@ -434,6 +493,54 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
         "requires_python": list(_requires_python(project)) if _requires_python(project) else None,
         "elapsed_s": int(time.time() - t0),
     }
+
+
+def classify_build_failure(exc: BaseException) -> str:
+    """Map a build exception to an explicit reason code (never to "infrastructure").
+
+    The classification is a deterministic text-signature match over the message
+    the builder itself produced -- :func:`run` embeds the subprocess's exit code,
+    stdout tail and stderr tail, so a pip resolver complaint, a wheel build
+    failure and a git clone failure each arrive here verbatim rather than as an
+    opaque ``RuntimeError``.
+
+    Design rule: **no default that flatters the yield.**  A failure whose message
+    carries no recognised signature returns ``BUILD_FAILURE_UNCLASSIFIED``, so a
+    genuine repository or dependency defect is never relabelled an infrastructure
+    failure to keep the pass rate up (D1 cause-classification).  Ordering matters:
+    the declared-test-source message is checked before the generic pip signatures
+    because it IS the "declared dependency could not be resolved" case.
+    """
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return "BUILD_TIMEOUT"
+    msg = str(exc)
+    if "declared test dependencies cannot be resolved:" in msg:
+        return "DECLARED_TEST_SOURCE_UNRESOLVABLE"
+    if "no interpreter satisfies requires-python" in msg:
+        return "INTERPRETER_UNAVAILABLE"
+    pip_resolution = (
+        "Could not find a version that satisfies the requirement",
+        "No matching distribution found",
+        "ResolutionImpossible",
+        "pip's dependency resolver did not find a match",
+        "conflicting dependencies",
+        "has requirement ",
+    )
+    if any(sig in msg for sig in pip_resolution):
+        return "DEPENDENCY_RESOLUTION_FAILURE"
+    pip_install = (
+        "Failed building wheel",
+        "error: subprocess-exited-with-error",
+        "Could not install packages",
+        "ERROR: Could not install",
+        "No space left on device",
+        "ERROR: These packages are missing",
+    )
+    if any(sig in msg for sig in pip_install):
+        return "DEPENDENCY_INSTALLATION_FAILURE"
+    if "git clone" in msg or "git checkout" in msg or "git apply" in msg:
+        return "SOURCE_ACQUISITION_FAILURE"
+    return "BUILD_FAILURE_UNCLASSIFIED"
 
 
 def main(argv=None) -> int:
@@ -485,8 +592,13 @@ def main(argv=None) -> int:
         try:
             entry = build(task_id, url, inputs=inputs, patches=patches)
         except Exception as exc:  # noqa: BLE001 - recorded, not fatal to the batch
-            print(f"  FAILED: {type(exc).__name__}: {exc}", flush=True)
-            manifest[task_id] = {"status": "build_failure", "detail": str(exc)[:2000]}
+            reason = classify_build_failure(exc)
+            print(f"  FAILED [{reason}]: {type(exc).__name__}: {exc}", flush=True)
+            manifest[task_id] = {
+                "status": "build_failure",
+                "reason_code": reason,
+                "detail": str(exc)[:2000],
+            }
         else:
             entry["status"] = "built"
             manifest[task_id] = entry
