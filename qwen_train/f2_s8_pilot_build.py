@@ -147,6 +147,91 @@ EXTRA_DEPS = {
     "stanfordnlp__dspy-8739": ["datamodel-code-generator", "pillow"],
 }
 
+#: ``addopts`` tokens that imply a pytest PLUGIN distribution must be installed
+#: before the declared command can even configure.  A project declares these in
+#: its own pytest configuration, not in its dependency list, so
+#: ``project_install_context`` cannot see them -- and pytest aborts with exit 4
+#: ("unrecognized arguments") or crashes in ``pytest_configure``, producing NO
+#: JUnit at all, which is then indistinguishable from a task outcome unless the
+#: environment is resolved first (the whole job of this build phase).
+#:
+#: Keyed by the option's leading token (``-n`` matches ``-n``, ``-n4``,
+#: ``-nauto``); ``--cov`` matches every ``--cov*`` flag.  Only options with an
+#: unambiguous owning distribution are listed -- nothing is guessed.
+_PLUGIN_BY_OPTION: tuple[tuple[str, str], ...] = (
+    ("-n", "pytest-xdist"),
+    ("--numprocesses", "pytest-xdist"),
+    ("--dist", "pytest-xdist"),
+    ("--cov", "pytest-cov"),
+    ("--benchmark", "pytest-benchmark"),
+    ("--timeout", "pytest-timeout"),
+    ("--forked", "pytest-forked"),
+    ("--randomly", "pytest-randomly"),
+    ("--asyncio-mode", "pytest-asyncio"),
+    ("--reruns", "pytest-rerunfailures"),
+    ("--instafail", "pytest-instafail"),
+    ("--html", "pytest-html"),
+    ("--xdoctest", "pytest-xdoctest"),
+)
+
+_PYTEST_CONFIG_FILES = ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini")
+
+
+def pytest_config_plugins(project: Path) -> list[str]:
+    """Distributions a project's OWN pytest ``addopts`` require. Deterministic.
+
+    Reads the same configuration pytest reads, extracts every ``addopts`` value,
+    and maps each option token to its owning distribution via
+    :data:`_PLUGIN_BY_OPTION`.  Returns a sorted, de-duplicated list; an
+    unreadable or absent configuration yields ``[]`` (never an invented
+    requirement).
+    """
+    import re
+
+    tokens: list[str] = []
+    for name in _PYTEST_CONFIG_FILES:
+        f = project / name
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        values: list[str] = []
+        # pyproject `addopts` may be a SINGLE-LINE array, a MULTI-LINE array
+        # (each element on its own line -- the form `vacanza__holidays-2859`
+        # uses), or a plain quoted/ini string.  All three must parse, or the
+        # plugin is silently missed and the declared command aborts with exit 4.
+        for m in re.finditer(r"^\s*addopts\s*=\s*(\[.*?\])", text,
+                             re.MULTILINE | re.DOTALL):
+            values.append(m.group(1))
+        for m in re.finditer(r"^\s*addopts\s*=\s*([^\[]\S.*)$", text, re.MULTILINE):
+            values.append(m.group(1))
+        for value in values:
+            for q in re.findall(r"[\"']([^\"']+)[\"']", value):
+                tokens.extend(q.split())
+            if not re.search(r"[\"']", value):        # bare ini form
+                tokens.extend(value.strip("\"'").split())
+    def _matches(tok: str, opt: str) -> bool:
+        """A token implies ``opt``'s plugin.
+
+        Long options match by PREFIX so the flag's own arguments are covered:
+        ``--cov`` must match ``--cov``, ``--cov=src`` and
+        ``--cov-fail-under=100`` (the form `vacanza__holidays-2859` uses), and
+        ``--randomly`` must match ``--randomly-seed=1``.  The short ``-n`` needs
+        its own rule because ``-n``, ``-n4`` and ``-nauto`` share a prefix while
+        ``--numprocesses`` is handled by its own long entry.
+        """
+        if opt == "-n":
+            return tok == "-n" or (tok.startswith("-n") and not tok.startswith("--"))
+        return tok == opt or tok.startswith(opt)
+
+    found = {
+        dist for tok in tokens for opt, dist in _PLUGIN_BY_OPTION
+        if _matches(tok, opt)
+    }
+    return sorted(found)
+
 
 def run(cmd, *, cwd=None, timeout=3600, check=True):
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
@@ -261,6 +346,16 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
 
     base_python = pick_interpreter(project)
     extra = EXTRA_DEPS.get(task_id, [])
+    # UNION the plugins the project's OWN pytest configuration demands.  The
+    # hard-coded table above is keyed by instance id and goes stale the moment a
+    # DIFFERENT instance of the same project is built (the phase-2 set contains
+    # ``python__mypy-19718``, not the ``-19767`` the table names, so xdist was
+    # never installed and the declared ``-nauto`` aborted pytest with exit 4 --
+    # recorded as an infrastructure failure with no JUnit).  Derived from the
+    # checked-out project, so it cannot drift.
+    derived = [p for p in pytest_config_plugins(project) if p not in extra]
+    if derived:
+        extra = [*extra, *derived]
     # uv-owned tasks are identified by their DECLARED command; the pilot's
     # explicit table stays as an override so its behaviour cannot drift.
     uses_uv = task_id in UV_ALL_EXTRAS or uses_uv_environment(declared_test_cmd(rec))

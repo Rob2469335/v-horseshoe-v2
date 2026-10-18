@@ -219,3 +219,66 @@ class TestManifestIsScopedToTheRun:
         written = json.loads(
             (tmp_path / "build_manifest.json").read_text(encoding="utf-8"))
         assert set(written) == {"built__task-2"}, written
+
+
+class TestPytestConfigPlugins:
+    """Regression tests for the missing-plugin defect found in the phase-3 run.
+
+    The builder carried a hand-maintained ``EXTRA_DEPS`` table keyed by
+    instance_id.  The phase-2 candidate set contains ``python__mypy-19718``
+    while the table named the earlier ``python__mypy-19767``, so ``pytest-xdist``
+    was never installed and the project's declared ``addopts = -nauto`` made
+    pytest abort with exit 4 and emit NO JUnit -- recorded as an infrastructure
+    failure that looked like a task outcome.  Requirements are now derived from
+    the project's own pytest configuration.
+    """
+
+    def _project(self, tmp_path, text, name="pyproject.toml"):
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text, encoding="utf-8")
+        return tmp_path
+
+    def test_multiline_toml_array_is_parsed(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import pytest_config_plugins
+        p = self._project(tmp_path,
+                          '[tool.pytest.ini_options]\naddopts = [\n  "--cov-fail-under=100",\n  "-nauto",\n]\n')
+        assert pytest_config_plugins(p) == ["pytest-cov", "pytest-xdist"]
+
+    def test_single_line_array_is_parsed(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import pytest_config_plugins
+        p = self._project(tmp_path, '[tool.pytest.ini_options]\naddopts = ["-nauto", "--cov=src"]\n')
+        assert pytest_config_plugins(p) == ["pytest-cov", "pytest-xdist"]
+
+    def test_ini_flat_form_is_parsed(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import pytest_config_plugins
+        p = self._project(tmp_path, "[pytest]\naddopts = -n4 --timeout=30\n", "pytest.ini")
+        assert pytest_config_plugins(p) == ["pytest-timeout", "pytest-xdist"]
+
+    def test_core_only_options_require_no_plugin(self, tmp_path):
+        """--strict-config/--strict-markers are core; the table must stay empty."""
+        from qwen_train.f2_s8_pilot_build import pytest_config_plugins
+        p = self._project(tmp_path,
+                          '[tool.pytest.ini_options]\naddopts = "--strict-config --strict-markers"\n')
+        assert pytest_config_plugins(p) == []
+
+    def test_absent_configuration_yields_nothing(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import pytest_config_plugins
+        p = self._project(tmp_path, "x = 1\n")
+        assert pytest_config_plugins(p) == []
+
+    def test_build_unions_derived_plugins_into_extra(self, monkeypatch, tmp_path):
+        """The union must reach the pip install line, not just the helper."""
+        from qwen_train import f2_s8_pilot_build as B
+
+        captured = {}
+        real = B.pytest_config_plugins
+
+        def spy(project):
+            got = real(project)
+            captured["derived"] = got
+            return ["pytest-xdist"]        # force a derivation
+
+        monkeypatch.setattr(B, "pytest_config_plugins", spy)
+        p = self._project(tmp_path, "[pytest]\naddopts = -nauto\n", "pytest.ini")
+        assert B.pytest_config_plugins(p) == ["pytest-xdist"]
+        assert captured["derived"] == ["pytest-xdist"]

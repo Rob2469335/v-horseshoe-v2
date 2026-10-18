@@ -555,6 +555,12 @@ REAL_TASKS = (
     "stanfordnlp__dspy-8739",
     "django-guardian__django-guardian-899",
     "django-guardian__django-guardian-896",
+    # Added 2026-10-18 with the phase-3 admissions: both are in the canonical
+    # 3,828-task registration, and this list is the registered universe the
+    # reconciler credits against, so an admitted task MUST be listed here or it
+    # is (correctly) reported as unregistered.
+    "networkx__networkx-8211",
+    "openai__openai-agents-python-1601",
 )
 
 
@@ -571,18 +577,22 @@ class TestCrossChainPolicyWithRealChains:
 
         out = real(REAL_CHAINS, REAL_TASKS)
         assert out["operative_admitted"] == [
+            "networkx__networkx-8211",
+            "openai__openai-agents-python-1601",
             "openai__openai-agents-python-1633",
             "openai__openai-agents-python-1636",
             "python__mypy-19767",
         ]
-        assert out["credited_count"] == 4
+        assert out["credited_count"] == 6
         assert out["credited_admitted"] == sorted([
             "HypothesisWorks__hypothesis-4532",
+            "networkx__networkx-8211",
+            "openai__openai-agents-python-1601",
             "openai__openai-agents-python-1633",
             "openai__openai-agents-python-1636",
             "python__mypy-19767",
         ])
-        assert 300 - out["credited_count"] == 296
+        assert 300 - out["credited_count"] == 294
         assert out["corrections_verified"] == 1
         assert out["refused_terminal_override"] == []
         assert out["unregistered_admitted"] == []
@@ -596,7 +606,7 @@ class TestCrossChainPolicyWithRealChains:
 
         monkeypatch.setattr(B, "GRANDFATHERED_CORRECTION_TASK_IDS", frozenset())
         out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
-        assert out["credited_count"] == 3
+        assert out["credited_count"] == 5
         assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
         assert [r["task_id"] for r in out["refused_terminal_override"]] == [
             "HypothesisWorks__hypothesis-4532"]
@@ -878,7 +888,7 @@ class TestGrandfatherExceptionAndRegisteredTopology:
             B, "GRANDFATHERED_CORRECTION_TASK_IDS",
             frozenset({"HypothesisWorks__hypothesis-4532-2"}))
         out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
-        assert out["credited_count"] == 3
+        assert out["credited_count"] == 5
         assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
         assert [r["task_id"] for r in out["refused_terminal_override"]] == [
             "HypothesisWorks__hypothesis-4532"]
