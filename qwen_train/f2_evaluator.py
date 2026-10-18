@@ -100,10 +100,16 @@ STATUS_FAILED = "failed"
 STATUS_ERROR = "error"
 STATUS_SKIPPED = "skipped"
 STATUS_MISSING = "missing"
-
 #: Any status in this set means "the test did not pass". SKIPPED and ERROR are
 #: explicitly not passes, matching the SWE-bench grading convention.
 NOT_PASSED = frozenset({STATUS_FAILED, STATUS_ERROR, STATUS_SKIPPED, STATUS_MISSING})
+
+#: The execution-result value meaning "no scientific result was established".
+#: Kept in step with ``qwen_train.f2_evidence.RESULT_ERROR`` (asserted by a test);
+#: ``f2_evidence.VALID_RESULTS`` already accepts it, so the governance layer can
+#: carry it without a schema change.  An ``error`` result is NOT a pass and NOT a
+#: task failure: it is an environment/infrastructure outcome.
+RESULT_ERROR = "error"
 
 
 class EvaluatorError(RuntimeError):
@@ -216,6 +222,44 @@ def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
     return statuses
 
 
+#: pytest marks a module it could not IMPORT as
+#: ``<testcase classname="" name="<module path>"><error message="collection failure">``.
+#: Nothing in that case is a test result: the module never loaded, so none of its
+#: declared nodes could run.  Treating the resulting absent nodes as "not passed"
+#: makes an environment failure indistinguishable from a genuine
+#: base-fails-and-gold-still-fails outcome, which is how a missing dependency was
+#: recorded as a TERMINAL SCIENTIFIC ``gold_fail`` (it is never re-run).
+COLLECTION_ERROR_MESSAGE = "collection failure"
+
+
+def count_collection_errors(junit_bytes: bytes) -> int:
+    """Number of pytest collection-failure entries in retained JUnit evidence.
+
+    Keyed on pytest's own marker: a ``<testcase>`` with an EMPTY ``classname``
+    and an ``<error message="collection failure">`` child.  A genuine test
+    failure carries a real classname, and a genuine error carries the test's own
+    identity, so this cannot silently capture an ordinary failing test.
+
+    Fails closed: unparseable evidence raises (the caller must not treat an
+    unreadable artifact as "no collection errors").
+    """
+    if not junit_bytes:
+        raise EvaluatorError("junit evidence is empty")
+    try:
+        root = ET.fromstring(junit_bytes)
+    except ET.ParseError as exc:
+        raise EvaluatorError(f"junit evidence is not well-formed XML: {exc}") from exc
+    count = 0
+    for case in root.iter("testcase"):
+        if (case.get("classname") or "") != "":
+            continue
+        for child in case:
+            if child.tag == "error" and COLLECTION_ERROR_MESSAGE in (child.get("message") or ""):
+                count += 1
+                break
+    return count
+
+
 @dataclass(frozen=True)
 class EvaluationOutcome:
     """Deterministic verdict over one execution's retained evidence."""
@@ -225,6 +269,9 @@ class EvaluationOutcome:
     pass_to_pass: dict[str, str]
     detail: str
     emitted_identities: int
+    #: Collection-failure entries pytest reported.  ``0`` for a clean run and for
+    #: any run whose evidence predates this field.
+    collection_errors: int = 0
 
     @property
     def all_fail_to_pass_passed(self) -> bool:
@@ -297,7 +344,25 @@ def evaluate_execution(
         resolved_p2p[nodeid] = statuses.get(ident, STATUS_MISSING)
 
     not_passed = {k: v for k, v in sorted(resolved.items()) if v != STATUS_PASSED}
-    if not not_passed:
+    collection_errors = count_collection_errors(junit_bytes)
+    # A declared node that is ABSENT from the evidence is only evidence of a test
+    # outcome if the test could have run.  When pytest reported a collection
+    # failure for the module that owns the node, its absence is explained by the
+    # environment, so the run establishes NO scientific result: it is "error"
+    # (infrastructure), not "fail".  The condition is deliberately narrow --
+    # collection errors present AND a declared node missing -- so a module that
+    # collected cleanly and genuinely failed still scores "fail", and a run with
+    # no collection errors is untouched.
+    missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
+    if collection_errors and missing:
+        result = RESULT_ERROR
+        detail = (
+            f"INCONCLUSIVE: pytest reported {collection_errors} collection "
+            f"failure(s) and {len(missing)} of {len(resolved)} declared "
+            "FAIL_TO_PASS node(s) were never collected; the environment, not the "
+            "task, prevented the target tests from running"
+        )
+    elif not not_passed:
         detail = f"all {len(resolved)} declared FAIL_TO_PASS nodes passed"
         result = "pass"
     else:
@@ -312,6 +377,7 @@ def evaluate_execution(
         pass_to_pass=resolved_p2p,
         detail=detail,
         emitted_identities=len(statuses),
+        collection_errors=collection_errors,
     )
     if instance_id or execution_state_identity:
         # Retained for the caller's provenance record; never affects the verdict.
@@ -467,6 +533,10 @@ def render_report(
         "declared_result": outcome.declared_result,
         "detail": outcome.detail,
         "emitted_identities": outcome.emitted_identities,
+        # Carried so the AUTHORITATIVE deriver can reach the same verdict: a
+        # collection failure makes absent target nodes an ENVIRONMENT outcome,
+        # not a task failure.  Additive field; absent means 0 (clean run).
+        "collection_errors": int(getattr(outcome, "collection_errors", 0) or 0),
         "fail_to_pass": dict(sorted(outcome.fail_to_pass.items())),
         "pass_to_pass": dict(sorted(outcome.pass_to_pass.items())),
     }
@@ -544,6 +614,18 @@ def verdict_from_report_payload(
     if unknown:
         return None, f"report carries unknown test statuses: {unknown}"
     not_passed = {k: v for k, v in sorted(statuses.items()) if v in NOT_PASSED}
+    # A collection failure explains an ABSENT target node, so the run establishes
+    # no scientific result: report "error" (environment), not "fail" (task).
+    # The condition is narrow -- collection errors present AND a declared node
+    # missing -- so a module that collected and genuinely failed still scores
+    # "fail".  Producer and deriver apply the SAME rule so they cannot drift.
+    _ce = int(payload.get("collection_errors") or 0)
+    _missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
+    if _ce and _missing:
+        return RESULT_ERROR, (
+            f"INCONCLUSIVE: {_ce} collection failure(s) and {len(_missing)} "
+            "declared FAIL_TO_PASS node(s) never collected"
+        )
     if not not_passed:
         return "pass", f"all {len(statuses)} declared FAIL_TO_PASS nodes passed"
     return "fail", (
@@ -600,6 +682,18 @@ def derive_result_protocol(
     if unknown:
         return None, f"evaluator report carries unknown statuses: {unknown}"
     not_passed = {k: v for k, v in sorted(statuses.items()) if v in NOT_PASSED}
+    # A collection failure explains an ABSENT target node, so the run establishes
+    # no scientific result: report "error" (environment), not "fail" (task).
+    # The condition is narrow -- collection errors present AND a declared node
+    # missing -- so a module that collected and genuinely failed still scores
+    # "fail".  Producer and deriver apply the SAME rule so they cannot drift.
+    _ce = int(payload.get("collection_errors") or 0)
+    _missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
+    if _ce and _missing:
+        return RESULT_ERROR, (
+            f"INCONCLUSIVE: {_ce} collection failure(s) and {len(_missing)} "
+            "declared FAIL_TO_PASS node(s) never collected"
+        )
     if not not_passed:
         return "pass", f"all {len(statuses)} declared FAIL_TO_PASS nodes passed"
     return "fail", (

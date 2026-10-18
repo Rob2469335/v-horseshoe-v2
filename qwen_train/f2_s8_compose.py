@@ -578,6 +578,27 @@ def _result_from_bundles(
     is actually on, and raises ``FactoryError`` on a mismatch, so a retried task
     would have been refused admission no matter how sound its evidence was.
     """
+    # An INCONCLUSIVE side (collection failure: the module never imported, so its
+    # declared nodes could not run) establishes NO scientific result.  It must be
+    # an infrastructure outcome -- retryable -- and never a terminal scientific
+    # `gold_fail`, which is recorded as `outcome_class="scientific"` and is never
+    # re-run.  Before this branch, a missing dependency and a genuine
+    # base-fails/gold-still-fails result produced the identical record.
+    inconclusive = [
+        side for side, bundle in (("base", base_bundle), ("gold", gold_bundle))
+        if bundle.declared_result == evidence.RESULT_ERROR
+    ]
+    if inconclusive:
+        return ExecutionResult(
+            task_id=spec.task_id, outcome="infrastructure_failure", attempt=int(attempt),
+            attempt_id=f"{spec.task_id}#{attempt}",
+            reason=(
+                "inconclusive evaluation on the " + "/".join(inconclusive)
+                + " side: pytest could not collect the declared tests, so no task "
+                "outcome is established"
+            ),
+        )
+
     admitted = (
         base_bundle.declared_result == evidence.RESULT_FAIL
         and gold_bundle.declared_result == evidence.RESULT_PASS
