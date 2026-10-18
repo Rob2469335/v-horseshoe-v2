@@ -178,6 +178,27 @@ def _excluded(rel_posix: str, patterns: Sequence[str]) -> bool:
     return False
 
 
+def _canonical_guest_root(value: Path | str) -> str:
+    """Canonical Windows spelling of a guest path, on every host OS.
+
+    The guest is always Windows.  On POSIX, ``Path("C:/f2_pilot/x")`` keeps the
+    forward slashes -- a backslash is an ordinary filename character there -- so
+    ``Path(r"C:\\f2_pilot\\x")`` and ``Path("C:/f2_pilot/x")`` stringify
+    differently and would bind DIFFERENT manifest digests for the same
+    destination.  Normalise the separator as plain text so the digest is a
+    function of the staging contract, not of how the caller spelled it.
+
+    On Windows this is byte-identical to ``str(Path(value))`` for ordinary
+    drive paths, so existing manifest digests do not move.
+    """
+    text = str(value).replace("/", "\\")
+    # Preserve a bare drive root ("C:\\") or UNC root; drop trailing separators
+    # from everything else so "x\\" and "x" name the same directory.
+    if len(text) > 3:
+        text = text.rstrip("\\") or text
+    return text
+
+
 def _hash_file_exact(path: Path) -> tuple[str, int]:
     h = hashlib.sha256()
     size = 0
@@ -371,7 +392,7 @@ def build_staging_manifest(
         schema_version=SCHEMA_VERSION,
         task_id=str(task_id),
         source_root=str(src),
-        guest_root=str(Path(guest_root)),
+        guest_root=_canonical_guest_root(guest_root),
         exclude_patterns=patterns,
         entries=tuple(entries),
         file_count=len(entries),

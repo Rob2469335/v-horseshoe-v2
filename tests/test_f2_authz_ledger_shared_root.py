@@ -13,6 +13,7 @@ one absolute path outside every worktree.
 from __future__ import annotations
 
 import hashlib
+import os
 import pathlib
 
 import pytest
@@ -28,7 +29,15 @@ MIGRATED_RECORD_ID = "57935d171a486aff552c62d9cceefec1e08b9d0420f1ce94300c8e4778
 MIGRATED_RECORD_SHA256 = "4b0e4f8613bb1787f0a1a021caad69d0b36a8be065f75ed51eb0576ea62e9dd3"
 #: Its ORIGINAL location, which must survive the copy untouched.
 SOURCE_ROOT = pathlib.Path(r"C:\Users\rober\f2_exec\rev-eb9d6c65\data\f2_authz_ledger")
-SHARED_ROOT = pathlib.Path(r"C:\Users\rober\F2_AUTHZ\ledger")
+#: The production root is an absolute path on every OS (Phase 1E): the owner's
+#: fixed Windows path on Windows, a fixed absolute POSIX path elsewhere.  The
+#: invariant asserted below is "one shared absolute path outside every
+#: worktree", not one particular spelling.
+SHARED_ROOT = (
+    pathlib.Path(r"C:\Users\rober\F2_AUTHZ\ledger")
+    if os.name == "nt"
+    else pathlib.Path("/var/lib/F2_AUTHZ/ledger")
+)
 AUTHZ_DIR = pathlib.Path(r"C:\Users\rober\F2_AUTHZ")
 
 
