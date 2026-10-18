@@ -35,6 +35,12 @@ from qwen_train.f2_s8_post_batch_audit import (  # noqa: E402
     require_passing,
     write_audit,
 )
+from qwen_train.f2_s8_evidence_index import (  # noqa: E402
+    build_index,
+    index_digest,
+    load_index,
+    write_index,
+)
 
 TASK = "acme__repo-1"
 NODE = "tests/test_mod.py::test_target"
@@ -170,7 +176,10 @@ def _fixture(
         "gold_collection_error_cause": gold_cause if write_gold else "",
         "failure_class": "" if write_base and write_gold else "no_artifact_reported",
         "reason_code": "" if write_base and write_gold else "worker_crash",
-        "ledger_record": {"registration_sha256": REG_SHA},
+        "ledger_record": {
+            "record_digest": "f" * 64,
+            "registration_sha256": REG_SHA,
+        },
     }
     row.update(row_overrides or {})
     if base_row_overrides:
@@ -211,7 +220,13 @@ def _fixture(
     }
 
 
-def _audit(fx: dict[str, pathlib.Path], **over) -> dict:
+def _audit(
+    fx: dict[str, pathlib.Path],
+    *,
+    evidence_index: object = "auto",
+    require_evidence_index: bool = True,
+    **over,
+) -> dict:
     kwargs = dict(
         batch_results_path=fx["results"],
         staging_root=fx["staging"],
@@ -221,7 +236,19 @@ def _audit(fx: dict[str, pathlib.Path], **over) -> dict:
         expected_repository_revision=REVISION,
         expected_run_id=RUN_ID,
         expected_staging_root=fx["staging"],
+        require_evidence_index=require_evidence_index,
     )
+    if evidence_index == "auto":
+        _index, index_path = build_index(
+            batch_results_path=fx["results"],
+            staging_root=fx["staging"],
+            output_dir=fx["root"] / "evidence_index",
+        )
+        kwargs["evidence_index_path"] = index_path
+    elif evidence_index is None:
+        kwargs["evidence_index_path"] = None
+    else:
+        kwargs["evidence_index_path"] = evidence_index
     kwargs.update(over)
     return audit_batch(**kwargs)
 
@@ -564,6 +591,95 @@ class TestBatchBinding:
         fx["results"].write_text(json.dumps(report, indent=1, sort_keys=True), encoding="utf-8")
         result = _audit(fx)
         assert result["verdict"] == "PASS", result["discrepancies"]
+
+
+# ---------------------------------------------------------------------------
+# evidence sidecar index (owner decision E1)
+# ---------------------------------------------------------------------------
+class TestEvidenceIndex:
+    def test_the_index_is_content_addressed(self, tmp_path):
+        fx = _fixture(tmp_path)
+        index, path = build_index(
+            batch_results_path=fx["results"],
+            staging_root=fx["staging"],
+            output_dir=tmp_path / "idx",
+        )
+        assert path.stem == index_digest(index)
+        assert load_index(path)["index_digest"] == path.stem
+
+    def test_a_batch_without_an_index_fails(self, tmp_path):
+        fx = _fixture(tmp_path)
+        result = _audit(fx, evidence_index=None)
+        assert "EVIDENCE_INDEX_MISSING" in _codes(result)
+
+    def test_a_tampered_index_is_detected(self, tmp_path):
+        fx = _fixture(tmp_path)
+        _index, path = build_index(
+            batch_results_path=fx["results"],
+            staging_root=fx["staging"],
+            output_dir=tmp_path / "idx",
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["entries"][0]["sides"]["base"]["junit_sha256"] = "0" * 64
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        result = _audit(fx, evidence_index=path)
+        assert "EVIDENCE_INDEX_MALFORMED" in _codes(result)
+
+    def test_a_substituted_index_is_detected(self, tmp_path):
+        fx_a = _fixture(tmp_path / "a")
+        fx_b = _fixture(tmp_path / "b")
+        _index, foreign = build_index(
+            batch_results_path=fx_b["results"],
+            staging_root=fx_b["staging"],
+            output_dir=tmp_path / "idx_b",
+        )
+        result = _audit(fx_a, evidence_index=foreign)
+        assert "EVIDENCE_INDEX_BINDING_MISMATCH" in _codes(result)
+
+    def test_an_index_hash_mismatch_is_detected(self, tmp_path):
+        fx = _fixture(tmp_path)
+        index, _path = build_index(
+            batch_results_path=fx["results"],
+            staging_root=fx["staging"],
+            output_dir=tmp_path / "idx",
+        )
+        index["entries"][0]["sides"]["base"]["junit_sha256"] = "0" * 64
+        replacement = write_index(tmp_path / "idx2", index)
+        result = _audit(fx, evidence_index=replacement)
+        assert "EVIDENCE_INDEX_HASH_MISMATCH" in _codes(result)
+
+    def test_an_infrastructure_row_is_indexed_with_null_sides(self, tmp_path):
+        fx = _fixture(tmp_path, write_base=False, write_gold=False)
+        index, _path = build_index(
+            batch_results_path=fx["results"],
+            staging_root=fx["staging"],
+            output_dir=tmp_path / "idx",
+        )
+        entry = index["entries"][0]
+        assert entry["outcome_class"] == "infrastructure"
+        assert entry["sides"]["base"]["junit_sha256"] is None
+        assert entry["sides"]["gold"]["junit_sha256"] is None
+
+    def test_a_pre_execution_refusal_is_indexed_unbound(self, tmp_path):
+        fx = _fixture(
+            tmp_path, write_base=False, write_gold=False,
+            row_overrides={"outcome": "ledger_refused",
+                           "reason_code": "ledger_refused",
+                           "failure_class": "ledger_refused",
+                           "admitted": False},
+        )
+        report = json.loads(fx["results"].read_text(encoding="utf-8"))
+        report["tasks"][0]["ledger_record"] = {}
+        fx["results"].write_text(json.dumps(report, indent=1, sort_keys=True), encoding="utf-8")
+        index, _path = build_index(
+            batch_results_path=fx["results"],
+            staging_root=fx["staging"],
+            output_dir=tmp_path / "idx",
+        )
+        entry = index["entries"][0]
+        assert entry["chain_bound"] is False
+        assert entry["record_digest"] is None
+        assert entry["outcome"] == "ledger_refused"
 
 
 # ---------------------------------------------------------------------------

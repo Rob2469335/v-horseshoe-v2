@@ -119,6 +119,11 @@ REASON_INFRA_UNCLASSIFIED = "INFRA_UNCLASSIFIED"
 REASON_OUTCOME_CLASS_UNKNOWN = "OUTCOME_CLASS_UNKNOWN"
 REASON_TOTALS_MISMATCH = "TOTALS_MISMATCH"
 REASON_AUDIT_DIGEST_MISMATCH = "AUDIT_DIGEST_MISMATCH"
+REASON_EVIDENCE_INDEX_MISSING = "EVIDENCE_INDEX_MISSING"
+REASON_EVIDENCE_INDEX_MALFORMED = "EVIDENCE_INDEX_MALFORMED"
+REASON_EVIDENCE_INDEX_BINDING_MISMATCH = "EVIDENCE_INDEX_BINDING_MISMATCH"
+REASON_EVIDENCE_INDEX_HASH_MISMATCH = "EVIDENCE_INDEX_HASH_MISMATCH"
+REASON_EVIDENCE_INDEX_INCOMPLETE = "EVIDENCE_INDEX_INCOMPLETE"
 
 
 #: Non-scientific outcomes that occur BEFORE execution: the driver refused to
@@ -382,6 +387,8 @@ def _base_result(
             "staging_root": str(staging),
             "manifest_path": str(manifest_file),
             "manifest_sha256": _sha256_file_or_empty(manifest_file),
+            "evidence_index_path": "",
+            "evidence_index_sha256": "",
             "run_id": "",
             "registration_id": "",
             "registration_sha256": "",
@@ -406,6 +413,8 @@ def audit_batch(
     expected_repository_revision: str | None = None,
     expected_run_id: str | None = None,
     expected_staging_root: Path | str | None = None,
+    evidence_index_path: Path | str | None = None,
+    require_evidence_index: bool = True,
     require_contracts: bool = True,
 ) -> dict[str, Any]:
     """Audit one completed batch and return a deterministic, reviewable result.
@@ -571,6 +580,105 @@ def audit_batch(
         "registration_sha256": registration_sha256,
         "repository_revision": revision,
     })
+
+    # ---- evidence sidecar index (owner decision E1) -----------------------
+    index: dict[str, Any] | None = None
+    if evidence_index_path is None:
+        if require_evidence_index:
+            discrepancies.append(
+                _discrepancy(
+                    "", "", REASON_EVIDENCE_INDEX_MISSING,
+                    "no sidecar evidence index was supplied for this batch",
+                )
+            )
+    else:
+        try:
+            from qwen_train.f2_s8_evidence_index import load_index
+
+            index = load_index(evidence_index_path)
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            discrepancies.append(
+                _discrepancy("", "", REASON_EVIDENCE_INDEX_MALFORMED, str(exc))
+            )
+        if index is not None:
+            result["batch"]["evidence_index_path"] = str(Path(evidence_index_path))
+            result["batch"]["evidence_index_sha256"] = str(
+                index.get("index_digest") or ""
+            )
+            binding = index.get("batch") if isinstance(index.get("batch"), Mapping) else {}
+            if (
+                str(binding.get("results_sha256") or "")
+                != result["batch"]["results_sha256"]
+                or str(binding.get("manifest_digest") or "") != manifest_digest
+                or (run_id and str(binding.get("run_id") or "") != run_id)
+                or str(binding.get("registration_sha256") or "")
+                != registration_sha256
+            ):
+                discrepancies.append(
+                    _discrepancy(
+                        "", "", REASON_EVIDENCE_INDEX_BINDING_MISMATCH,
+                        "the sidecar index does not describe this report, manifest, "
+                        "run id and registration",
+                    )
+                )
+            entries = (
+                index.get("entries") if isinstance(index.get("entries"), list) else []
+            )
+            by_record: dict[str, Mapping[str, Any]] = {}
+            by_task: dict[str, Mapping[str, Any]] = {}
+            for entry in entries:
+                if isinstance(entry, Mapping):
+                    by_record[str(entry.get("record_digest") or "")] = entry
+                    by_task[str(entry.get("task_id") or "")] = entry
+            for row in rows:
+                task_id = str(row.get("task_id") or "")
+                ledger_row = (
+                    row.get("ledger_record")
+                    if isinstance(row.get("ledger_record"), Mapping) else {}
+                )
+                record_digest = str(ledger_row.get("record_digest") or "")
+                entry = by_record.get(record_digest) if record_digest else None
+                if entry is None:
+                    entry = by_task.get(task_id)
+                if entry is None:
+                    discrepancies.append(
+                        _discrepancy(
+                            task_id, "", REASON_EVIDENCE_INDEX_INCOMPLETE,
+                            "the index has no entry for this task/record",
+                        )
+                    )
+                    continue
+                if record_digest and (
+                    not entry.get("chain_bound")
+                    or str(entry.get("record_digest") or "") != record_digest
+                ):
+                    discrepancies.append(
+                        _discrepancy(
+                            task_id, "", REASON_EVIDENCE_INDEX_BINDING_MISMATCH,
+                            "the index entry is not bound to this row's "
+                            f"record_digest {record_digest[:16]}...",
+                        )
+                    )
+                    continue
+                if bool(row.get("admitted")) and not entry.get("chain_bound"):
+                    discrepancies.append(
+                        _discrepancy(
+                            task_id, "", REASON_EVIDENCE_INDEX_INCOMPLETE,
+                            "an admitted row must be chain-bound in the index",
+                        )
+                    )
+                for side in SIDES:
+                    declared = str(row.get(f"{side}_junit_sha256") or "").strip()
+                    indexed = (
+                        (entry.get("sides") or {}).get(side) or {}
+                    ).get("junit_sha256")
+                    if declared and str(indexed or "") != declared:
+                        discrepancies.append(
+                            _discrepancy(
+                                task_id, side, REASON_EVIDENCE_INDEX_HASH_MISMATCH,
+                                f"declared={declared} index={indexed!r}",
+                            )
+                        )
 
     # ---- task identity ----------------------------------------------------
     if not rows:

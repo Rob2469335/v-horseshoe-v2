@@ -727,6 +727,13 @@ def _batch_audit_finding(
         return Finding(
             EXTERNAL_EVIDENCE, ident, "unverifiable",
             error or "the post-batch audit payload is absent", action)
+    index_sha = str((payload.get("batch") or {}).get("evidence_index_sha256") or "")
+    if len(index_sha) != 64 or any(c not in "0123456789abcdef" for c in index_sha):
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverifiable",
+            "the audit artifact does not bind a sidecar evidence index "
+            "(owner decision E1); the evidence is not bound to a retained index",
+            action)
     verdict = str(payload.get("verdict") or "")
     counts = payload.get("counts") or {}
     codes = ", ".join(payload.get("reason_codes") or []) or "<none>"

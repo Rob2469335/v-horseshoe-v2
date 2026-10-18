@@ -185,3 +185,38 @@ The index is written by the same post-batch step that writes
   residual risk explicitly in the Phase 2 plan.
 
 No code in this repository has been changed to implement either option.
+
+---
+
+## 8. Owner decision E1 (2026-10-18): Option B adopted
+
+The owner selected **Option B** and explicitly declined Option A:
+
+- The ledger row contract is **unchanged**; no historical row is rewritten.
+- The sidecar index is **content-addressed**: its canonical bytes are hashed with
+  SHA-256 and the file is named `<sha256>.json`; `load_index()` refuses a file
+  whose name does not match its content.
+- The index digest is written into every `post_batch_audit` artifact as
+  `batch.evidence_index_sha256`, and preflight refuses an audit artifact that
+  does not bind a valid index.
+- **Infrastructure rows are included.** A crashed side is recorded with
+  `junit_sha256: null` (never a zero hash). A designed pre-execution refusal
+  (for example `ledger_refused`, which writes no ledger row) is recorded
+  `chain_bound: false`, `record_digest: null`; the audit accepts that only for a
+  non-admitted infrastructure row.
+- Implementation: `qwen_train/f2_s8_evidence_index.py`; the live batch path
+  builds and writes the index before auditing; `audit_batch` validates the
+  index's batch/manifest/run/registration binding and every per-side hash.
+- Residual risk is unchanged and accepted: the index is **not** inside the hash
+  chain. A writer who can rewrite the staging root, the report and the index can
+  make them agree. Option A remains the stronger but contract-changing choice and
+  was not implemented.
+
+## 9. Owner decision E2 (2026-10-18): first Phase 2 batch
+
+The first Phase 2 batch will be **exactly 10 tasks**, so that one infrastructure
+failure is exactly 10% and does not trip the stop rule. The rule remains: **more
+than** 10% infrastructure failures in a batch stops progression. The denominator
+is every task attempted in that batch, never only the completed ones; unknown or
+missing evidence counts in the numerator and is never excluded.
+

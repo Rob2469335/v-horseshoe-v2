@@ -34,6 +34,7 @@ from typing import Any, Sequence
 
 from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_s8_compose import load_governance_from_env
+from qwen_train.f2_s8_evidence_index import build_index
 from qwen_train.f2_s8_factory import AppendOnlyLedger, LedgerError
 from qwen_train.f2_s8_pilot import (
     GuestChannel,
@@ -463,6 +464,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     # D4 HARD GATE: re-derive every declared per-side fact from the retained
     # JUnit.  A failing or inconclusive audit means the batch is NOT accepted and
     # no further batch may proceed until it is resolved.
+    try:
+        _index, index_path = build_index(
+            batch_results_path=out_path,
+            staging_root=resolved_staging,
+            output_dir=out_dir,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed after publishing results
+        print(
+            "REFUSING: the sidecar evidence index could not be built "
+            f"({type(exc).__name__}: {exc}); this batch's results are not "
+            "accepted and no next batch may proceed.",
+            flush=True,
+        )
+        return 1
     audit = audit_batch(
         batch_results_path=out_path,
         staging_root=resolved_staging,
@@ -472,6 +487,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_repository_revision=authorized_revision or None,
         expected_run_id=run_id,
         expected_staging_root=resolved_staging,
+        evidence_index_path=index_path,
     )
     audit_path = out_dir / "post_batch_audit.json"
     write_audit(audit_path, audit)

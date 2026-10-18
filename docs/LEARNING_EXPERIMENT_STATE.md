@@ -1606,3 +1606,13 @@ It does not implement the Stage-1 collection-only pre-check (next session), sign
 consume a grant, admit a task, change the admission predicate, alter the eight
 historical rows, add JUnit as a required trusted artifact role, or declare F2 READY.
 A green software suite is still not experimental readiness.
+
+### D-25. Owner decisions E1/E2 (2026-10-18)
+
+| Decision | Recorded outcome |
+|---|---|
+| **E1 — evidence binding** | **Option B adopted; Option A declined.** The ledger row contract is unchanged. A content-addressed sidecar index (`qwen_train/f2_s8_evidence_index.py`) binds each row's `record_digest` to the retained JUnit hashes; infrastructure rows are included with `null` for a crashed side. The index SHA-256 is written into every `post_batch_audit` artifact and preflight refuses an audit that does not bind one. The index is **not** chain-anchored; that residual risk is accepted and documented in `docs/EXPERIMENT_J_F2_S8_EVIDENCE_BINDING_DECISION.md`. |
+| **E2 — first Phase 2 batch** | The first batch will be **exactly 10 tasks**; one infrastructure failure is exactly 10% and does not stop. The stop rule remains **> 10%**, with the denominator = every task attempted in the batch (unknown/missing evidence counts in the numerator and is never excluded). |
+
+This entry grants no execution authorization and changes no historical row.
+
