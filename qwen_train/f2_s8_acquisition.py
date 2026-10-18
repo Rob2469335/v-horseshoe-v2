@@ -1188,6 +1188,15 @@ def declared_test_plugins(
 TEST_DEPENDENCY_SOURCE_NAMES: frozenset[str] = frozenset({
     "test", "tests", "testing", "test-deps", "test-dependencies",
     "test-requirements", "test-reqs", "test-suite", "testsuite", "testenv",
+    # ``dev``/``development`` were TRIALLED and REVERTED (2026-10-18). Measured
+    # on a 10-task batch: authlib declares its test deps in the feature groups
+    # ``django``/``flask``/``clients`` and its ``dev`` group holds only
+    # coverage/cryptography/pre-commit/pytest/tox, so widening to ``dev`` did
+    # not fix it; fastmcp's ``dev`` group pulled 20 extra distributions and
+    # collection REGRESSED (1990 -> 359 nodes collected). Zero gains, one
+    # regression: the widening is not kept. A task whose tests need a feature
+    # extra is curated through ``DECLARED_ADJUSTMENTS`` (explicit ``groups``/
+    # ``extras``), which is a per-task declaration rather than a global default.
 })
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -538,7 +539,8 @@ def classify_build_failure(exc: BaseException) -> str:
     )
     if any(sig in msg for sig in pip_install):
         return "DEPENDENCY_INSTALLATION_FAILURE"
-    if "git clone" in msg or "git checkout" in msg or "git apply" in msg:
+    if re.search(r"git(?:\.exe)?\s+(?:clone|checkout|apply|fetch|submodule|worktree)",
+                 msg, re.IGNORECASE):
         return "SOURCE_ACQUISITION_FAILURE"
     return "BUILD_FAILURE_UNCLASSIFIED"
 

@@ -116,14 +116,14 @@ class TestDeclaredTestRequirements:
         assert resolved["problems"] == []
 
     def test_non_test_extras_are_not_selected(self):
-        """No indiscriminate install: ``docs``/``dev``/``lint`` are left alone."""
+        """No indiscriminate install: ``docs``/``lint``/``benchmark`` are left alone."""
         deps = _inputs("""
 [project]
 name = "x"
 [project.optional-dependencies]
 docs = ["sphinx"]
-dev = ["black"]
 lint = ["ruff"]
+benchmark = ["asv"]
 """)
         resolved = declared_test_requirements(deps)
         assert resolved["requirements"] == []
@@ -134,7 +134,7 @@ lint = ["ruff"]
         deps = _inputs("""
 [project.optional-dependencies]
 testing = ["pandas"]
-dev = ["black", "sphinx"]
+docs = ["black", "sphinx"]
 """)
         resolved = declared_test_requirements(deps)
         assert resolved["requirements"] == ["pandas"]
@@ -240,6 +240,21 @@ testing = ["pytest-xdist"]
         assert "testing" in TEST_DEPENDENCY_SOURCE_NAMES
         assert "dev" not in TEST_DEPENDENCY_SOURCE_NAMES
         assert "docs" not in TEST_DEPENDENCY_SOURCE_NAMES
+        assert "lint" not in TEST_DEPENDENCY_SOURCE_NAMES
+
+    def test_a_dev_group_alone_is_not_selected(self):
+        """``dev`` was trialled and reverted on measurement: it fixed nothing and
+        regressed one task (1990 -> 359 nodes collected). A task whose tests need
+        a feature extra is curated per task via DECLARED_ADJUSTMENTS instead."""
+        deps = _inputs("""
+[dependency-groups]
+dev = ["django", "flask", "cryptography"]
+django = ["django"]
+docs = ["sphinx"]
+""")
+        resolved = declared_test_requirements(deps)
+        assert resolved["groups"] == []
+        assert resolved["requirements"] == []
 
     def test_a_marker_that_cannot_be_evaluated_here_is_reported(self):
         deps = _inputs(
@@ -313,6 +328,17 @@ class TestBuildFailureReasonCodes:
         exc = RuntimeError(
             "command failed rc=128: git clone --filter=blob:none https://x y\n"
             "fatal: could not read Username")
+        assert classify_build_failure(exc) == "SOURCE_ACQUISITION_FAILURE"
+
+    def test_a_windows_git_exe_clone_failure_is_also_source_acquisition(self):
+        """Measured miss: the builder invokes ``C:\\Program Files\\Git\\cmd\\git.exe``,
+        so the literal ``git clone`` never appears and a real network failure was
+        reported as unclassified."""
+        exc = RuntimeError(
+            "command failed rc=128: C:\\Program Files\\Git\\cmd\\git.exe clone "
+            "--filter=blob:none --quiet https://github.com/x/y.git C:\\f2\\repo\n"
+            "fatal: unable to access 'https://github.com/x/y.git/': "
+            "Could not resolve host: github.com")
         assert classify_build_failure(exc) == "SOURCE_ACQUISITION_FAILURE"
 
     def test_an_unrecognised_failure_is_NOT_relabelled_infrastructure(self):
