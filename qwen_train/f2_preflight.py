@@ -303,7 +303,9 @@ def _is_lower_sha256_hex(value: str) -> bool:
     return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
-def _s8_env_findings() -> list[Finding]:
+def _s8_env_findings(
+    state_set: Path | Mapping[str, Any] | str | None = None,
+) -> list[Finding]:
     """The S8-only governed inputs (no F2 fallback): presence AND shape.
 
     Names and labels are taken from the AUTHORITATIVE contract
@@ -314,9 +316,26 @@ def _s8_env_findings() -> list[Finding]:
     a ``*_DIGEST`` is a 64-character lowercase SHA-256, and the two state digests
     must differ (they cannot describe one execution state).
 
-    Only presence and shape are ever reported -- never a value -- and a finding
-    here is READINESS, never authorization to execute: clearing these checks does
-    not authorize the pilot or any task run.
+    **Optional binding (``state_set``).** Presence+shape alone cannot separate a
+    measured digest from a fabricated but well-formed one -- a documented Stage-0
+    limit.  When the caller supplies the ``f2-s8-state-set/v1`` artifact (the
+    CLI's ``--s8-state-set``), the gate additionally verifies that artifact
+    fail-closed (structural re-derivation of each side's ``aggregate_digest``,
+    domain separation, ordering and task-set integrity via
+    ``verify_state_set_aggregate``) and that each env digest EQUALS the
+    corresponding verified aggregate.  A structurally invalid artifact is
+    ``EXTERNAL EVIDENCE``; an env value that differs from the verified aggregate
+    is ``OPERATOR ACTION`` (``unbound``).  Supplying the artifact can therefore
+    only tighten the gate, never loosen it: when ``state_set`` is None the
+    behavior is exactly the historical shape check.
+
+    Only presence, shape and -- when bound -- aggregate equality are ever
+    reported -- never a value -- and a finding here is READINESS, never
+    authorization to execute: clearing these checks does not authorize the pilot
+    or any task run.  The binding proves the env values equal a structurally
+    verified aggregate artifact; the aggregate's provenance (that it was derived
+    from the measured 18-task records) is carried by the derivation artifact it
+    was built from, not by this gate.
     """
     try:
         from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
@@ -375,7 +394,99 @@ def _s8_env_findings() -> list[Finding]:
             out.append(Finding(
                 READY, ident, "set",
                 f"{name} is set ({label}); value not printed", ""))
-    return out
+
+    if state_set is None:
+        return out
+    return out + _s8_state_set_binding_findings(values, state_set)
+
+
+def _s8_state_set_binding_findings(
+    values: Mapping[str, str],
+    state_set: Path | Mapping[str, Any] | str,
+) -> list[Finding]:
+    """Bind the two state-digest env values to a supplied ``f2-s8-state-set/v1``
+    artifact, fail-closed.
+
+    The artifact's two sides are each verified with
+    ``f2_s8_state_set.verify_state_set_aggregate`` (structural re-derivation of
+    ``aggregate_digest`` over the canonical payload, domain-separated schema/type,
+    ascending task order, digest well-formedness, side consistency).  Only then
+    are the env digests compared to the verified aggregates.  This can only
+    tighten the gate: an unreadable/invalid artifact or a mismatching env value
+    produces a blocking finding; it never converts an absent env value to READY
+    (the shape findings above already reported those and are kept as-is).
+    """
+    base_name = "SWARM_S8_BASE_STATE_DIGEST"
+    gold_name = "SWARM_S8_GOLD_STATE_DIGEST"
+    ident = "env.s8_state_set_binding"
+
+    def _block(cat: str, status: str, detail: str, action: str) -> list[Finding]:
+        return [Finding(cat, ident, status, detail, action)]
+
+    try:
+        if isinstance(state_set, Mapping):
+            doc = dict(state_set)
+        else:
+            doc = json.loads(Path(str(state_set)).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return _block(
+            EXTERNAL_EVIDENCE, "unreadable",
+            f"the supplied state-set artifact could not be read ({exc}); the "
+            "env digests therefore remain unbound",
+            "supply the f2-s8-state-set/v1 artifact produced from the measured "
+            "derivation, or drop --s8-state-set to report shape only")
+    if not isinstance(doc, Mapping):
+        return _block(
+            EXTERNAL_EVIDENCE, "unusable",
+            "the supplied state-set artifact is not an object",
+            "supply the f2-s8-state-set/v1 artifact produced from the measured "
+            "derivation")
+
+    try:
+        from qwen_train.f2_s8_state_set import verify_state_set_aggregate
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return _block(
+            EXTERNAL_EVIDENCE, "unverifiable",
+            f"the state-set verifier is unavailable ({exc})",
+            "restore qwen_train/f2_s8_state_set.py")
+
+    verified: dict[str, Any] = {}
+    for side, env_name in (("base", base_name), ("gold", gold_name)):
+        verdict = verify_state_set_aggregate(doc.get(side), expected_side=side)
+        if not verdict.ok:
+            return _block(
+                EXTERNAL_EVIDENCE, f"invalid_{side}",
+                f"the supplied {side} aggregate did not verify "
+                f"({verdict.state}): {verdict.detail}",
+                "regenerate the state-set artifact from the measured derivation "
+                "with python -m qwen_train.f2_s8_state_set")
+        verified[side] = doc[side]
+
+    unbound = [
+        env_name for side, env_name in (("base", base_name), ("gold", gold_name))
+        if not values.get(env_name)
+        or values[env_name] != str(verified[side].get("aggregate_digest") or "")
+    ]
+    if unbound:
+        # Values are never printed; only WHICH variable differs is named.
+        return _block(
+            OPERATOR_ACTION, "unbound",
+            f"the env digest(s) {', '.join(unbound)} do not equal the verified "
+            "state-set aggregate(s) bound to candidate manifest "
+            f"{str(verified['base'].get('candidate_manifest_digest') or '')[:12]}…; "
+            "an aggregate-derived value and an asserted value cannot differ",
+            "set each SWARM_S8_{BASE,GOLD}_STATE_DIGEST to the aggregate_digest "
+            "of the corresponding verified side of the state-set artifact")
+
+    return [Finding(
+        READY, ident, "bound",
+        "both state digests equal the structurally verified "
+        f"f2-s8-state-set/v1 aggregates ({verified['base'].get('task_count', 0)} "
+        "base / "
+        f"{verified['gold'].get('task_count', 0)} gold records, manifest "
+        f"{str(verified['base'].get('candidate_manifest_digest') or '')[:12]}…); "
+        "value not printed",
+        "")]
 
 
 def _env_control_findings(
@@ -611,12 +722,56 @@ def _population_admission_finding(
     return Finding(EXTERNAL_EVIDENCE, ident, "insufficient", detail, action)
 
 
+def _active_lesson_finding(active_lesson: Any) -> Finding:
+    """``evidence.active_lesson`` -- evidence-derived, fail-closed.
+
+    Absent an input the finding keeps its historical ``absent`` value.  When a
+    record is supplied it is verified by the authoritative verifier
+    (``qwen_train.f2_lesson_evidence.verify_active_lesson_evidence``), which
+    deliberately separates three dimensions: evidence CONSISTENCY (frozen T
+    artifact + lesson binding + the frozen Q12 shape), receipt AUTHENTICITY
+    (HMAC under the operator receipt key) and owner AUTHORIZATION (an
+    owner-signed attestation bound to this learning event and verified against
+    the existing trust root).  Only all three together reach READY; every other
+    state is blocking.  The gate is never satisfied by consistency alone, so a
+    rehearsal cannot clear it, and no evidence is ever fabricated here.
+    """
+    ident = "evidence.active_lesson"
+    default_detail = (
+        "no genuine ACTIVE lesson is established, so T cannot be frozen "
+        "and X cannot be derived from it")
+    default_action = (
+        "perform the authorized clean-room learning event (requires Q9 "
+        "isolation, the receipt key, and an admitted population)")
+    if active_lesson is None:
+        return Finding(EXTERNAL_EVIDENCE, ident, "absent", default_detail, default_action)
+    try:
+        from qwen_train.f2_lesson_evidence import verify_active_lesson_evidence
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable",
+                       f"the ACTIVE-lesson verifier is unavailable ({exc})",
+                       "restore qwen_train/f2_lesson_evidence.py")
+    try:
+        verdict = verify_active_lesson_evidence(active_lesson)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverified",
+                       f"the supplied ACTIVE-lesson record could not be verified ({exc})",
+                       default_action)
+    dims = ", ".join(
+        f"{k}={v}" for k, v in sorted(dict(verdict.dimensions).items()))
+    if verdict.ok:
+        return Finding(READY, ident, "present", f"{verdict.detail} [{dims}]", "")
+    return Finding(EXTERNAL_EVIDENCE, ident, verdict.state,
+                   f"{verdict.detail} [{dims}]", default_action)
+
+
 def _evidence_findings(
     root: Path,
     *,
     ledgers: Sequence[Path | str] | None = None,
     registered_tasks: Sequence[str] | None = None,
     s8_evidence: Any = None,
+    active_lesson: Any = None,
 ) -> list[Finding]:
     """External evidence and authorization gates that no repository change can
     satisfy.
@@ -639,11 +794,7 @@ def _evidence_findings(
     """
     return [
         _s8_base_gold_finding(s8_evidence),
-        Finding(EXTERNAL_EVIDENCE, "evidence.active_lesson", "absent",
-                "no genuine ACTIVE lesson is established, so T cannot be frozen "
-                "and X cannot be derived from it",
-                "perform the authorized clean-room learning event (requires Q9 "
-                "isolation, the receipt key, and an admitted population)"),
+        _active_lesson_finding(active_lesson),
         _population_admission_finding(ledgers, registered_tasks),
         Finding(NOT_EXECUTED, "run.q10_calibration", "not_executed",
                 "calibration (Q10) is implemented but was not executed; it is not "
@@ -930,6 +1081,8 @@ def run_preflight(
     ledgers: Sequence[Path | str] | None = None,
     registered_tasks: Sequence[str] | None = None,
     s8_evidence: Path | Mapping[str, Any] | str | None = None,
+    active_lesson: Path | Mapping[str, Any] | str | None = None,
+    s8_state_set: Path | Mapping[str, Any] | str | None = None,
 ) -> dict[str, Any]:
     """Run every preflight check and return a deterministic report.
 
@@ -945,6 +1098,11 @@ def run_preflight(
     ``env.controls`` resolves against. Like ``env`` it exists so a test can
     model a hypothetical child environment; omitting it uses the real adapter
     values from ``F2_ADAPTER_CONTROLS``.
+
+    ``s8_state_set`` optionally supplies the ``f2-s8-state-set/v1`` artifact so
+    the S8 state-digest gate verifies the env values EQUAL the structurally
+    verified aggregates instead of only their shape (additive; None keeps the
+    historical shape-only behavior).
     """
     repo = Path(root) if root else Path(__file__).resolve().parents[1]
     if env is not None:
@@ -955,11 +1113,12 @@ def run_preflight(
     findings: list[Finding] = []
     findings += _code_findings()
     findings += _env_findings()
-    findings += _s8_env_findings()
+    findings += _s8_env_findings(state_set=s8_state_set)
     findings += _env_control_findings(repo, adapter_controls=adapter_controls)
     findings += _evidence_findings(repo, ledgers=ledgers,
                                    registered_tasks=registered_tasks,
-                                   s8_evidence=s8_evidence)
+                                   s8_evidence=s8_evidence,
+                                   active_lesson=active_lesson)
     # Q9: the privileged control and its attestation evidence are one gate,
     # VERIFIED (never trusted) from the single supplied artifact, with the host
     # capture the consuming gate also takes.
@@ -1117,6 +1276,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="path to a JSON document {\"tasks\": [...]} of S8 base/gold "
                          "evidence records to verify with "
                          "qwen_train.f2_evidence.verify_task_evidence")
+    ap.add_argument("--active-lesson", default=None,
+                    help="path to an f2-active-lesson-evidence/v1 record; when supplied "
+                         "the evidence.active_lesson gate is verified by "
+                         "qwen_train.f2_lesson_evidence (consistency + receipt "
+                         "authenticity + owner authorization). Absent, the gate keeps "
+                         "its historical value")
+    ap.add_argument("--s8-state-set", default=None,
+                    help="path to the f2-s8-state-set/v1 artifact; when supplied, "
+                         "the S8 state-digest gate verifies each env digest EQUALS "
+                         "the corresponding structurally verified aggregate "
+                         "(additive: absent, the gate checks presence+shape only)")
     ap.add_argument("--provenance", action="store_true",
                     help="print only the conversion-chain verdict")
     args = ap.parse_args(list(argv) if argv is not None else None)
@@ -1171,7 +1341,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                            ledgers=args.admission_ledger,
                            registered_tasks=registered_tasks,
                            s8_evidence=(Path(args.s8_evidence)
-                                        if args.s8_evidence else None))
+                                        if args.s8_evidence else None),
+                           active_lesson=(Path(args.active_lesson)
+                                          if args.active_lesson else None),
+                           s8_state_set=(Path(args.s8_state_set)
+                                         if args.s8_state_set else None))
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

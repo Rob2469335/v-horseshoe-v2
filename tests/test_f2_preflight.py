@@ -260,6 +260,159 @@ class TestS8EnvChecking:
         assert pf.AUTHORIZATION not in cats
 
 
+class TestS8StateSetBinding:
+    """``--s8-state-set`` binds the two state digests to verified aggregates.
+
+    Additive and fail-closed: supplying the artifact can only TIGHTEN the gate.
+    Without it the historical shape-only behavior is unchanged (covered by
+    ``TestS8EnvChecking`` and the honest-limit test in
+    ``tests/test_f2_execution_state.py``).
+    """
+
+    @staticmethod
+    def _artifact(tmp_path):
+        """A real f2-s8-state-set/v1 artifact derived from measured records."""
+        from qwen_train import f2_execution_state as es
+        from qwen_train import f2_s8_state_set as ss
+
+        results = []
+        for i, task_id in enumerate(("acme__repo-1", "acme__repo-2")):
+            side_records = {}
+            for side in ("base", "gold"):
+                root = tmp_path / f"tree-{i}-{task_id}-{side}"
+                root.mkdir(parents=True, exist_ok=True)
+                (root / "mod.py").write_text(f"# {i} {task_id} {side}\n",
+                                             encoding="utf-8")
+                rec = es.build_execution_state_from_disk(
+                    str(root),
+                    instance_id=task_id,
+                    repository="octocat/hello",
+                    base_commit="c" * 40,
+                    execution_state_identity=side,
+                    environment_identity="campaign/py3.14.8/cpython-3.14.8",
+                    test_command="python -m pytest -q",
+                    evaluator_implementation_digest="a" * 64,
+                    procedure_id="f2-s8-evaluator/v1",
+                    protocol_version="1",
+                    test_patch_digest="b" * 64,
+                    run_nonce=f"stage1-baseline-{task_id}-{side}",
+                    gold_patch_digest=("b" * 64 if side == "gold" else ""),
+                    measured_at="2026-10-17T00:00:00Z",
+                    interpreter="cpython-3.14.8:host/.venv/Scripts/python.exe",
+                    distributions=("a" * 64, 5),
+                )
+                side_records[side] = rec.to_dict()
+            results.append({"task_id": task_id,
+                            "base": side_records["base"],
+                            "gold": side_records["gold"],
+                            "pair_state": "ES_VERIFIED"})
+        doc = {
+            "schema_version": "f2-s8-state-derivation/v1",
+            "candidate_manifest_digest": "d" * 64,
+            "environment_label": "campaign",
+            "results": results,
+        }
+        manifest = "d" * 64
+        return {
+            side: ss.build_state_set_aggregate(
+                derivation=doc, candidate_manifest_digest=manifest, side=side
+            ).to_dict()
+            for side in ("base", "gold")
+        }
+
+    def test_matching_aggregates_bind_the_gate(self, clean_env, tmp_path):
+        art = self._artifact(tmp_path)
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST",
+                         art["base"]["aggregate_digest"])
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST",
+                         art["gold"]["aggregate_digest"])
+        rep = pf.run_preflight(s8_state_set=art)
+        by = {f["id"]: f for f in rep["findings"]}
+        binding = by["env.s8_state_set_binding"]
+        assert binding["category"] == pf.READY
+        assert binding["status"] == "bound"
+        # values are never printed
+        assert art["base"]["aggregate_digest"] not in json.dumps(rep)
+
+    def test_an_unbound_env_value_is_operator_action(self, clean_env, tmp_path):
+        """A well-formed digest that differs from the verified aggregate fails."""
+        art = self._artifact(tmp_path)
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST", "e" * 64)  # != aggregate
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST",
+                         art["gold"]["aggregate_digest"])
+        rep = pf.run_preflight(s8_state_set=art)
+        by = {f["id"]: f for f in rep["findings"]}
+        binding = by["env.s8_state_set_binding"]
+        assert binding["category"] == pf.OPERATOR_ACTION
+        assert binding["status"] == "unbound"
+        assert "SWARM_S8_BASE_STATE_DIGEST" in binding["detail"]
+        assert "e" * 64 not in json.dumps(rep)  # value never printed
+
+    def test_a_well_formed_but_altered_payload_fails_digest_rederivation(
+        self, clean_env, tmp_path
+    ):
+        """Alter a bound field while keeping every structural shape rule intact.
+
+        Only re-deriving the canonical payload digest can catch this: the entry
+        stays a 64-hex digest, task_count still matches, order is preserved.
+        """
+        art = self._artifact(tmp_path)
+        entry = art["base"]["entries"][0]
+        entry["measured_state_digest"] = "f" * 64  # still well-formed, but != bound
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST",
+                         art["base"]["aggregate_digest"])
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST",
+                         art["gold"]["aggregate_digest"])
+        rep = pf.run_preflight(s8_state_set=art)
+        by = {f["id"]: f for f in rep["findings"]}
+        binding = by["env.s8_state_set_binding"]
+        assert binding["category"] == pf.EXTERNAL_EVIDENCE
+        assert binding["status"] == "invalid_base"
+        assert "SS_AGGREGATE_MISMATCH" in binding["detail"]
+        assert "f" * 64 not in json.dumps(rep)  # altered value never printed
+
+    def test_a_shape_breaking_tamper_fails_closed(self, clean_env, tmp_path):
+        """A tamper caught by an earlier structural rule still blocks."""
+        art = self._artifact(tmp_path)
+        art["base"]["task_count"] = 99  # != len(entries): caught before digest
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST",
+                         art["base"]["aggregate_digest"])
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST",
+                         art["gold"]["aggregate_digest"])
+        rep = pf.run_preflight(s8_state_set=art)
+        by = {f["id"]: f for f in rep["findings"]}
+        binding = by["env.s8_state_set_binding"]
+        assert binding["category"] == pf.EXTERNAL_EVIDENCE
+        assert binding["status"] == "invalid_base"
+        assert "SS_INPUT_MALFORMED" in binding["detail"]
+
+    def test_an_unreadable_artifact_fails_closed(self, clean_env, tmp_path):
+        bad = tmp_path / "state_set.json"
+        bad.write_text("{not json", encoding="utf-8")
+        rep = pf.run_preflight(s8_state_set=bad)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_state_set_binding"]["category"] == pf.EXTERNAL_EVIDENCE
+        assert by["env.s8_state_set_binding"]["status"] == "unreadable"
+
+    def test_absent_artifact_keeps_the_historical_shape_gate(self, clean_env):
+        """No artifact supplied -> no binding finding, shape findings unchanged."""
+        rep = pf.run_preflight(s8_state_set=None)
+        idents = {f["id"] for f in rep["findings"]}
+        assert "env.s8_state_set_binding" not in idents
+        by = {f["id"]: f for f in rep["findings"]}
+        assert by["env.s8_base_state_digest"]["status"] == "set"
+
+    def test_binding_is_readiness_never_authorization(self, clean_env, tmp_path):
+        art = self._artifact(tmp_path)
+        clean_env.setenv("SWARM_S8_BASE_STATE_DIGEST",
+                         art["base"]["aggregate_digest"])
+        clean_env.setenv("SWARM_S8_GOLD_STATE_DIGEST",
+                         art["gold"]["aggregate_digest"])
+        rep = pf.run_preflight(s8_state_set=art)
+        by = {f["id"]: f for f in rep["findings"]}
+        assert pf.AUTHORIZATION != by["env.s8_state_set_binding"]["category"]
+
+
 class TestPreflightCompositionRootParity:
     """Preflight and the ACTUAL S8 composition root must agree.
 
@@ -1228,7 +1381,17 @@ class TestOptionBModelIdentity:
 
     def test_real_reconversion_record_accepts(self):
         rec_path = pf.Path(r"C:\Users\rober\F2_EVIDENCE\s8\conversion\conversion_record.json")
-        if not (rec_path.is_file() and pf.SERVED_GGUF_PATH.is_file()):
+        # The conversion chain ALSO resolves three repo-relative host-local inputs.
+        # Absent them the gate honestly reports `incomplete` (base_model/adapter/
+        # training_corpus UNRECORDED), so this is a host precondition, not a failure.
+        repo = pf.Path(pf.__file__).resolve().parents[1]
+        provenance_inputs = (
+            repo / "qwen_train" / "training_runs.jsonl",
+            repo / "qwen_train" / "robs4b_final_adapter",
+            repo.parent / "qwen_train_data",
+        )
+        if not (rec_path.is_file() and pf.SERVED_GGUF_PATH.is_file()
+                and all(p.exists() for p in provenance_inputs)):
             pytest.skip("requires host-local witnessed reconversion evidence")
         rep = pf.run_preflight(conversion_record=rec_path)
         by = {f["id"]: f for f in rep["findings"]}
