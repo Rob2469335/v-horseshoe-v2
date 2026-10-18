@@ -57,6 +57,7 @@ __all__ = [
     "BatchAuditBlocked",
     "TaskContract",
     "audit_batch",
+    "audit_payload_is_intact",
     "load_contracts",
     "contract_from_record",
     "write_audit",
@@ -89,6 +90,7 @@ REASON_RUN_ID_MISSING = "RUN_ID_MISSING"
 REASON_RUN_ID_MISMATCH = "RUN_ID_MISMATCH"
 REASON_REGISTRATION_MISSING = "REGISTRATION_MISSING"
 REASON_REGISTRATION_MISMATCH = "REGISTRATION_MISMATCH"
+REASON_REVISION_MISMATCH = "REVISION_MISMATCH"
 REASON_NO_TASKS = "NO_TASKS"
 REASON_TASK_DUPLICATE = "TASK_DUPLICATE"
 REASON_TASK_NOT_IN_MANIFEST = "TASK_NOT_IN_MANIFEST"
@@ -171,6 +173,18 @@ def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
 def _audit_digest(payload: Mapping[str, Any]) -> str:
     body = {k: v for k, v in payload.items() if k != "audit_digest"}
     return _sha256_bytes(_canonical_bytes(body))
+
+
+def audit_payload_is_intact(payload: Mapping[str, Any]) -> bool:
+    """True only when a result carries a valid digest over its own content.
+
+    This is the in-memory counterpart of :func:`load_audit`.  A caller that
+    passes a mapping (rather than a file) must not be able to assert PASS
+    without also carrying the integrity value: CWE-354 requires the check value
+    to be validated *before* the data is used, not merely present.
+    """
+    declared = str(payload.get("audit_digest") or "")
+    return _is_sha256(declared) and declared == _audit_digest(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +276,10 @@ def _group_evidence(paths: Iterable[Path]) -> tuple[list[EvidenceFile], list[Pat
     Recognition is on the *filename contract*, not on a directory listing being
     trusted: ``<task>.<side>.junit.hostcopy.xml`` with ``side in {base, gold}``.
     A file whose name does not fit is returned as unexplained, and so is a
-    recognised name that collides with another (on a case-insensitive store two
-    spellings can name the same bytes and make the binding ambiguous).
+    recognised name that collides with another.  Collision follows the HOST's
+    case semantics (``os.path.normcase``): on Windows two spellings can name the
+    same bytes and make the binding ambiguous; on POSIX they are distinct task
+    ids and must not be collapsed.
     """
     recognised: list[EvidenceFile] = []
     unexplained: list[Path] = []
@@ -282,7 +298,7 @@ def _group_evidence(paths: Iterable[Path]) -> tuple[list[EvidenceFile], list[Pat
         if side not in SIDES or not task_id:
             unexplained.append(path)
             continue
-        key = (task_id.lower(), side)
+        key = (os.path.normcase(task_id), side)
         if key in seen:
             # A duplicate is not silently collapsed: the caller must fail.
             recognised.append(EvidenceFile(task_id, side, path))
@@ -327,7 +343,7 @@ def _manifest_entries(document: Any) -> dict[str, Mapping[str, Any]]:
 
 def _task_rows(document: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     raw = document.get("tasks")
-    if raw is None:
+    if not isinstance(raw, list):
         raw = document.get("results")
     if not isinstance(raw, list):
         raise BatchAuditError("batch report has no 'tasks'/'results' list")
@@ -335,6 +351,19 @@ def _task_rows(document: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if len(rows) != len(raw):
         raise BatchAuditError("batch report contains a non-object task row")
     return rows
+
+
+def _sha256_file_or_empty(path: Path) -> str:
+    """Hash a file for the batch header; an unreadable file is an empty value.
+
+    The audit must still return a reviewable FAIL result when the report or
+    manifest exists but cannot be read (permissions, a lock, I/O error), rather
+    than raising out of the live batch path.
+    """
+    try:
+        return _sha256_file(path)
+    except OSError:
+        return ""
 
 
 def _base_result(
@@ -349,14 +378,10 @@ def _base_result(
         "verdict": "FAIL",
         "batch": {
             "results_path": str(results_path),
-            "results_sha256": (
-                _sha256_file(results_path) if results_path.is_file() else ""
-            ),
+            "results_sha256": _sha256_file_or_empty(results_path),
             "staging_root": str(staging),
             "manifest_path": str(manifest_file),
-            "manifest_sha256": (
-                _sha256_file(manifest_file) if manifest_file.is_file() else ""
-            ),
+            "manifest_sha256": _sha256_file_or_empty(manifest_file),
             "run_id": "",
             "registration_id": "",
             "registration_sha256": "",
@@ -534,7 +559,7 @@ def audit_batch(
     if expected_repository_revision and revision != expected_repository_revision:
         discrepancies.append(
             _discrepancy(
-                "", "", REASON_REGISTRATION_MISMATCH,
+                "", "", REASON_REVISION_MISMATCH,
                 "repository revision differs from the caller's expected revision "
                 f"(declared={revision or '<absent>'})",
             )
@@ -578,7 +603,7 @@ def audit_batch(
     recognised, unexplained = _group_evidence(candidates)
     by_key: dict[tuple[str, str], list[EvidenceFile]] = {}
     for item in recognised:
-        by_key.setdefault((item.task_id.lower(), item.side), []).append(item)
+        by_key.setdefault((os.path.normcase(item.task_id), item.side), []).append(item)
 
     # ---- contracts --------------------------------------------------------
     if contracts is None and inputs_dir is not None:
@@ -637,7 +662,7 @@ def audit_batch(
             for side in SIDES:
                 declared_hash = str(row.get(f"{side}_junit_sha256") or "").strip()
                 expected = _expected_path(staging, task_id, side)
-                matches = by_key.get((task_id.lower(), side), [])
+                matches = by_key.get((os.path.normcase(task_id), side), [])
                 side_info: dict[str, Any] = {
                     "declared_sha256": declared_hash,
                     "expected_path": str(expected),
@@ -934,26 +959,31 @@ def audit_batch(
     # ---- totals consistency (only when the report declares totals) --------
     totals = report.get("totals")
     if isinstance(totals, Mapping):
-        declared_admitted = totals.get("admitted", _MISSING)
         admissed_rows = sum(1 for r in rows if bool(r.get("admitted")))
-        if declared_admitted is not _MISSING and int(declared_admitted or 0) != admissed_rows:
-            discrepancies.append(
-                _discrepancy(
-                    "", "", REASON_TOTALS_MISMATCH,
-                    f"totals.admitted={declared_admitted} rows={admissed_rows}",
-                )
-            )
-        declared_attempted = totals.get("attempted", _MISSING)
         attempted_rows = sum(1 for r in rows if bool(r.get("attempted", True)))
-        if declared_attempted is not _MISSING and int(
-            declared_attempted or 0
-        ) != attempted_rows:
-            discrepancies.append(
-                _discrepancy(
-                    "", "", REASON_TOTALS_MISMATCH,
-                    f"totals.attempted={declared_attempted} rows={attempted_rows}",
-                )
+        for field, actual in (("admitted", admissed_rows), ("attempted", attempted_rows)):
+            declared = totals.get(field, _MISSING)
+            if declared is _MISSING:
+                continue
+            parsed = (
+                declared
+                if isinstance(declared, int) and not isinstance(declared, bool)
+                else None
             )
+            if parsed is None or parsed < 0:
+                discrepancies.append(
+                    _discrepancy(
+                        "", "", REASON_TOTALS_MISMATCH,
+                        f"totals.{field}={declared!r} is not a non-negative integer",
+                    )
+                )
+            elif parsed != actual:
+                discrepancies.append(
+                    _discrepancy(
+                        "", "", REASON_TOTALS_MISMATCH,
+                        f"totals.{field}={parsed} rows={actual}",
+                    )
+                )
 
     result["tasks"] = sorted(task_reports, key=lambda t: t["task_id"])
     result["counts"] = {
@@ -989,12 +1019,15 @@ def _seal(result: dict[str, Any]) -> dict[str, Any]:
 # artifact persistence + progression gate
 # ---------------------------------------------------------------------------
 def write_audit(path: Path | str, result: Mapping[str, Any]) -> Path:
-    """Write the audit artifact atomically.  Never touches evidence or ledgers."""
+    """Write the audit artifact atomically and durably.  Never touches evidence."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(body, encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(body)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, target)
     return target
 
@@ -1029,10 +1062,10 @@ def require_passing(
     payload = load_audit(audit) if isinstance(audit, (str, Path)) else dict(audit)
     if payload.get("schema") != SCHEMA:
         raise BatchAuditBlocked(f"{purpose}: unknown audit schema")
-    declared = str(payload.get("audit_digest") or "")
-    if declared and declared != _audit_digest(payload):
+    if not audit_payload_is_intact(payload):
         raise BatchAuditBlocked(
-            f"{purpose}: the supplied audit does not match its audit_digest"
+            f"{purpose}: the supplied audit has no valid audit_digest or does not "
+            "match its own content"
         )
     verdict = str(payload.get("verdict") or "")
     if verdict != "PASS":

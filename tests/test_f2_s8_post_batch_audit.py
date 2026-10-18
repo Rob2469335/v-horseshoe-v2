@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
 import sys
 
@@ -420,6 +421,15 @@ class TestEvidenceIdentity:
         # The collision is surfaced, not dropped.
         assert unexplained
 
+    def test_case_distinct_task_ids_are_not_duplicates_on_posix(self, monkeypatch):
+        """POSIX is case-sensitive; only the HOST's normcase may collapse names."""
+        monkeypatch.setattr(os.path, "normcase", lambda p: p)
+        a = pathlib.Path("Foo.base.junit.hostcopy.xml")
+        b = pathlib.Path("foo.base.junit.hostcopy.xml")
+        recognised, unexplained = _group_evidence([a, b])
+        assert len(recognised) == 2
+        assert unexplained == []
+
     def test_a_different_staging_root_is_refused(self, tmp_path):
         fx = _fixture(tmp_path)
         other = tmp_path / "other-staging"
@@ -521,6 +531,40 @@ class TestBatchBinding:
         result = _audit(fx, inputs_dir=tmp_path / "absent")
         assert "CONTRACT_MALFORMED" in _codes(result)
 
+    def test_a_wrong_revision_has_its_own_reason_code(self, tmp_path):
+        fx = _fixture(tmp_path)
+        result = _audit(fx, expected_repository_revision="e" * 40)
+        assert "REVISION_MISMATCH" in _codes(result)
+
+    def test_malformed_totals_do_not_crash_the_audit(self, tmp_path):
+        fx = _fixture(tmp_path)
+        report = json.loads(fx["results"].read_text(encoding="utf-8"))
+        report["totals"]["admitted"] = "not-an-int"
+        fx["results"].write_text(json.dumps(report, indent=1, sort_keys=True), encoding="utf-8")
+        result = _audit(fx)
+        assert "TOTALS_MISMATCH" in _codes(result)
+
+    def test_an_unreadable_report_returns_a_reviewable_fail(self, tmp_path):
+        fx = _fixture(tmp_path)
+        # A directory exists but cannot be read as a report file.
+        result = audit_batch(
+            batch_results_path=fx["staging"],
+            staging_root=fx["staging"],
+            manifest_path=fx["manifest"],
+            inputs_dir=fx["inputs"],
+        )
+        assert result["verdict"] == "FAIL"
+        assert "BATCH_UNREADABLE" in result["reason_codes"]
+
+    def test_a_non_list_tasks_field_falls_back_to_results(self, tmp_path):
+        fx = _fixture(tmp_path)
+        report = json.loads(fx["results"].read_text(encoding="utf-8"))
+        report["results"] = report.pop("tasks")
+        report["tasks"] = "not-a-list"
+        fx["results"].write_text(json.dumps(report, indent=1, sort_keys=True), encoding="utf-8")
+        result = _audit(fx)
+        assert result["verdict"] == "PASS", result["discrepancies"]
+
 
 # ---------------------------------------------------------------------------
 # hard stop
@@ -564,3 +608,28 @@ class TestHardStop:
 
         by = {f["id"]: f for f in pf.run_preflight()["findings"]}
         assert by["population.batch_audit"]["status"] == "absent"
+
+    def test_a_mapping_without_a_digest_is_blocked(self, tmp_path):
+        fx = _fixture(tmp_path)
+        result = _audit(fx)
+        no_digest = {k: v for k, v in result.items() if k != "audit_digest"}
+        with pytest.raises(BatchAuditBlocked):
+            require_passing(no_digest)
+
+    def test_a_tampered_mapping_is_blocked(self, tmp_path):
+        failed = _audit(_collection_batch(tmp_path))
+        tampered = dict(failed)
+        tampered["verdict"] = "PASS"  # digest still covers the FAIL content
+        with pytest.raises(BatchAuditBlocked):
+            require_passing(tampered)
+
+    def test_preflight_rejects_a_tampered_mapping(self, tmp_path):
+        from qwen_train import f2_preflight as pf
+
+        failed = _audit(_collection_batch(tmp_path))
+        tampered = dict(failed)
+        tampered["verdict"] = "PASS"
+        report = pf.run_preflight(batch_audit=tampered)
+        by = {f["id"]: f for f in report["findings"]}
+        assert by["population.batch_audit"]["status"] == "unverifiable"
+        assert by["population.admission"]["status"] != "credit_blocked"

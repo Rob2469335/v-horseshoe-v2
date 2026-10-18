@@ -672,16 +672,29 @@ def _load_batch_audit(
     """Load and integrity-check a D4 audit artifact.  Never trusts the verdict."""
     if source is None:
         return None, "no post-batch evidence audit was supplied"
+    try:
+        from qwen_train.f2_s8_post_batch_audit import (
+            SCHEMA as AUDIT_SCHEMA,
+            audit_payload_is_intact,
+            load_audit,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return None, f"the post-batch audit module is unavailable ({exc})"
     if isinstance(source, Mapping):
         payload = dict(source)
+        # CWE-354: validate the check value before using the data.  A caller-
+        # supplied mapping must carry the digest, not merely assert PASS.
+        if not audit_payload_is_intact(payload):
+            return None, (
+                "the supplied post-batch audit mapping has no valid audit_digest "
+                "or does not match its own content"
+            )
     else:
         try:
-            from qwen_train.f2_s8_post_batch_audit import load_audit
-
             payload = load_audit(source)
         except Exception as exc:  # noqa: BLE001 - fail closed
             return None, f"the supplied post-batch audit could not be verified ({exc})"
-    if payload.get("schema") != "f2-s8-post-batch-audit/v1":
+    if payload.get("schema") != AUDIT_SCHEMA:
         return None, "the supplied post-batch audit has an unknown schema"
     return payload, ""
 
@@ -710,7 +723,10 @@ def _batch_audit_finding(
                        action)
     if error:
         return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable", error, action)
-    assert payload is not None
+    if payload is None:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverifiable",
+            error or "the post-batch audit payload is absent", action)
     verdict = str(payload.get("verdict") or "")
     counts = payload.get("counts") or {}
     codes = ", ".join(payload.get("reason_codes") or []) or "<none>"
