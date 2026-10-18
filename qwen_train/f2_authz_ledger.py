@@ -59,16 +59,32 @@ from qwen_train.f2_authorization import AuthorizationError, canonical_bytes
 
 SCHEMA = "f2-authz-consumption/v1"
 
-#: Production ledger location: a CODE CONSTANT under the gitignored ``data/``
-#: tree. It is deliberately NOT environment-selectable: a process that can
-#: set ``F2_AUTHZ_LEDGER_DIR``-style variables could otherwise redirect a
+#: Production ledger location: a SHARED, ABSOLUTE code constant OUTSIDE every
+#: Git worktree. It is deliberately NOT environment-selectable: a process that
+#: can set ``F2_AUTHZ_LEDGER_DIR``-style variables could otherwise redirect a
 #: protected operation to an empty ledger and make a consumed grant appear
 #: unused. Tests use the constructor/parameter injection
 #: (``AuthorizationLedger(root=...)`` / ``verify_and_consume(ledger_root=...)``)
 #: or monkeypatch this constant - never a production environment variable.
-#: A checkout has no ledger until a real (owner-authorized) consumption
-#: happens.
-DEFAULT_LEDGER_ROOT = Path(__file__).resolve().parents[1] / "data" / "f2_authz_ledger"
+#:
+#: WHY IT MOVED (owner decision G1, 2026-10-18). The previous default was
+#: ``Path(__file__).resolve().parents[1] / "data" / "f2_authz_ledger"`` - i.e.
+#: derived from the EXECUTING FILE, and therefore **per worktree**. Consumption
+#: is keyed on the grant's record digest and created with ``O_CREAT | O_EXCL``
+#: inside that root, and no cross-root store is consulted, so the single-use
+#: guarantee held only *within one ledger root*: the same signed grant looked
+#: UNCONSUMED from any other checkout and could be consumed a second time.
+#: Measured 2026-10-18: the consumed grant ``57935d17…f40e`` existed only under
+#: ``C:\Users\rober\f2_exec\rev-eb9d6c65\data\f2_authz_ledger`` and read as
+#: unconsumed from both the main repository and ``rev-455c66ab``
+#: (``GOVERNANCE GAP``, now closed). One absolute path makes every worktree
+#: resolve the same consumption store, which is what "single-use" requires.
+#:
+#: MIGRATION: the one existing record was COPIED here (never moved) on
+#: 2026-10-18 and verified byte-for-byte (SHA-256
+#: ``4b0e4f8613bb1787f0a1a021caad69d0b36a8be065f75ed51eb0576ea62e9dd3``); the
+#: original is preserved unchanged.
+DEFAULT_LEDGER_ROOT = Path(r"C:\Users\rober\F2_AUTHZ\ledger")
 
 
 class LedgerError(AuthorizationError):
