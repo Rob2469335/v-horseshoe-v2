@@ -410,6 +410,15 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 - **Meaning of READY:** the required evidence and environmental prerequisites have **actually been established**. It never means "the code that checks readiness exists."
 - **Next:** L
 
+#### K.1 Post-batch evidence audit (D4) — **IMPLEMENTED 2026-10-18; a hard gate from Phase 2**
+
+- **Command:** `python -m qwen_train.f2_s8_post_batch_audit --batch-results <pilot_results.json> --staging-root <dir> --manifest <build_manifest.json> --inputs <inputs dir> --out <audit.json>`
+- **Live path:** `qwen_train.f2_s8_pilot_live.main` binds the manifest path+digest, staging root, inputs, repository revision and a run id into `pilot_results.json`, writes `post_batch_audit.json`, and returns nonzero when the audit is not `PASS`.
+- **Preflight gate:** `python -m qwen_train.f2_preflight --batch-audit <audit.json>`. Finding `population.batch_audit` is `BLOCKED` when the artifact is absent, unverifiable, `FAIL` or `INCONCLUSIVE`; `population.admission` does **not** call the reconciler (credit is blocked) when the supplied audit is not `PASS`.
+- **What it establishes:** for every declared JUnit hash, the file exists in the bound staging root, hashes to the declared digest, parses, and re-derives the declared `collection_errors` (**all** entries), `collection_error_cause` (from the gold patch's changed modules) and verdict under the task's declared FAIL_TO_PASS/PASS_TO_PASS. Missing declared values, swapped/missing/malformed/duplicate/foreign evidence, and manifest/run/registration mismatches are failures. A no-evidence row is valid only for an infrastructure outcome with a registered F0 §12 reason (or a designed ledger refusal).
+- **What it does not establish:** that the JUnit bytes are authentic, or that evidence was not deleted and the report rewritten. It is detection, not an independent evidence anchor. Chain-binding infrastructure-row evidence is an owner decision: `docs/EXPERIMENT_J_F2_S8_EVIDENCE_BINDING_DECISION.md`.
+- **Historical Phase 3 report:** audited read-only on 2026-10-18 → `FAIL` (it predates the binding and per-side declarations), with recounts such as `conan-io__conan-18832` base=**345**. No historical row, credit figure or trust-root file was changed.
+
 ---
 
 ### L. Q10 calibration — **NOT EXECUTED** (machinery implemented)

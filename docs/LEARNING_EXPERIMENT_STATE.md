@@ -1580,3 +1580,29 @@ provisions no credential; changes no code (the preflight `authz.population_acqui
 finding remains hard-coded at `qwen_train/f2_preflight.py:391` and still reports
 `not_authorized` — recognizing the ledger entry there **REQUIRES AUTHORIZATION**); and
 does not declare F2 READY.
+
+---
+
+## D4 and CI Repair (2026-10-18, Phase 1E)
+
+This entry records the repair of the controls an independent audit found broken. It
+grants no authorization, executes no scored task, and changes no historical row.
+
+### D-23. What is now true
+
+| Item | State | Evidence class |
+|---|---|---|
+| **D1 cause-sensitive classification** | Implemented and published at `00a3bbf5`; the `__init__` edge case is repaired (a patched `pkg/__init__.py` denotes package `pkg`). Re-derived over all 23 retained phase-3 side rows, **no outcome changed**; the 8 historical collection-failure rows stay `error`, the two admitted controls stay base=`fail`/gold=`pass`, `networkx__networkx-8207` stays base=`fail`/gold=`fail`. The recount is 6 `environment` / 2 `unknown` (an earlier 5/3 note was not re-verified). | `PROVEN IN CURRENT REVISION` |
+| **D4 post-batch audit** | Implemented **inside the repository** as `qwen_train/f2_s8_post_batch_audit.py`, with 35 adversarial tests that call `audit_batch()`. It recounts **all** collection errors (the `conan-io__conan-18832` base fixture yields 345, not 1), compares the JUnit SHA-256 with the declared hash, re-derives cause and verdict with the authoritative evaluator, and fails closed on missing/undeclared/malformed/swapped/duplicate/foreign evidence and on manifest/run/registration mismatches. | `PROVEN IN CURRENT REVISION` |
+| **D4 is a hard stop** | The live batch path writes `pilot_results.json` with manifest path+digest, staging root, inputs, revision and run id, then runs the audit, writes `post_batch_audit.json`, and returns nonzero on non-PASS. Preflight exposes `population.batch_audit` and refuses to call the reconciler (credit) unless the supplied audit verifies as PASS. | `PROVEN IN CURRENT REVISION` |
+| **Historical Phase 3 audit** | Read-only re-run → **FAIL** (the report predates the binding and per-side declarations), with recounted evidence such as `conan-18832` base=345. No historical row, credit figure or trust-root file was touched. | `PROVEN IN CURRENT REVISION` |
+| **CI** | The four failures on `00a3bbf5` are repaired: the shared ledger root is absolute on every OS (fixed Windows path on Windows, fixed POSIX path elsewhere), the staging guest-root canonicalisation is Windows-only so POSIX staging remains usable, and the manifest digest is separator-invariant with existing Windows digests unchanged. | `SUPPORTED` until the GitHub Actions conclusion for the final HEAD is recorded |
+| **Phase 2 execution** | **NOT AUTHORIZED.** No grant was signed/consumed/revoked; no scored task ran; `master` and PR #33 are unchanged. | `PROVEN IN CURRENT REVISION` |
+| **Infrastructure-row chain binding** | **GOVERNANCE GAP / decision required.** Ledger rows for infrastructure outcomes carry no evidence hash, so D4's finding is not anchored to the chain. Options and their contract impact: `docs/EXPERIMENT_J_F2_S8_EVIDENCE_BINDING_DECISION.md`. | `PROVEN IN CURRENT REVISION` (code read) |
+
+### D-24. What this entry does not decide
+
+It does not implement the Stage-1 collection-only pre-check (next session), sign or
+consume a grant, admit a task, change the admission predicate, alter the eight
+historical rows, add JUnit as a required trusted artifact role, or declare F2 READY.
+A green software suite is still not experimental readiness.
