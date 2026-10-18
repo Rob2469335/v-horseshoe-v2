@@ -87,6 +87,13 @@ class PilotTaskResult:
     evidence_sha256: str = ""
     base_junit_sha256: str = ""
     gold_junit_sha256: str = ""
+    #: Independently re-derivable per-side facts, written so the post-batch audit
+    #: can compare the report's claims with the retained JUnit.  ``None`` means
+    #: "no evidence was produced for this side"; it is never a silent zero.
+    base_collection_errors: int | None = None
+    gold_collection_errors: int | None = None
+    base_collection_error_cause: str = ""
+    gold_collection_error_cause: str = ""
     failure_class: str = ""
     #: F0 §12 exclusion rule this failure falls under (``INFRASTRUCTURE_REASONS``).
     reason_code: str = ""
@@ -319,6 +326,9 @@ def run_pilot_task(
 
     sides: dict[str, GuestEvidence] = {}
     junit_hashes: dict[str, str] = {}
+    #: Per-side facts re-derived from the authentic evaluator report, carried
+    #: into the batch report so D4 can compare them with the retained JUnit.
+    side_facts: dict[str, dict[str, Any]] = {}
     failure_class = ""
     provenance: dict[str, Any] = {}
 
@@ -452,6 +462,17 @@ def run_pilot_task(
                 ),
                 started_at=side_started, finished_at=side_finished,
             )
+            # Read the DECLARED facts from the authentic evaluator report, not from
+            # a second evaluator pass: these are exactly what the batch report will
+            # publish, so the post-batch audit compares like with like.
+            report_payload = evaluator.parse_report(sides[side].report)
+            side_facts[side] = {
+                "verdict": str(report_payload.get("declared_result") or ""),
+                "collection_errors": int(report_payload.get("collection_errors") or 0),
+                "collection_error_cause": str(
+                    report_payload.get("collection_error_cause") or "unknown"
+                ),
+            }
         except Exception as exc:  # noqa: BLE001 - evaluator refused the evidence
             failure_class = f"evaluator_refused_{side}_{type(exc).__name__}"
             break
@@ -488,6 +509,14 @@ def run_pilot_task(
             outcome="infrastructure_failure", outcome_class="infrastructure",
             base_junit_sha256=junit_hashes.get("base", ""),
             gold_junit_sha256=junit_hashes.get("gold", ""),
+            base_collection_errors=side_facts.get("base", {}).get("collection_errors"),
+            gold_collection_errors=side_facts.get("gold", {}).get("collection_errors"),
+            base_collection_error_cause=str(
+                side_facts.get("base", {}).get("collection_error_cause") or ""),
+            gold_collection_error_cause=str(
+                side_facts.get("gold", {}).get("collection_error_cause") or ""),
+            base_verdict=str(side_facts.get("base", {}).get("verdict") or ""),
+            gold_verdict=str(side_facts.get("gold", {}).get("verdict") or ""),
             failure_class=failure_class or "side_not_executable",
             reason_code=reason_code,
             detail=reason, ledger_record=record,
@@ -510,12 +539,18 @@ def run_pilot_task(
         admitted=admitted,
         outcome=str(record.get("outcome") or ""),
         outcome_class=str(record.get("outcome_class") or ""),
-        base_verdict=sides.get("base", GuestEvidence(b"", b"", "", "")).report and "produced" or "",
-        gold_verdict=sides.get("gold", GuestEvidence(b"", b"", "", "")).report and "produced" or "",
+        base_verdict=str(side_facts.get("base", {}).get("verdict") or ""),
+        gold_verdict=str(side_facts.get("gold", {}).get("verdict") or ""),
         evidence_name=str((record.get("evidence") or {}).get("name") or ""),
         evidence_sha256=str((record.get("evidence") or {}).get("sha256") or ""),
         base_junit_sha256=junit_hashes.get("base", ""),
         gold_junit_sha256=junit_hashes.get("gold", ""),
+        base_collection_errors=side_facts.get("base", {}).get("collection_errors"),
+        gold_collection_errors=side_facts.get("gold", {}).get("collection_errors"),
+        base_collection_error_cause=str(
+            side_facts.get("base", {}).get("collection_error_cause") or ""),
+        gold_collection_error_cause=str(
+            side_facts.get("gold", {}).get("collection_error_cause") or ""),
         failure_class=failure_class,
         # Propagate the F0 §12 rule when the session itself recorded one;
         # an admitted or scientifically-rejected run has no exclusion rule.

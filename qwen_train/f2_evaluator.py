@@ -262,7 +262,18 @@ def changed_module_paths(patch_text: str | None) -> tuple[str, ...]:
         out.add(".".join(parts))
         if parts[0] in _LAYOUT_PREFIXES and len(parts) > 1:
             out.add(".".join(parts[1:]))
-    return tuple(sorted(out))
+    # ``pkg/__init__.py`` denotes the PACKAGE ``pkg``, not a module named
+    # ``pkg.__init__``.  A test that imports ``pkg.sub`` re-exported by a patched
+    # ``pkg/__init__.py`` names ``pkg.sub``; leaving the changed path as
+    # ``pkg.__init__`` made ownership fail and misclassified a project-caused
+    # collection error as an environment failure.  Strip the trailing component.
+    normalised: set[str] = set()
+    for dotted in out:
+        if dotted.endswith(".__init__"):
+            dotted = dotted[: -len(".__init__")]
+        if dotted:
+            normalised.add(dotted)
+    return tuple(sorted(normalised))
 
 
 def _error_module(error_text: str) -> str:

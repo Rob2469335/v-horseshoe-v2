@@ -666,9 +666,70 @@ def _s8_base_gold_finding(s8_evidence: Any) -> Finding:
         "")
 
 
+def _load_batch_audit(
+    source: Path | Mapping[str, Any] | str | None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Load and integrity-check a D4 audit artifact.  Never trusts the verdict."""
+    if source is None:
+        return None, "no post-batch evidence audit was supplied"
+    if isinstance(source, Mapping):
+        payload = dict(source)
+    else:
+        try:
+            from qwen_train.f2_s8_post_batch_audit import load_audit
+
+            payload = load_audit(source)
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return None, f"the supplied post-batch audit could not be verified ({exc})"
+    if payload.get("schema") != "f2-s8-post-batch-audit/v1":
+        return None, "the supplied post-batch audit has an unknown schema"
+    return payload, ""
+
+
+def _batch_audit_finding(
+    source: Path | Mapping[str, Any] | str | None,
+    payload: Mapping[str, Any] | None,
+    error: str,
+) -> Finding:
+    """``population.batch_audit`` -- D4 must PASS before credit or a next batch.
+
+    Fail-closed: absent, unverifiable, FAIL or INCONCLUSIVE all block.  Only a
+    verified PASS whose ``audit_digest`` matches its content reaches READY.
+    """
+    ident = "population.batch_audit"
+    action = (
+        "run the post-batch audit over the retained JUnit, resolve every "
+        "discrepancy, and re-run it to PASS before crediting the batch or "
+        "selecting another"
+    )
+    if source is None:
+        return Finding(EXTERNAL_EVIDENCE, ident, "absent",
+                       "no post-batch evidence audit was supplied, so the last "
+                       "batch's declared evidence has not been independently "
+                       "re-derived; neither credit nor a next batch is authorized",
+                       action)
+    if error:
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable", error, action)
+    assert payload is not None
+    verdict = str(payload.get("verdict") or "")
+    counts = payload.get("counts") or {}
+    codes = ", ".join(payload.get("reason_codes") or []) or "<none>"
+    detail = (
+        f"verdict={verdict}; tasks_total={counts.get('tasks_total')}; "
+        f"tasks_passed={counts.get('tasks_passed')}; "
+        f"tasks_failed={counts.get('tasks_failed')}; "
+        f"reason_codes={codes}; audit_digest={payload.get('audit_digest')}"
+    )
+    if verdict == "PASS":
+        return Finding(READY, ident, "verified", detail, "")
+    return Finding(EXTERNAL_EVIDENCE, ident, "blocked", detail, action)
+
+
 def _population_admission_finding(
     ledgers: Sequence[Path | str] | None,
     registered_tasks: Sequence[str] | None,
+    *,
+    audit_payload: Mapping[str, Any] | None = None,
 ) -> Finding:
     """``population.admission`` -- the counting rule's own implementation.
 
@@ -678,10 +739,22 @@ def _population_admission_finding(
     not a raw ledger row count -- is the figure compared against the target.
     Every chain is verified by the reconciler first; a malformed chain, an
     unregistered name, or a broken digest chain leaves the gate BLOCKED.
+
+    D4 HARD GATE: when a post-batch audit was supplied and it did not PASS, the
+    reconciler is NOT called at all -- a failing audit blocks credit, rather than
+    merely being reported next to a credited figure.
     """
     ident = "population.admission"
     action = ("produce S8 base/gold evidence for the metadata-eligible tasks so "
               "they can be admitted")
+    if audit_payload is not None and str(audit_payload.get("verdict") or "") != "PASS":
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "credit_blocked",
+            "credit is blocked: the supplied post-batch audit verdict is "
+            f"{audit_payload.get('verdict')!r} (reason codes: "
+            f"{', '.join(audit_payload.get('reason_codes') or []) or '<none>'})",
+            "resolve the post-batch audit discrepancies and re-run it to PASS "
+            "before counting admissions")
     if not ledgers:
         return Finding(
             EXTERNAL_EVIDENCE, ident, "insufficient",
@@ -772,6 +845,7 @@ def _evidence_findings(
     registered_tasks: Sequence[str] | None = None,
     s8_evidence: Any = None,
     active_lesson: Any = None,
+    batch_audit: Path | Mapping[str, Any] | str | None = None,
 ) -> list[Finding]:
     """External evidence and authorization gates that no repository change can
     satisfy.
@@ -792,10 +866,13 @@ def _evidence_findings(
     leaves the gate BLOCKED; a positive ledger count never establishes base/gold
     provenance.
     """
+    audit_payload, audit_error = _load_batch_audit(batch_audit)
     return [
+        _batch_audit_finding(batch_audit, audit_payload, audit_error),
         _s8_base_gold_finding(s8_evidence),
         _active_lesson_finding(active_lesson),
-        _population_admission_finding(ledgers, registered_tasks),
+        _population_admission_finding(
+            ledgers, registered_tasks, audit_payload=audit_payload),
         Finding(NOT_EXECUTED, "run.q10_calibration", "not_executed",
                 "calibration (Q10) is implemented but was not executed; it is not "
                 "authorized in this repository state",
@@ -1083,6 +1160,7 @@ def run_preflight(
     s8_evidence: Path | Mapping[str, Any] | str | None = None,
     active_lesson: Path | Mapping[str, Any] | str | None = None,
     s8_state_set: Path | Mapping[str, Any] | str | None = None,
+    batch_audit: Path | Mapping[str, Any] | str | None = None,
 ) -> dict[str, Any]:
     """Run every preflight check and return a deterministic report.
 
@@ -1118,7 +1196,8 @@ def run_preflight(
     findings += _evidence_findings(repo, ledgers=ledgers,
                                    registered_tasks=registered_tasks,
                                    s8_evidence=s8_evidence,
-                                   active_lesson=active_lesson)
+                                   active_lesson=active_lesson,
+                                   batch_audit=batch_audit)
     # Q9: the privileged control and its attestation evidence are one gate,
     # VERIFIED (never trusted) from the single supplied artifact, with the host
     # capture the consuming gate also takes.
@@ -1287,6 +1366,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                          "the S8 state-digest gate verifies each env digest EQUALS "
                          "the corresponding structurally verified aggregate "
                          "(additive: absent, the gate checks presence+shape only)")
+    ap.add_argument("--batch-audit", default=None,
+                    help="path to the D4 post-batch audit artifact "
+                         "(f2-s8-post-batch-audit/v1). A batch may not be credited "
+                         "and no next batch may be authorized unless this audit "
+                         "verifies as PASS; absent, the gate is BLOCKED")
     ap.add_argument("--provenance", action="store_true",
                     help="print only the conversion-chain verdict")
     args = ap.parse_args(list(argv) if argv is not None else None)
@@ -1345,7 +1429,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                            active_lesson=(Path(args.active_lesson)
                                           if args.active_lesson else None),
                            s8_state_set=(Path(args.s8_state_set)
-                                         if args.s8_state_set else None))
+                                         if args.s8_state_set else None),
+                           batch_audit=(Path(args.batch_audit)
+                                        if args.batch_audit else None))
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

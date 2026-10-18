@@ -43,6 +43,7 @@ from qwen_train.f2_s8_pilot import (
     run_pilot_task,
     stage_spec_for_guest,
 )
+from qwen_train.f2_s8_post_batch_audit import audit_batch, write_audit
 
 #: The eight authorization gates. Every one must be supplied by the caller --
 #: this module never defaults a gate to True, because a gate that silently
@@ -399,6 +400,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             results.append(PilotTaskResult(
                 task_id=spec.task_id, admitted=False, outcome="ledger_refused",
                 outcome_class="infrastructure", failure_class="ledger_refused",
+                reason_code="ledger_refused",
                 detail=str(exc),
             ))
             continue
@@ -414,6 +416,22 @@ def main(argv: Sequence[str] | None = None) -> int:
               flush=True)
 
     totals = pilot_totals(results)
+    completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    # Bind the report to the exact inputs the audit must re-read.  The audit
+    # refuses a report that does not declare them, so this is the writer side of
+    # the binding, not an optional annotation.
+    resolved_manifest = Path(args.manifest).resolve()
+    resolved_staging = staging.resolve()
+    resolved_inputs = Path(args.inputs).resolve()
+    run_id = hashlib.sha256(
+        "|".join((
+            manifest_digest,
+            args.registration_sha256,
+            str(args.nonce or ""),
+            completed_at,
+            ",".join(sorted(r.task_id for r in results)),
+        )).encode("utf-8")
+    ).hexdigest()
     payload = {
         "tasks": [r.as_dict() for r in results],
         "totals": totals,
@@ -428,12 +446,48 @@ def main(argv: Sequence[str] | None = None) -> int:
             "implementation_digest": inputs.evaluator.implementation_digest,
             "procedure_id": inputs.evaluator.procedure_id,
         },
-        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        # D4 binding: the audit re-reads these exact paths/bytes and refuses a
+        # report whose declared identity does not match them.
+        "manifest_path": str(resolved_manifest),
+        "manifest_digest": manifest_digest,
+        "staging_root": str(resolved_staging),
+        "inputs_dir": str(resolved_inputs),
+        "repository_revision": authorized_revision,
+        "run_id": run_id,
+        "completed_at": completed_at,
     }
     out_path = out_dir / "pilot_results.json"
     out_path.write_text(json.dumps(payload, indent=1, sort_keys=True), encoding="utf-8")
     print(json.dumps(totals, indent=1, sort_keys=True), flush=True)
     print(f"results: {out_path}", flush=True)
+    # D4 HARD GATE: re-derive every declared per-side fact from the retained
+    # JUnit.  A failing or inconclusive audit means the batch is NOT accepted and
+    # no further batch may proceed until it is resolved.
+    audit = audit_batch(
+        batch_results_path=out_path,
+        staging_root=resolved_staging,
+        manifest_path=resolved_manifest,
+        inputs_dir=resolved_inputs,
+        expected_manifest_digest=manifest_digest,
+        expected_repository_revision=authorized_revision or None,
+        expected_run_id=run_id,
+        expected_staging_root=resolved_staging,
+    )
+    audit_path = out_dir / "post_batch_audit.json"
+    write_audit(audit_path, audit)
+    print(json.dumps({
+        "audit_verdict": audit["verdict"],
+        "audit_counts": audit.get("counts", {}),
+        "audit_reason_codes": audit.get("reason_codes", []),
+        "audit_path": str(audit_path),
+    }, indent=1, sort_keys=True), flush=True)
+    if audit["verdict"] != "PASS":
+        print(
+            "REFUSING: the post-batch evidence audit did not PASS; this batch's "
+            "results are not accepted and no next batch may proceed until the "
+            f"discrepancies in {audit_path} are resolved.",
+            flush=True,
+        )
     # A run where every task faulted writes NO ledger row. Reading it
     # unconditionally crashed AFTER the results were published, so a completed
     # (if empty) run was reported as a failure.
@@ -447,7 +501,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         flush=True,
     )
-    return 0
+    return 0 if audit["verdict"] == "PASS" else 1
 
 
 if __name__ == "__main__":
