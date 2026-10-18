@@ -179,19 +179,22 @@ def _excluded(rel_posix: str, patterns: Sequence[str]) -> bool:
 
 
 def _canonical_guest_root(value: Path | str) -> str:
-    """Canonical Windows spelling of a guest path, on every host OS.
+    """Canonical Windows spelling of a Windows guest path, on every host OS.
 
-    The guest is always Windows.  On POSIX, ``Path("C:/f2_pilot/x")`` keeps the
-    forward slashes -- a backslash is an ordinary filename character there -- so
-    ``Path(r"C:\\f2_pilot\\x")`` and ``Path("C:/f2_pilot/x")`` stringify
-    differently and would bind DIFFERENT manifest digests for the same
-    destination.  Normalise the separator as plain text so the digest is a
-    function of the staging contract, not of how the caller spelled it.
+    The production guest is always Windows, so the digest must not depend on
+    whether the caller wrote ``C:/f2_pilot/x`` or ``C:\\f2_pilot\\x``.  A POSIX
+    path (used by local tooling and tests) is NOT a guest path and is left
+    untouched: converting its ``/`` to ``\\`` would make it unopenable on the
+    host and would break the local channel stand-ins.
 
-    On Windows this is byte-identical to ``str(Path(value))`` for ordinary
-    drive paths, so existing manifest digests do not move.
+    On Windows this is byte-identical to ``str(Path(value))`` for ordinary drive
+    paths, so existing manifest digests do not move.
     """
-    text = str(value).replace("/", "\\")
+    text = str(value)
+    is_windows = bool(re.match(r"^[A-Za-z]:[\\/]", text)) or text.startswith("\\\\")
+    if not is_windows:
+        return text
+    text = text.replace("/", "\\")
     # Preserve a bare drive root ("C:\\") or UNC root; drop trailing separators
     # from everything else so "x\\" and "x" name the same directory.
     if len(text) > 3:
@@ -677,8 +680,13 @@ def default_listing_path(manifest: StagingManifest) -> str:
     very workspace the declared ``pytest`` command runs in -- pytest would collect
     it, and every later verification would see it as an extra file.
     """
-    parent = str(Path(manifest.guest_root).parent).replace("/", "\\")
-    return f"{parent}\\{manifest.task_id}.staging_listing.txt"
+    root = _canonical_guest_root(manifest.guest_root)
+    if re.match(r"^[A-Za-z]:\\", root) or root.startswith("\\\\"):
+        parent = root.rsplit("\\", 1)[0]
+        return f"{parent}\\{manifest.task_id}.staging_listing.txt"
+    # A POSIX/local path (tests, local tooling): keep the host's own separator.
+    parent = str(Path(root).parent)
+    return str(Path(parent) / f"{manifest.task_id}.staging_listing.txt")
 
 
 def listing_cleanup_script(listing_path: str) -> str:
