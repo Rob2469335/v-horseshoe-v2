@@ -103,7 +103,7 @@ task.**
 | Option | Effect | Consequence to weigh |
 |---|---|---|
 | **(A) Leave the records as-is; draw the remaining 294 from the unrecorded pool.** | No frozen-science change, no ledger mutation | The 8 tasks stay permanently excluded although their tests never ran. 3,803 eligible candidates remain, so the target is not blocked by this alone. |
-| **(B) Leave the records; additionally repair the *cause* and re-attempt the same tasks via a NEW forward run.** | The historical rows stand; new evidence is produced under a fresh grant | Hmm — **blocked**: a terminal scientific record is never re-run by design, and the ledger will refuse a second terminal record. This option requires the option-C mechanism first. |
+| **(B) Leave the records; additionally repair the *cause* and re-attempt the same tasks via a NEW forward run.** | The historical rows stand; new evidence is produced under a fresh grant | **Blocked**: a terminal scientific record is never re-run by design, and the ledger will refuse a second terminal record. This option requires the option-C mechanism first. |
 | **(C) Authorize an additive correction chain** (the `hypothesis-4532` pattern) recording, for each affected task, that the prior row evidenced an environment failure rather than a task outcome, plus a fresh governed run whose evidence decides the task on its merits. | The original rows remain byte-for-byte; the correction is appended; the task becomes eligible again | Requires an explicit owner authorization and a documented correction rule. It touches the *classification* of a recorded scientific outcome, which is why it cannot be an agent decision. |
 
 **Recommendation (engineering only): Option (A) now, Option (C) only if the owner wants those eight
@@ -126,3 +126,53 @@ that recovers the eight, and it is an owner act.
 
 **Nothing in this package increases the credited count, and none of it should until the owner decides
 §5 and a governed run produces real evidence.**
+
+---
+
+## 7. Phase-1 reconciliation, limits and honest labels (2026-10-18)
+
+### 7.1 Population counts (recomputed from authoritative artifacts)
+
+| Count | Value | Meaning |
+|---|---:|---|
+| Registered candidates | **3,828** | `registered_tasks.json` |
+| Distinct tasks in any ledger | **24** | 26 rows (operative) + 1 (corrected), deduplicated |
+| **Credited union** | **6** | the counting rule's figure |
+| **Deficit to 300** | **294** | 300 − 6 |
+| Terminal scientific (excluding the admitted) | **11** | `gold_fail` rows minus the correction |
+| Infrastructure-only (retryable/parked) | **7** | incl. `stanfordnlp__dspy-8739` (parked) |
+| **Scheduler-eligible** | **3,811** | 3,828 − 6 credited − 11 terminal scientific |
+| **Never recorded in any ledger** | **3,804** | 3,828 − 24 |
+| Never built *or* attempted | **3,803** | 3,804 − 1 (`QuantEcon__QuantEcon.py-797` ran `base` then hit a channel fault with no row) |
+
+The three previously reported figures are therefore **three different populations**, not a
+contradiction: **3,811** = scheduler-eligible, **3,804** = never in a ledger, **3,803** = never built
+or attempted. Raw outcome rows: `base_fail_gold_pass` 6, `gold_fail` 12, `base_pass` 0.
+
+### 7.2 Offline compatibility evidence is far thinner than assumed
+
+`data/f2_population/plugin_compat/plugin_compat_report.json` classifies only **59** tasks:
+`OBSERVED_COMPATIBLE` **29**, `OBSERVED_INCOMPATIBLE` **30**, `UNKNOWN` **3,762**. Any reachability
+estimate that assumes the bulk of the pool is compatibility-verified is **`NOT ESTABLISHED`**.
+
+### 7.3 What the evaluator repair changed, and what it did not
+
+The repair changes **when a result is classified as a scientific failure versus an
+environment/inconclusive error**. That is scientifically consequential: a `gold_fail` is terminal and
+is never re-run, so mis-classifying an environment failure as one permanently spends a candidate.
+
+**An unresolved risk was found and is NOT fixed.** The rule keys on the *presence* of a collection
+error, not its *cause*. The standard SWE-bench shape — the test file imports a symbol that only the
+gold patch adds — produces a **base-side** collection error whose cause is the project's own missing
+symbol, i.e. a **legitimate base failure**. Under the current rule that pair is classified
+`infrastructure_failure` instead of `base_fail_gold_pass`, which **under-credits a genuine admission**.
+Verified in `phase1_policy_experiment.py`: a base-only project-symbol `ImportError` yields
+pair = `INFRA`, while the cause is `cannot-import-name`, not a missing environment dependency.
+
+A narrower, **cause-sensitive** candidate rule was prototyped out-of-tree and discriminates correctly
+in the same harness (project symbol → not environment; `No module named 'fastapi'` → environment).
+**It is deliberately NOT implemented** — it is a scientific-classification policy change and requires
+the owner's decision.
+
+**`networkx__networkx-8207` remains unresolved**: 0 collection errors, 340 skipped, target nodes
+**skipped** (missing `numpy`). Whether a dependency-skip is infrastructure is `NOT ESTABLISHED`.

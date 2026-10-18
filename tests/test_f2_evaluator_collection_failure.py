@@ -169,7 +169,6 @@ class TestComposerMapping:
         res = compose._result_from_bundles(
             self._spec(), self._bundle(ev.RESULT_ERROR), self._bundle(ev.RESULT_ERROR))
         assert res.outcome == "infrastructure_failure"
-        assert res.outcome == "infrastructure_failure"
         from qwen_train.f2_s8_factory import INFRASTRUCTURE_OUTCOMES, SCIENTIFIC_OUTCOMES
         assert res.outcome in INFRASTRUCTURE_OUTCOMES
         assert res.outcome not in SCIENTIFIC_OUTCOMES
