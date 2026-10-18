@@ -440,7 +440,9 @@ class TestEvidenceIdentity:
         result = _audit(fx)
         assert "JUNIT_UNDECLARED" in _codes(result)
 
-    def test_duplicate_evidence_is_not_silently_collapsed(self):
+    def test_duplicate_evidence_is_not_silently_collapsed(self, monkeypatch):
+        # Simulate a case-insensitive host; POSIX uses identity normcase.
+        monkeypatch.setattr(os.path, "normcase", str.lower)
         a = pathlib.Path("acme__repo-1.base.junit.hostcopy.xml")
         b = pathlib.Path("ACME__REPO-1.base.junit.hostcopy.xml")
         recognised, unexplained = _group_evidence([a, b])
