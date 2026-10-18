@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -231,9 +232,92 @@ def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
 #: recorded as a TERMINAL SCIENTIFIC ``gold_fail`` (it is never re-run).
 COLLECTION_ERROR_MESSAGE = "collection failure"
 
+#: Path prefixes that are build/layout wrappers, not importable packages.
+_LAYOUT_PREFIXES = ("src", "lib", "libs", "python")
+
+
+def changed_module_paths(patch_text: str | None) -> tuple[str, ...]:
+    """Dotted module paths the GOLD PATCH changes, from the patch itself.
+
+    Reads the unified-diff ``+++ b/<path>`` lines -- the patch's own claim about
+    what it touches, never a message string.  A leading layout wrapper
+    (``src/``, ``lib/``, ...) is stripped so ``src/pkg/newmod.py`` yields
+    ``pkg.newmod``; both forms are kept so a repo that imports the wrapper path
+    still matches.
+    """
+    if not patch_text:
+        return ()
+    out: set[str] = set()
+    for m in re.finditer(r"^\+\+\+ b/(.+?)\s*$", patch_text, re.MULTILINE):
+        p = m.group(1).strip()
+        if p in ("/dev/null",) or not p:
+            continue
+        for ext in (".py", ".pyi"):
+            if p.endswith(ext):
+                p = p[: -len(ext)]
+                break
+        parts = [x for x in p.split("/") if x not in ("", ".")]
+        if not parts:
+            continue
+        out.add(".".join(parts))
+        if parts[0] in _LAYOUT_PREFIXES and len(parts) > 1:
+            out.add(".".join(parts[1:]))
+    return tuple(sorted(out))
+
+
+def _error_module(error_text: str) -> str:
+    """The module a collection failure is about, or ``''`` if it names none."""
+    m = re.search(r"No module named '([\w.]+)'", error_text)
+    if m:
+        return m.group(1)
+    m = re.search(r"cannot import name '[^']+' from '([\w.]+)'", error_text)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def classify_collection_cause(
+    errors: Sequence[str],
+    *,
+    changed_modules: Sequence[str],
+) -> str:
+    """Why did collection fail: the ENVIRONMENT, the PROJECT, or UNKNOWN?
+
+    Decided from the gold patch's own changed-file list, not from the wording of
+    the message -- the wording merely names what was missing.
+
+    ``"project"``   every named module is the gold patch's own subject, so the
+                    base-side error is consistent with a genuine base failure
+                    (the standard SWE-bench shape: the test imports what the
+                    patch adds).
+    ``"environment"`` at least one named module is NOT among the patch's changed
+                    paths -- a third-party dependency was absent.
+    ``"unknown"``   no module could be extracted, or no patch evidence exists.
+                    Fail closed: the caller treats this as inconclusive.
+    """
+    named = [_error_module(e) for e in errors]
+    named = [n for n in named if n]
+    if not named:
+        return "unknown"
+    if not changed_modules:
+        return "unknown"
+    for n in named:
+        owned = any(
+            n == c or n.startswith(c + ".") or c.startswith(n + ".")
+            for c in changed_modules
+        )
+        if not owned:
+            return "environment"
+    return "project"
+
 
 def count_collection_errors(junit_bytes: bytes) -> int:
-    """Number of pytest collection-failure entries in retained JUnit evidence.
+    """Number of pytest collection-failure entries in retained JUnit evidence."""
+    return len(collection_error_texts(junit_bytes))
+
+
+def collection_error_texts(junit_bytes: bytes) -> list[str]:
+    """The ``<error>`` bodies of every collection-failure entry, in document order.
 
     Keyed on pytest's own marker: a ``<testcase>`` with an EMPTY ``classname``
     and an ``<error message="collection failure">`` child.  A genuine test
@@ -249,15 +333,15 @@ def count_collection_errors(junit_bytes: bytes) -> int:
         root = ET.fromstring(junit_bytes)
     except ET.ParseError as exc:
         raise EvaluatorError(f"junit evidence is not well-formed XML: {exc}") from exc
-    count = 0
+    texts: list[str] = []
     for case in root.iter("testcase"):
         if (case.get("classname") or "") != "":
             continue
         for child in case:
             if child.tag == "error" and COLLECTION_ERROR_MESSAGE in (child.get("message") or ""):
-                count += 1
+                texts.append(child.text or "")
                 break
-    return count
+    return texts
 
 
 @dataclass(frozen=True)
@@ -272,6 +356,12 @@ class EvaluationOutcome:
     #: Collection-failure entries pytest reported.  ``0`` for a clean run and for
     #: any run whose evidence predates this field.
     collection_errors: int = 0
+    #: Why collection failed: ``"environment"`` / ``"project"`` / ``"unknown"``.
+    #: ``"project"`` means the gold patch itself owns every module that failed to
+    #: import, so a base-side collection error is consistent with a GENUINE base
+    #: failure and the run is scored normally.  ``"unknown"`` fails closed
+    #: (inconclusive), never guessed.
+    collection_error_cause: str = "unknown"
 
     @property
     def all_fail_to_pass_passed(self) -> bool:
@@ -311,6 +401,7 @@ def evaluate_execution(
     pass_to_pass: Sequence[str] | None = None,
     instance_id: str = "",
     execution_state_identity: str = "",
+    changed_modules: Sequence[str] | None = None,
 ) -> EvaluationOutcome:
     """Evaluate one execution's retained JUnit evidence against the declared contract.
 
@@ -354,11 +445,13 @@ def evaluate_execution(
     # collected cleanly and genuinely failed still scores "fail", and a run with
     # no collection errors is untouched.
     missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
-    if collection_errors and missing:
+    cause = classify_collection_cause(
+        collection_error_texts(junit_bytes), changed_modules=changed_modules or ())
+    if collection_errors and missing and cause != "project":
         result = RESULT_ERROR
         detail = (
-            f"INCONCLUSIVE: pytest reported {collection_errors} collection "
-            f"failure(s) and {len(missing)} of {len(resolved)} declared "
+            f"INCONCLUSIVE ({cause}): pytest reported {collection_errors} "
+            f"collection failure(s) and {len(missing)} of {len(resolved)} declared "
             "FAIL_TO_PASS node(s) were never collected; the environment, not the "
             "task, prevented the target tests from running"
         )
@@ -378,6 +471,7 @@ def evaluate_execution(
         detail=detail,
         emitted_identities=len(statuses),
         collection_errors=collection_errors,
+        collection_error_cause=cause,
     )
     if instance_id or execution_state_identity:
         # Retained for the caller's provenance record; never affects the verdict.
@@ -419,6 +513,7 @@ def produce_report(
     repository: str = "",
     base_commit: str = "",
     execution_state_identity: str = "",
+    changed_modules: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Evaluate retained JUnit evidence and WRITE the canonical report file.
 
@@ -443,6 +538,7 @@ def produce_report(
         pass_to_pass=pass_to_pass,
         instance_id=instance_id,
         execution_state_identity=execution_state_identity,
+        changed_modules=changed_modules,
     )
     blob = render_report(
         outcome,
@@ -537,6 +633,11 @@ def render_report(
         # collection failure makes absent target nodes an ENVIRONMENT outcome,
         # not a task failure.  Additive field; absent means 0 (clean run).
         "collection_errors": int(getattr(outcome, "collection_errors", 0) or 0),
+        # WHY collection failed, so the AUTHORITATIVE deriver can reach the same
+        # verdict: "project" means the gold patch owns every module that failed to
+        # import, so an absent base-side node is consistent with a genuine base
+        # failure and must NOT be treated as inconclusive.
+        "collection_error_cause": str(getattr(outcome, "collection_error_cause", "unknown") or "unknown"),
         "fail_to_pass": dict(sorted(outcome.fail_to_pass.items())),
         "pass_to_pass": dict(sorted(outcome.pass_to_pass.items())),
     }
@@ -621,10 +722,15 @@ def verdict_from_report_payload(
     # "fail".  Producer and deriver apply the SAME rule so they cannot drift.
     _ce = int(payload.get("collection_errors") or 0)
     _missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
-    if _ce and _missing:
+    # "project" means the GOLD PATCH owns every module that failed to import, so
+    # the absent base-side node is consistent with a genuine base failure and the
+    # run is scored normally.  Anything else (environment / unknown) is
+    # inconclusive -- fail closed, never guessed.
+    if _ce and _missing and str(payload.get("collection_error_cause") or "unknown") != "project":
         return RESULT_ERROR, (
-            f"INCONCLUSIVE: {_ce} collection failure(s) and {len(_missing)} "
-            "declared FAIL_TO_PASS node(s) never collected"
+            f"INCONCLUSIVE ({payload.get('collection_error_cause') or 'unknown'}): {_ce} "
+            "collection failure(s) and "
+            f"{len(_missing)} declared FAIL_TO_PASS node(s) never collected"
         )
     if not not_passed:
         return "pass", f"all {len(statuses)} declared FAIL_TO_PASS nodes passed"
@@ -689,10 +795,15 @@ def derive_result_protocol(
     # "fail".  Producer and deriver apply the SAME rule so they cannot drift.
     _ce = int(payload.get("collection_errors") or 0)
     _missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
-    if _ce and _missing:
+    # "project" means the GOLD PATCH owns every module that failed to import, so
+    # the absent base-side node is consistent with a genuine base failure and the
+    # run is scored normally.  Anything else (environment / unknown) is
+    # inconclusive -- fail closed, never guessed.
+    if _ce and _missing and str(payload.get("collection_error_cause") or "unknown") != "project":
         return RESULT_ERROR, (
-            f"INCONCLUSIVE: {_ce} collection failure(s) and {len(_missing)} "
-            "declared FAIL_TO_PASS node(s) never collected"
+            f"INCONCLUSIVE ({payload.get('collection_error_cause') or 'unknown'}): {_ce} "
+            "collection failure(s) and "
+            f"{len(_missing)} declared FAIL_TO_PASS node(s) never collected"
         )
     if not not_passed:
         return "pass", f"all {len(statuses)} declared FAIL_TO_PASS nodes passed"

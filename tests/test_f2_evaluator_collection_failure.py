@@ -173,10 +173,30 @@ class TestComposerMapping:
         assert res.outcome in INFRASTRUCTURE_OUTCOMES
         assert res.outcome not in SCIENTIFIC_OUTCOMES
 
-    def test_an_inconclusive_base_side_alone_is_also_infrastructure(self):
+    def test_a_base_side_collection_error_of_UNKNOWN_cause_stays_infrastructure(self):
+        """D1: with no patch evidence the cause cannot be proven, so the run is
+        INCONCLUSIVE -- fail closed, never guessed.  (Under the pre-D1 rule this
+        case was unconditionally infrastructure; D1 narrows it to the UNPROVEN
+        cases, which this still is.)"""
         res = compose._result_from_bundles(
             self._spec(), self._bundle(ev.RESULT_ERROR), self._bundle(ev.RESULT_FAIL))
         assert res.outcome == "infrastructure_failure"
+
+    def test_a_base_side_collection_error_caused_by_the_GOLD_PATCH_is_scored(self):
+        """D1: when the gold patch owns every module that failed to import, the
+        base-side collection error is consistent with a GENUINE base failure, so
+        the base side must be scored (fail) and NOT written off as inconclusive."""
+        from qwen_train.f2_evaluator import changed_module_paths, evaluate_execution
+        patch = "diff --git a/pkg/api.py b/pkg/api.py\n+++ b/pkg/api.py\n"
+        mods = changed_module_paths(patch)
+        assert mods, "the fixture patch must yield module paths"
+        xml = _junit(_collection_error("pkg.tests.test_mod",
+                                       "ImportError: cannot import name 'new_api' from 'pkg'"))
+        base = evaluate_execution(xml, fail_to_pass=F2P, changed_modules=mods)
+        assert base.declared_result == "fail", base.detail
+        assert base.collection_error_cause == "project"
+        # and the SAME evidence without the patch context is inconclusive
+        assert evaluate_execution(xml, fail_to_pass=F2P).declared_result == RESULT_ERROR
 
     def test_a_genuine_base_fail_and_gold_fail_stays_gold_fail(self):
         res = compose._result_from_bundles(

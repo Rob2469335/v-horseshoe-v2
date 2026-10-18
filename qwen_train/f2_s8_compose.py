@@ -282,6 +282,12 @@ def guest_evidence_from_junit(
                 repository=str(spec.payload["repo"]),
                 base_commit=str(spec.payload["base_commit"]),
                 execution_state_identity=side,
+                # D1 (owner-approved): the cause discriminator reads the GOLD
+                # PATCH's own changed-file list, which the task record already
+                # carries, so no new authority source is introduced. Absent or
+                # unparseable patch metadata yields no modules -> "unknown" ->
+                # inconclusive (fail closed), never a guessed classification.
+                changed_modules=evaluator.changed_module_paths(spec.payload.get("patch")),
             )
         except evaluator.EvaluatorError as exc:
             raise S8ComposeError(
