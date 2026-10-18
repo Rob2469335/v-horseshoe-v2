@@ -53,6 +53,7 @@ def _skip(reason: str) -> str:
 PATCH_SYMBOL = "diff --git a/pkg/api.py b/pkg/api.py\n+++ b/pkg/api.py\n"
 PATCH_NEWMOD = "diff --git a/pkg/newmod.py b/pkg/newmod.py\n+++ b/pkg/newmod.py\n"
 PATCH_SRC = "diff --git a/src/fastmcp/elicitation.py b/src/fastmcp/elicitation.py\n+++ b/src/fastmcp/elicitation.py\n"
+PATCH_INIT = "diff --git a/pkg/__init__.py b/pkg/__init__.py\n+++ b/pkg/__init__.py\n"
 
 
 def _pair(base_bytes, gold_bytes, patch):
@@ -82,6 +83,27 @@ class TestPatchParsing:
     def test_never_invents_a_module_from_prose(self):
         """Only ``+++ b/`` diff headers count, never a sentence in a message."""
         assert changed_module_paths("the patch adds pkg/newmod.py somewhere") == ()
+
+    def test_a_patched_package_init_denotes_the_package(self):
+        """``pkg/__init__.py`` is package ``pkg``, not module ``pkg.__init__``."""
+        assert changed_module_paths(PATCH_INIT) == ("pkg",)
+
+    def test_a_submodule_reexported_by_a_patched_init_is_project_owned(self):
+        """A test importing ``pkg.sub`` through a patched ``pkg/__init__.py``.
+
+        Before the ``.__init__`` normalisation the changed path was
+        ``pkg.__init__``, so ``pkg.sub`` looked unowned and the base-side
+        collection error was misclassified as an ENVIRONMENT failure.  It is the
+        project's own re-export, so the error is consistent with a genuine base
+        failure and must be scored normally.
+        """
+        errors = [
+            "ImportError while importing test module pkg.tests.test_mod.\n"
+            "E   ModuleNotFoundError: No module named 'pkg.sub'"
+        ]
+        assert classify_collection_cause(
+            errors, changed_modules=changed_module_paths(PATCH_INIT)
+        ) == "project"
 
 
 class TestCauseDiscrimination:
