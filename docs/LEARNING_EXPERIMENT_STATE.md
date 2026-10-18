@@ -1616,3 +1616,13 @@ A green software suite is still not experimental readiness.
 
 This entry grants no execution authorization and changes no historical row.
 
+### D-26. Stage-1 pre-check, sidecar, and the credit-evidence audit (2026-10-18)
+
+| Item | Recorded outcome |
+|---|---|
+| **Stage-1 collection-only pre-check** | Implemented as `qwen_train/f2_s8_precheck.py` with 28 tests. It binds the real `git rev-parse HEAD`, actual manifest SHA-256, registration digest, candidate-list digest, policy digest, code SHA-256 and a deterministic run id; runs `pytest --collect-only` in the built base/gold venvs; classifies collection errors with the D1 gold-patch rule; parks unsuitable tasks; writes only to an isolated folder; never writes a ledger, consumes a grant or awards credit. First real run (read-only) on `QuantEcon__QuantEcon.py-797` returned **FAIL / ENVIRONMENT_COLLECTION_ERROR**: 484 nodes collected on each side, 4 collection errors naming `pandas`, 70 declared targets missing. |
+| **Phase planner port** | `qwen_train/f2_s8_phase_ops.py` fixes the six external defects: real HEAD (not a commit timestamp), real manifest SHA-256 (not a placeholder), **both** ledger chains consulted, no hardcoded phase-2 paths, `Any` imported, and only the **built** set passed to the scheduler (so `dspy-8739` cannot be selected). Batch cap 10. |
+| **Credit-evidence audit** | `openai-1633`, `openai-1636`, `mypy-19767`: ledger gold-report SHA-256 matches the retained `pilot_build/dryrun` file; retained JUnit re-derives base=fail/gold=pass. `Hypothesis-4532`: the credited 316,547-byte gold report is present in `F2_EVIDENCE\Experiment_J_F2` with the exact ledger hash; JUnit re-derives base=fail/gold=pass. `networkx-8211`, `openai-1601`: the JUnit re-derives base=fail/gold=pass, but the ledger's bound report/run-log/evidence-record hashes are **not present anywhere** under `F2_EVIDENCE` or `f2_exec`; that is a real retention/provenance gap (`NOT ESTABLISHED`), not a reason to alter credit. |
+| **Credit** | Unchanged at **6**; remaining **294**. No ledger row was written or altered by the audit. |
+
+

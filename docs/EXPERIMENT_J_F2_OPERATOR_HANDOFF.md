@@ -419,6 +419,16 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 - **What it does not establish:** that the JUnit bytes are authentic, or that evidence was not deleted and the report rewritten. It is detection, not an independent evidence anchor. Chain-binding infrastructure-row evidence is an owner decision: `docs/EXPERIMENT_J_F2_S8_EVIDENCE_BINDING_DECISION.md`.
 - **Historical Phase 3 report:** audited read-only on 2026-10-18 → `FAIL` (it predates the binding and per-side declarations), with recounts such as `conan-io__conan-18832` base=**345**. No historical row, credit figure or trust-root file was changed.
 
+#### K.2 Stage-1 collection-only pre-check — **IMPLEMENTED 2026-10-18**
+
+- **Command:** `python -m qwen_train.f2_s8_precheck --build-manifest <manifest> --registration <registered_tasks.json> --registration-id <id> --registration-sha256 <digest> --ledger <chain1> --ledger <chain2> --inputs <full inputs dir> --out-dir <isolated dir> [--task <id> ...] [--timeout 300]`
+- **What it runs:** `pytest --collect-only -q -p no:cacheprovider --no-header` through the built task's own base and gold venv, in the base/gold trees. It records the exact collected node ids, collection error text, cause (D1 gold-patch rule), missing declared targets, and per-side stdout/stderr artifacts.
+- **What it binds:** real `git rev-parse HEAD`, the build-manifest path+digest, registration id+digest, the exact candidate task-list digest, the policy digest, the pre-check code SHA-256 and a deterministic run id. A stale revision/manifest/registration/task list/policy is refused. Output must be an isolated folder (never the repo root, either ledger, the staging root, or a `pilot_results*` directory).
+- **Outcomes:** `PASS` (both sides collect every declared target; a base-side PROJECT-owned collection error is the expected SWE-bench shape), `FAIL` (environment collection error, gold-side project collection error, no tests, unsupported command, stale binding), `INCONCLUSIVE` (missing venv/workspace/input, timeout, unparsed output, target absent without an error). Unsuitable tasks are **parked with reason codes**.
+- **Not admission:** collection-only compatibility is not scientific admission; no grant is consumed, no ledger row is written and no credit is awarded.
+- **Real smoke (read-only, 2026-10-18):** `QuantEcon__QuantEcon.py-797` (the one built, unrecorded task) → **FAIL**, `ENVIRONMENT_COLLECTION_ERROR`: both sides collected 484 nodes but 4 collection errors named `pandas`, and all 70 declared target nodes were missing. This is exactly the missing-dependency class the gate exists to catch.
+- **Phase planner:** `python -m qwen_train.f2_s8_phase_ops pre --build-manifest ... --registration ... --registration-id ... --registration-sha256 ... --ledger <chain1> --ledger <chain2> --out <phase.json> [--size 10]`. It uses the real HEAD and real manifest SHA-256, consults **both** chains, passes only the **built** set to the scheduler (so `dspy-8739` cannot be selected), and caps the batch at 10. `post` recomputes the credited union read-only.
+
 ---
 
 ### L. Q10 calibration — **NOT EXECUTED** (machinery implemented)
