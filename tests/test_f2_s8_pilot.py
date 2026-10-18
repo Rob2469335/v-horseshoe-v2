@@ -206,6 +206,11 @@ class TestHonestAdmission:
         assert len(result.base_junit_sha256) == 64
         assert len(result.gold_junit_sha256) == 64
         assert result.base_junit_sha256 != result.gold_junit_sha256
+        # D4 needs the producer to publish the per-side facts, not just hashes.
+        assert (result.base_verdict, result.gold_verdict) == ("fail", "pass")
+        assert (result.base_collection_errors, result.gold_collection_errors) == (0, 0)
+        assert result.base_collection_error_cause == "unknown"
+        assert result.gold_collection_error_cause == "unknown"
         ok, why = ledger.verify()
         assert ok, why
 
