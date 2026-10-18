@@ -29,8 +29,9 @@ must never be collapsed:
     Real base/gold executions, or a genuine ACTIVE lesson, must be produced by
     running something. No amount of repository work substitutes for them.
 ``AUTHORIZATION REQUIRED``
-    An operator decision that has not been recorded, most notably population
-    acquisition, which ``F2-IMPL-AUTH-013`` explicitly does not authorize.
+    An operator decision that has not been recorded. (Population acquisition is
+    no longer in this class: ``F2-IMPL-AUTH-028/029/031`` record it, so the
+    population gate below is evidence-blocked, not authorization-blocked.)
 
 Nothing here fabricates. Every finding is either measured on this host, read from
 the repository, or explicitly reported as absent. No secret value is ever read or
@@ -42,6 +43,13 @@ Usage
 ``python -m qwen_train.f2_preflight --json``     JSON only
 ``python -m qwen_train.f2_preflight --attestation PATH``
                                                    verify a supplied Q9 attestation
+``python -m qwen_train.f2_preflight --attestation PATH
+                                  --enforcement-capture PATH``
+                                                   verify it the way the consuming gate
+                                                   does, with the host capture that makes
+                                                   a silently-dropping control visible
+``python -m qwen_train.f2_preflight --conversion-record PATH``
+                                                   verify a supplied conversion record
 ``python -m qwen_train.f2_preflight --provenance``
                                                    print the conversion-chain verdict
 """
@@ -130,6 +138,23 @@ F2_ADAPTER_CONTROLS: dict[str, str] = {
 #: Every proven control above is a 0/1 flag, so any other string is
 #: unrecognised and therefore fails closed rather than being coerced.
 _F2_CONTROL_VALUES = frozenset({"0", "1"})
+
+#: The ONLY ``.env`` entries the preflight CLI imports into the process
+#: environment.  Both are documented ``.env`` locations:
+#:
+#: * ``SWARM_RECEIPT_KEY`` -- ``EXPERIMENT_J_F2_OPERATOR_HANDOFF.md`` section 1.2
+#:   ("the operator's `.env` only"); and
+#: * the seven child controls -- ``EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md``
+#:   section 3.3 ("either in `.env` or inherited from the F2 execution adapter").
+#:
+#: The GOVERNED F2 and S8 execution inputs are deliberately ABSENT: the owner
+#: decision of 2026-10-15 is process/session-only provisioning, so a `.env`-only
+#: value must not make their preflight checks look satisfied while the separately
+#: launched execution process (``f2_s8_compose.load_governance_from_env``) reads
+#: ``os.environ`` only and would never receive it.  That loader is NOT changed.
+DOTENV_ALLOWED_KEYS: frozenset[str] = frozenset(
+    {"SWARM_RECEIPT_KEY", *F2_REQUIRED_CONTROLS}
+)
 
 
 @dataclass(frozen=True)
@@ -274,6 +299,196 @@ def _env_findings() -> list[Finding]:
     return out
 
 
+def _is_lower_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _s8_env_findings(
+    state_set: Path | Mapping[str, Any] | str | None = None,
+) -> list[Finding]:
+    """The S8-only governed inputs (no F2 fallback): presence AND shape.
+
+    Names and labels are taken from the AUTHORITATIVE contract
+    (``qwen_train.f2_s8_compose.S8_GOVERNANCE_ENV`` minus the entries that have an
+    F2 fallback), so this gate and the loader cannot disagree about WHICH inputs
+    the governed S8 path needs.  The shape rule mirrors
+    ``load_governance_from_env``: the environment identity is a non-empty string,
+    a ``*_DIGEST`` is a 64-character lowercase SHA-256, and the two state digests
+    must differ (they cannot describe one execution state).
+
+    **Optional binding (``state_set``).** Presence+shape alone cannot separate a
+    measured digest from a fabricated but well-formed one -- a documented Stage-0
+    limit.  When the caller supplies the ``f2-s8-state-set/v1`` artifact (the
+    CLI's ``--s8-state-set``), the gate additionally verifies that artifact
+    fail-closed (structural re-derivation of each side's ``aggregate_digest``,
+    domain separation, ordering and task-set integrity via
+    ``verify_state_set_aggregate``) and that each env digest EQUALS the
+    corresponding verified aggregate.  A structurally invalid artifact is
+    ``EXTERNAL EVIDENCE``; an env value that differs from the verified aggregate
+    is ``OPERATOR ACTION`` (``unbound``).  Supplying the artifact can therefore
+    only tighten the gate, never loosen it: when ``state_set`` is None the
+    behavior is exactly the historical shape check.
+
+    Only presence, shape and -- when bound -- aggregate equality are ever
+    reported -- never a value -- and a finding here is READINESS, never
+    authorization to execute: clearing these checks does not authorize the pilot
+    or any task run.  The binding proves the env values equal a structurally
+    verified aggregate artifact; the aggregate's provenance (that it was derived
+    from the measured 18-task records) is carried by the derivation artifact it
+    was built from, not by this gate.
+    """
+    try:
+        from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return [Finding(OPERATOR_ACTION, "env.s8_contract", "MISSING",
+                        f"the S8 governance contract could not be read: {exc}",
+                        "restore qwen_train/f2_s8_compose.py")]
+
+    s8_only = [(name, label) for name, label in S8_GOVERNANCE_ENV
+               if name not in S8_ENV_FALLBACKS]
+    values = {name: _env(name) for name, _ in s8_only}
+
+    def _shape_ok(name: str, value: str) -> bool:
+        if not value:
+            return False
+        if name.endswith("_DIGEST"):
+            return _is_lower_sha256_hex(value)
+        return True
+
+    base_name = "SWARM_S8_BASE_STATE_DIGEST"
+    gold_name = "SWARM_S8_GOLD_STATE_DIGEST"
+    # Distinctness is decided ONLY between two INDEPENDENTLY well-formed digests.
+    # Two equal but malformed strings stay `malformed` -- they are never
+    # relabelled `identical` merely because their text matches.
+    identical = (
+        _shape_ok(base_name, values.get(base_name, ""))
+        and _shape_ok(gold_name, values.get(gold_name, ""))
+        and values[base_name] == values[gold_name]
+    )
+
+    out: list[Finding] = []
+    for name, label in s8_only:
+        ident = "env.s8_" + name.removeprefix("SWARM_S8_").lower()
+        value = values[name]
+        if not value:
+            out.append(Finding(
+                OPERATOR_ACTION, ident, "absent",
+                f"{name} is not set ({label})",
+                f"set {name} for the run"))
+        elif not _shape_ok(name, value):
+            out.append(Finding(
+                OPERATOR_ACTION, ident, "malformed",
+                f"{name} is not a 64-character lowercase SHA-256 hex digest "
+                f"({label}); value not printed",
+                f"set {name} to the {label} as sha256 hex"))
+        elif identical and name == gold_name:
+            # The GOLD side is named explicitly (the pair is the problem and the
+            # gold digest is the one to change).  No positional mutation of
+            # ``out[-1]``: that overwrote a `malformed` base finding.
+            out.append(Finding(
+                OPERATOR_ACTION, ident, "identical",
+                "the base and gold state digests are identical; they cannot "
+                "describe two distinct execution states",
+                f"set {name} to a digest distinct from the base state"))
+        else:
+            out.append(Finding(
+                READY, ident, "set",
+                f"{name} is set ({label}); value not printed", ""))
+
+    if state_set is None:
+        return out
+    return out + _s8_state_set_binding_findings(values, state_set)
+
+
+def _s8_state_set_binding_findings(
+    values: Mapping[str, str],
+    state_set: Path | Mapping[str, Any] | str,
+) -> list[Finding]:
+    """Bind the two state-digest env values to a supplied ``f2-s8-state-set/v1``
+    artifact, fail-closed.
+
+    The artifact's two sides are each verified with
+    ``f2_s8_state_set.verify_state_set_aggregate`` (structural re-derivation of
+    ``aggregate_digest`` over the canonical payload, domain-separated schema/type,
+    ascending task order, digest well-formedness, side consistency).  Only then
+    are the env digests compared to the verified aggregates.  This can only
+    tighten the gate: an unreadable/invalid artifact or a mismatching env value
+    produces a blocking finding; it never converts an absent env value to READY
+    (the shape findings above already reported those and are kept as-is).
+    """
+    base_name = "SWARM_S8_BASE_STATE_DIGEST"
+    gold_name = "SWARM_S8_GOLD_STATE_DIGEST"
+    ident = "env.s8_state_set_binding"
+
+    def _block(cat: str, status: str, detail: str, action: str) -> list[Finding]:
+        return [Finding(cat, ident, status, detail, action)]
+
+    try:
+        if isinstance(state_set, Mapping):
+            doc = dict(state_set)
+        else:
+            doc = json.loads(Path(str(state_set)).read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return _block(
+            EXTERNAL_EVIDENCE, "unreadable",
+            f"the supplied state-set artifact could not be read ({exc}); the "
+            "env digests therefore remain unbound",
+            "supply the f2-s8-state-set/v1 artifact produced from the measured "
+            "derivation, or drop --s8-state-set to report shape only")
+    if not isinstance(doc, Mapping):
+        return _block(
+            EXTERNAL_EVIDENCE, "unusable",
+            "the supplied state-set artifact is not an object",
+            "supply the f2-s8-state-set/v1 artifact produced from the measured "
+            "derivation")
+
+    try:
+        from qwen_train.f2_s8_state_set import verify_state_set_aggregate
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return _block(
+            EXTERNAL_EVIDENCE, "unverifiable",
+            f"the state-set verifier is unavailable ({exc})",
+            "restore qwen_train/f2_s8_state_set.py")
+
+    verified: dict[str, Any] = {}
+    for side, env_name in (("base", base_name), ("gold", gold_name)):
+        verdict = verify_state_set_aggregate(doc.get(side), expected_side=side)
+        if not verdict.ok:
+            return _block(
+                EXTERNAL_EVIDENCE, f"invalid_{side}",
+                f"the supplied {side} aggregate did not verify "
+                f"({verdict.state}): {verdict.detail}",
+                "regenerate the state-set artifact from the measured derivation "
+                "with python -m qwen_train.f2_s8_state_set")
+        verified[side] = doc[side]
+
+    unbound = [
+        env_name for side, env_name in (("base", base_name), ("gold", gold_name))
+        if not values.get(env_name)
+        or values[env_name] != str(verified[side].get("aggregate_digest") or "")
+    ]
+    if unbound:
+        # Values are never printed; only WHICH variable differs is named.
+        return _block(
+            OPERATOR_ACTION, "unbound",
+            f"the env digest(s) {', '.join(unbound)} do not equal the verified "
+            "state-set aggregate(s) bound to candidate manifest "
+            f"{str(verified['base'].get('candidate_manifest_digest') or '')[:12]}…; "
+            "an aggregate-derived value and an asserted value cannot differ",
+            "set each SWARM_S8_{BASE,GOLD}_STATE_DIGEST to the aggregate_digest "
+            "of the corresponding verified side of the state-set artifact")
+
+    return [Finding(
+        READY, ident, "bound",
+        "both state digests equal the structurally verified "
+        f"f2-s8-state-set/v1 aggregates ({verified['base'].get('task_count', 0)} "
+        "base / "
+        f"{verified['gold'].get('task_count', 0)} gold records, manifest "
+        f"{str(verified['base'].get('candidate_manifest_digest') or '')[:12]}…); "
+        "value not printed",
+        "")]
+
+
 def _env_control_findings(
     root: Path,
     adapter_controls: Mapping[str, str] | None = None,
@@ -368,36 +583,319 @@ def _env_control_findings(
     )]
 
 
-def _evidence_findings(root: Path) -> list[Finding]:
-    """External evidence and authorization gates. Nothing here can be satisfied
-    by repository work."""
+def _s8_base_gold_finding(s8_evidence: Any) -> Finding:
+    """``evidence.s8_base_gold`` -- verified by the AUTHORITATIVE verifier.
+
+    A supplied document is a mapping ``{"tasks": [ {task_id, repository,
+    base_commit, base_evidence, gold_evidence, artifact_root?,
+    authorized_evaluators?, expected_gold_state_digest?}, ... ]}``. Each pair is
+    run through ``qwen_train.f2_evidence.verify_task_evidence`` -- the same
+    machine-verifiable contract the S8 screen uses. Presence of a document, a
+    ledger count, or a bare digest is NEVER accepted as provenance: a digest
+    establishes integrity only. Anything unreadable, malformed, or unverified
+    leaves the gate BLOCKED.
+    """
+    ident = "evidence.s8_base_gold"
+    default_detail = (
+        "no verified base/gold execution pair is present; S8 requires real "
+        "base=FAIL and gold=PASS executions with retained output, run log and "
+        "evaluator bytes")
+    default_action = (
+        "run the authorized base and gold executions and retain the evidence in "
+        "the trusted store")
+    if s8_evidence is None:
+        return Finding(EXTERNAL_EVIDENCE, ident, "absent", default_detail,
+                       default_action)
+    try:
+        if isinstance(s8_evidence, (str, Path)):
+            doc = json.loads(Path(s8_evidence).read_text(encoding="utf-8"))
+        else:
+            doc = dict(s8_evidence)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unreadable",
+                       f"the supplied S8 evidence could not be read ({exc})",
+                       default_action)
+    tasks = doc.get("tasks") if isinstance(doc, Mapping) else None
+    if not isinstance(tasks, list) or not tasks:
+        return Finding(EXTERNAL_EVIDENCE, ident, "unusable",
+                       "the supplied S8 evidence carries no non-empty 'tasks' list",
+                       default_action)
+    try:
+        from qwen_train.f2_evidence import verify_task_evidence
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable",
+                       f"the S8 evidence verifier is unavailable ({exc})",
+                       default_action)
+
+    verified: list[str] = []
+    rejected: list[str] = []
+    for entry in tasks:
+        if not isinstance(entry, Mapping):
+            rejected.append("<non-object task entry>")
+            continue
+        tid = str(entry.get("task_id") or "")
+        try:
+            verdict = verify_task_evidence(
+                task_id=tid,
+                repository=str(entry.get("repository") or ""),
+                base_commit=str(entry.get("base_commit") or ""),
+                base_evidence=entry.get("base_evidence"),
+                gold_evidence=entry.get("gold_evidence"),
+                artifact_root=entry.get("artifact_root"),
+                authorized_evaluators=entry.get("authorized_evaluators"),
+                expected_gold_state_digest=entry.get("expected_gold_state_digest"),
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            rejected.append(f"{tid or '?'}: verifier error: {exc}")
+            continue
+        if verdict.ok:
+            verified.append(tid or "?")
+        else:
+            rejected.append(f"{tid or '?'}: {verdict.state}: {verdict.detail}")
+    if not verified:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverified",
+            f"0 of {len(tasks)} supplied base/gold pair(s) verified; "
+            f"first rejection: {rejected[0] if rejected else 'none'}",
+            default_action)
+    return Finding(
+        READY, ident, "present",
+        f"{len(verified)} base/gold pair(s) verified (base=FAIL, gold=PASS) by "
+        f"qwen_train.f2_evidence.verify_task_evidence; "
+        f"{len(rejected)} rejected",
+        "")
+
+
+def _load_batch_audit(
+    source: Path | Mapping[str, Any] | str | None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Load and integrity-check a D4 audit artifact.  Never trusts the verdict."""
+    if source is None:
+        return None, "no post-batch evidence audit was supplied"
+    try:
+        from qwen_train.f2_s8_post_batch_audit import (
+            SCHEMA as AUDIT_SCHEMA,
+            audit_payload_is_intact,
+            load_audit,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return None, f"the post-batch audit module is unavailable ({exc})"
+    if isinstance(source, Mapping):
+        payload = dict(source)
+        # CWE-354: validate the check value before using the data.  A caller-
+        # supplied mapping must carry the digest, not merely assert PASS.
+        if not audit_payload_is_intact(payload):
+            return None, (
+                "the supplied post-batch audit mapping has no valid audit_digest "
+                "or does not match its own content"
+            )
+    else:
+        try:
+            payload = load_audit(source)
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return None, f"the supplied post-batch audit could not be verified ({exc})"
+    if payload.get("schema") != AUDIT_SCHEMA:
+        return None, "the supplied post-batch audit has an unknown schema"
+    return payload, ""
+
+
+def _batch_audit_finding(
+    source: Path | Mapping[str, Any] | str | None,
+    payload: Mapping[str, Any] | None,
+    error: str,
+) -> Finding:
+    """``population.batch_audit`` -- D4 must PASS before credit or a next batch.
+
+    Fail-closed: absent, unverifiable, FAIL or INCONCLUSIVE all block.  Only a
+    verified PASS whose ``audit_digest`` matches its content reaches READY.
+    """
+    ident = "population.batch_audit"
+    action = (
+        "run the post-batch audit over the retained JUnit, resolve every "
+        "discrepancy, and re-run it to PASS before crediting the batch or "
+        "selecting another"
+    )
+    if source is None:
+        return Finding(EXTERNAL_EVIDENCE, ident, "absent",
+                       "no post-batch evidence audit was supplied, so the last "
+                       "batch's declared evidence has not been independently "
+                       "re-derived; neither credit nor a next batch is authorized",
+                       action)
+    if error:
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable", error, action)
+    if payload is None:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverifiable",
+            error or "the post-batch audit payload is absent", action)
+    index_sha = str((payload.get("batch") or {}).get("evidence_index_sha256") or "")
+    if len(index_sha) != 64 or any(c not in "0123456789abcdef" for c in index_sha):
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverifiable",
+            "the audit artifact does not bind a sidecar evidence index "
+            "(owner decision E1); the evidence is not bound to a retained index",
+            action)
+    verdict = str(payload.get("verdict") or "")
+    counts = payload.get("counts") or {}
+    codes = ", ".join(payload.get("reason_codes") or []) or "<none>"
+    detail = (
+        f"verdict={verdict}; tasks_total={counts.get('tasks_total')}; "
+        f"tasks_passed={counts.get('tasks_passed')}; "
+        f"tasks_failed={counts.get('tasks_failed')}; "
+        f"reason_codes={codes}; audit_digest={payload.get('audit_digest')}"
+    )
+    if verdict == "PASS":
+        return Finding(READY, ident, "verified", detail, "")
+    return Finding(EXTERNAL_EVIDENCE, ident, "blocked", detail, action)
+
+
+def _population_admission_finding(
+    ledgers: Sequence[Path | str] | None,
+    registered_tasks: Sequence[str] | None,
+    *,
+    audit_payload: Mapping[str, Any] | None = None,
+) -> Finding:
+    """``population.admission`` -- the counting rule's own implementation.
+
+    Admission is measured ONLY by ``f2_s8_batch.reconcile_admissions_across_chains``
+    (``docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md``). Registration or
+    metadata eligibility is NEVER counted as admission, and the credited union --
+    not a raw ledger row count -- is the figure compared against the target.
+    Every chain is verified by the reconciler first; a malformed chain, an
+    unregistered name, or a broken digest chain leaves the gate BLOCKED.
+
+    D4 HARD GATE: when a post-batch audit was supplied and it did not PASS, the
+    reconciler is NOT called at all -- a failing audit blocks credit, rather than
+    merely being reported next to a credited figure.
+    """
+    ident = "population.admission"
+    action = ("produce S8 base/gold evidence for the metadata-eligible tasks so "
+              "they can be admitted")
+    if audit_payload is not None and str(audit_payload.get("verdict") or "") != "PASS":
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "credit_blocked",
+            "credit is blocked: the supplied post-batch audit verdict is "
+            f"{audit_payload.get('verdict')!r} (reason codes: "
+            f"{', '.join(audit_payload.get('reason_codes') or []) or '<none>'})",
+            "resolve the post-batch audit discrepancies and re-run it to PASS "
+            "before counting admissions")
+    if not ledgers:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "insufficient",
+            "population acquisition IS authorized (F2-IMPL-AUTH-028/029/031); no "
+            "admission ledger was supplied, so admission is NOT established "
+            "(pass --admission-ledger, and --registered-tasks, to evaluate the "
+            "registered chains)",
+            action)
+    if not registered_tasks:
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unusable",
+            "an admission ledger was supplied without --registered-tasks, so the "
+            "registered task universe the counting rule reconciles against cannot "
+            "be established",
+            action)
+    try:
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable",
+                       f"the admission reconciler is unavailable ({exc})", action)
+    try:
+        out = reconcile_admissions_across_chains(
+            [Path(p) for p in ledgers], list(registered_tasks))
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(
+            EXTERNAL_EVIDENCE, ident, "unverifiable",
+            f"the supplied admission ledger(s) did not reconcile ({exc})", action)
+    credited = int(out["credited_count"])
+    operative = len(out["operative_admitted"])
+    remaining = max(0, 300 - credited)
+    detail = (
+        f"operative-chain admissions {operative}; credited union {credited} "
+        f"(each task once); remaining to 300 = {remaining}; "
+        f"refused terminal overrides {len(out['refused_terminal_override'])}; "
+        f"verified corrections {out['corrections_verified']}")
+    if credited >= 300:
+        return Finding(READY, ident, "sufficient", detail, "")
+    return Finding(EXTERNAL_EVIDENCE, ident, "insufficient", detail, action)
+
+
+def _active_lesson_finding(active_lesson: Any) -> Finding:
+    """``evidence.active_lesson`` -- evidence-derived, fail-closed.
+
+    Absent an input the finding keeps its historical ``absent`` value.  When a
+    record is supplied it is verified by the authoritative verifier
+    (``qwen_train.f2_lesson_evidence.verify_active_lesson_evidence``), which
+    deliberately separates three dimensions: evidence CONSISTENCY (frozen T
+    artifact + lesson binding + the frozen Q12 shape), receipt AUTHENTICITY
+    (HMAC under the operator receipt key) and owner AUTHORIZATION (an
+    owner-signed attestation bound to this learning event and verified against
+    the existing trust root).  Only all three together reach READY; every other
+    state is blocking.  The gate is never satisfied by consistency alone, so a
+    rehearsal cannot clear it, and no evidence is ever fabricated here.
+    """
+    ident = "evidence.active_lesson"
+    default_detail = (
+        "no genuine ACTIVE lesson is established, so T cannot be frozen "
+        "and X cannot be derived from it")
+    default_action = (
+        "perform the authorized clean-room learning event (requires Q9 "
+        "isolation, the receipt key, and an admitted population)")
+    if active_lesson is None:
+        return Finding(EXTERNAL_EVIDENCE, ident, "absent", default_detail, default_action)
+    try:
+        from qwen_train.f2_lesson_evidence import verify_active_lesson_evidence
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverifiable",
+                       f"the ACTIVE-lesson verifier is unavailable ({exc})",
+                       "restore qwen_train/f2_lesson_evidence.py")
+    try:
+        verdict = verify_active_lesson_evidence(active_lesson)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return Finding(EXTERNAL_EVIDENCE, ident, "unverified",
+                       f"the supplied ACTIVE-lesson record could not be verified ({exc})",
+                       default_action)
+    dims = ", ".join(
+        f"{k}={v}" for k, v in sorted(dict(verdict.dimensions).items()))
+    if verdict.ok:
+        return Finding(READY, ident, "present", f"{verdict.detail} [{dims}]", "")
+    return Finding(EXTERNAL_EVIDENCE, ident, verdict.state,
+                   f"{verdict.detail} [{dims}]", default_action)
+
+
+def _evidence_findings(
+    root: Path,
+    *,
+    ledgers: Sequence[Path | str] | None = None,
+    registered_tasks: Sequence[str] | None = None,
+    s8_evidence: Any = None,
+    active_lesson: Any = None,
+    batch_audit: Path | Mapping[str, Any] | str | None = None,
+) -> list[Finding]:
+    """External evidence and authorization gates that no repository change can
+    satisfy.
+
+    Q9 is deliberately NOT here. The privileged egress control
+    (``host.egress_enforcement``) and its observed evidence
+    (``evidence.q9_attestation``) are one requirement seen from two sides, so
+    they are emitted together and reconciled from the single supplied artifact
+    by :func:`_q9_findings`. Listing ``evidence.q9_attestation`` here as a fixed
+    ``not_supplied`` gate produced a report in which the same id appeared twice
+    -- once permanently ``not_supplied`` and once ``verified``.
+
+    ``ledgers`` / ``registered_tasks`` / ``s8_evidence`` are OPTIONAL, EXPLICIT
+    inputs. With none supplied the findings are exactly the fail-closed defaults
+    (and the pinning tests assert that). When supplied, each gate is evaluated by
+    the AUTHORITATIVE path -- never by a literal, and never by presence alone. A
+    malformed ledger, a missing store, an invalid hash or an unverified record
+    leaves the gate BLOCKED; a positive ledger count never establishes base/gold
+    provenance.
+    """
+    audit_payload, audit_error = _load_batch_audit(batch_audit)
     return [
-        Finding(EXTERNAL_EVIDENCE, "evidence.s8_base_gold", "absent",
-                "no verified base/gold execution pair is present; S8 requires "
-                "real base=FAIL and gold=PASS executions with retained output, "
-                "run log and evaluator bytes",
-                "run the authorized base and gold executions and retain the "
-                "evidence in the trusted store"),
-        Finding(EXTERNAL_EVIDENCE, "evidence.active_lesson", "absent",
-                "no genuine ACTIVE lesson is established, so T cannot be frozen "
-                "and X cannot be derived from it",
-                "perform the authorized clean-room learning event (requires Q9 "
-                "isolation, the receipt key, and an admitted population)"),
-        Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
-                "outbound egress denial is a privileged host control; this "
-                "repository observes and verifies isolation but cannot impose it",
-                "apply a default-deny egress policy for the arm's identity, then "
-                "run the isolation probes and supply the attestation"),
-        Finding(AUTHORIZATION, "authz.population_acquisition", "not_authorized",
-                "F2-IMPL-AUTH-013 explicitly does not authorize acquiring the "
-                "task population; no task may be admitted without it",
-                "record an explicit authorization, or accept that the admitted "
-                "population is zero"),
-        Finding(EXTERNAL_EVIDENCE, "evidence.q9_attestation", "not_supplied",
-                "no verified clean-room attestation was supplied to the "
-                "readiness gate",
-                "run `python -m qwen_train.f2_isolation` under the enforced "
-                "policy and pass the attestation as 'no_egress_attestation'"),
+        _batch_audit_finding(batch_audit, audit_payload, audit_error),
+        _s8_base_gold_finding(s8_evidence),
+        _active_lesson_finding(active_lesson),
+        _population_admission_finding(
+            ledgers, registered_tasks, audit_payload=audit_payload),
         Finding(NOT_EXECUTED, "run.q10_calibration", "not_executed",
                 "calibration (Q10) is implemented but was not executed; it is not "
                 "authorized in this repository state",
@@ -409,21 +907,248 @@ def _evidence_findings(root: Path) -> list[Finding]:
     ]
 
 
-def _provenance_findings(root: Path) -> list[Finding]:
+def _q9_findings(
+    attestation: Path | None,
+    enforcement_capture: Path | None = None,
+) -> list[Finding]:
+    """The two Q9 gates, reconciled from ONE artifact and emitted exactly once.
+
+    ``host.egress_enforcement`` (the privileged control) and
+    ``evidence.q9_attestation`` (the observed evidence for it) are the same
+    requirement: the finding's own remedy is "apply a default-deny egress policy
+    for the arm's identity, then run the isolation probes and supply the
+    attestation". They therefore share a single source of truth and a single
+    acceptance test -- the SAME test the consuming gate uses
+    (``qwen_train.f2_readiness._check_no_egress``): the attestation's verdict
+    must be satisfied AND its enforcement identity must be bound. A probe records
+    THAT a connection failed, never WHICH control failed it, so an attestation
+    whose enforcement identity is unbound is not evidence that enforcement is in
+    force, and neither finding may clear.
+
+    Fail-closed and single-valued: absent evidence leaves both blocked; a
+    malformed artifact is ``invalid``; an unverified or unattributable one is
+    ``not_established``; only a satisfied-and-bound artifact yields ``verified``
+    / ``enforced``. No unrelated gate is touched.
+
+    ``enforcement_capture`` is the HOST-side capture the consuming gate already
+    accepts (``qwen_train.f2_readiness._check_no_egress``, threaded there for
+    exactly this reason): a control that silently drops in the vSwitch produces
+    a timeout no observer can tell from a blackhole, so without the capture this
+    gate would report the S8 architecture's own enforcement as unproven. It is
+    verified, never trusted -- the verifier still requires the capture to hash to
+    the digest the attestation claims, its effective highest-weight rule to
+    derive an explicit ``Deny`` for each literal target, and the negative control
+    to be observed ``permitted``. A capture that cannot be read is reported
+    loudly and leaves both gates blocked rather than being silently ignored.
+    """
+    if attestation is None:
+        return [
+            Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                    "outbound egress denial is a privileged host control; this "
+                    "repository observes and verifies isolation but cannot impose "
+                    "it",
+                    "apply a default-deny egress policy for the arm's identity, "
+                    "then run the isolation probes and supply the attestation"),
+            Finding(EXTERNAL_EVIDENCE, "evidence.q9_attestation", "not_supplied",
+                    "no verified clean-room attestation was supplied to the "
+                    "readiness gate",
+                    "run `python -m qwen_train.f2_isolation` under the enforced "
+                    "policy, then pass the result with '--attestation PATH' and "
+                    "the host capture with '--enforcement-capture PATH'"),
+        ]
+
+    try:
+        from qwen_train.f2_isolation import (
+            assess_enforcement_identity,
+            parse_attestation,
+            verify_isolation_attestation,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return [
+            Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                    f"isolation verifier unavailable, so enforcement cannot be "
+                    f"established: {exc}", "restore qwen_train/f2_isolation.py"),
+            Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "invalid",
+                    f"attestation could not be verified: {exc}",
+                    "restore qwen_train/f2_isolation.py"),
+        ]
+
+    # The host capture is an EXPLICIT input. If the operator named one and it
+    # cannot be read, that must be reported as its own reason -- silently
+    # falling back to the capture-less contract would hand back a verdict whose
+    # provenance the operator cannot tell from one that used their input.
+    capture_bytes: bytes | None = None
+    if enforcement_capture is not None:
+        try:
+            capture_bytes = Path(enforcement_capture).read_bytes()
+        except OSError as exc:  # noqa: BLE001 - fail closed
+            return [
+                Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                        f"the supplied enforcement capture could not be read "
+                        f"({exc}), so enforcement cannot be established",
+                        "pass the host-side capture with "
+                        "'--enforcement-capture PATH'"),
+                Finding(PRIVILEGED_HOST, "evidence.q9_attestation",
+                        "not_established",
+                        f"enforcement capture unusable: {exc}",
+                        "regenerate the host-side capture for this arm and pass "
+                        "its path with '--enforcement-capture PATH'"),
+            ]
+
+    try:
+        att = parse_attestation(attestation.read_bytes())
+        verdict = verify_isolation_attestation(
+            att, enforcement_capture=capture_bytes
+        )
+        identity = assess_enforcement_identity(att)
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return [
+            Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                    f"supplied attestation is unusable ({exc}), so enforcement is "
+                    "not established",
+                    "enforce egress denial and supply a valid attestation"),
+            Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "invalid",
+                    f"attestation could not be parsed or verified: {exc}",
+                    "regenerate it with qwen_train.f2_isolation"),
+        ]
+
+    if verdict.satisfied and identity.bound:
+        return [
+            Finding(READY, "host.egress_enforcement", "enforced",
+                    f"egress enforcement observed and independently verified "
+                    f"under enforcement scope {identity.scope_model!r}", ""),
+            Finding(READY, "evidence.q9_attestation", "verified",
+                    f"{verdict.detail}; enforcement identity bound via "
+                    f"{identity.scope_model}", ""),
+        ]
+
+    if not verdict.satisfied:
+        reason = verdict.detail
+        remedy = "enforce egress denial, then re-run the attestation probes"
+    else:
+        reason = (
+            "isolation probes satisfied but the ENFORCEMENT IDENTITY is not "
+            "bound: " + ", ".join(identity.missing)
+        )
+        remedy = (
+            "re-run f2_isolation with --enforcement-scope, --interpreter-path and "
+            "--interpreter-sha256 (and --spawn-image per spawned image)"
+        )
+    return [
+        Finding(PRIVILEGED_HOST, "host.egress_enforcement", "not_enforced",
+                f"attestation supplied but enforcement is not established: {reason}",
+                remedy),
+        Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "not_established",
+                reason, remedy),
+    ]
+
+
+def _resolve_conversion_record(
+    conversion_record: Path | Mapping[str, Any] | str | None = None,
+) -> tuple[Mapping[str, Any] | None, str]:
+    """Resolve conversion record from argument or SWARM_F2_CONVERSION_RECORD.
+
+    CLI / programmatic argument takes precedence over environment variable.
+    Fails closed if a supplied path cannot be read, parsed, or is not a JSON object.
+    """
+    if conversion_record is not None:
+        if isinstance(conversion_record, Mapping):
+            return conversion_record, ""
+        p = Path(conversion_record)
+        if not p.is_file():
+            return None, f"supplied conversion record '{p.name}' does not exist or is not a file"
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return None, f"supplied conversion record '{p.name}' could not be parsed: {exc}"
+        if not isinstance(data, Mapping):
+            return None, f"supplied conversion record '{p.name}' is not a JSON object"
+        return data, ""
+
+    rec_env = _env("SWARM_F2_CONVERSION_RECORD")
+    if rec_env:
+        p = Path(rec_env)
+        if not p.is_file():
+            return None, f"SWARM_F2_CONVERSION_RECORD '{p.name}' does not exist or is not a file"
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return None, f"SWARM_F2_CONVERSION_RECORD '{p.name}' could not be parsed: {exc}"
+        if not isinstance(data, Mapping):
+            return None, f"SWARM_F2_CONVERSION_RECORD '{p.name}' is not a JSON object"
+        return data, ""
+
+    return None, ""
+
+
+#: Authorized F2 distiller GGUF the provenance chain is bound to, plus its
+#: SHA-256. Single source of truth so a model-identity change is one visible
+#: edit. This is the WITNESSED RECONVERSION (owner-authorized 2026-10-14); it is
+#: deliberately NOT byte-identical to the previously served artifact
+#: (``65202f37...``, 2_708_803_840 B), which is preserved unchanged. The two are
+#: distinct artifacts with distinct digests and must never be conflated.
+SERVED_GGUF_PATH = Path(
+    r"C:\Users\rober\F2_EVIDENCE\s8\conversion\robs4b_q4km_reconverted.gguf"
+)
+SERVED_GGUF_SHA256 = (
+    "3e5ba031f0b50e98450d1575aa19780bc5b4b13f48bf3eca38f3c915a442a337"
+)
+
+
+def _provenance_findings(
+    root: Path,
+    conversion_record: Path | Mapping[str, Any] | str | None = None,
+) -> list[Finding]:
     """Conversion-chain verdict, computed from what is actually on disk."""
     try:
         from qwen_train import f2_model_provenance as mp
     except Exception as exc:  # noqa: BLE001
         return [Finding(IMPLEMENTED, "provenance.module", "MISSING",
                         f"f2_model_provenance unavailable: {exc}", "")]
+
+    rec, err = _resolve_conversion_record(conversion_record)
+    if err:
+        try:
+            chain = mp.build_conversion_chain(
+                model_alias="robs4b",
+                training_runs_path=root / "qwen_train" / "training_runs.jsonl",
+                adapter_dirs=[root / "qwen_train" / "robs4b_final_adapter"],
+                corpus_search_roots=[root.parent / "qwen_train_data"],
+                served_gguf=SERVED_GGUF_PATH,
+                served_gguf_sha256=SERVED_GGUF_SHA256,
+                conversion_record=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return [Finding(EXTERNAL_EVIDENCE, "provenance.chain", "error",
+                            f"chain could not be built: {exc}", "")]
+        out = [
+            Finding(IMPLEMENTED if link.state == "PROVEN" else EXTERNAL_EVIDENCE,
+                    f"provenance.{link.name}", link.state, link.detail,
+                    "" if link.state == "PROVEN" else mp.LINK_REMEDY.get(link.name, ""))
+            for link in chain.links
+            if link.name != mp.LINK_CONVERSION
+        ]
+        out.append(
+            Finding(EXTERNAL_EVIDENCE, "provenance.conversion", "error",
+                    f"conversion record unusable: {err}",
+                    "supply a valid conversion record JSON")
+        )
+        out.append(
+            Finding(OPERATOR_ACTION, "provenance.verdict", "incomplete",
+                    f"model provenance NOT established: {err}",
+                    "supply a valid conversion record JSON")
+        )
+        return out
+
     try:
         chain = mp.build_conversion_chain(
             model_alias="robs4b",
             training_runs_path=root / "qwen_train" / "training_runs.jsonl",
             adapter_dirs=[root / "qwen_train" / "robs4b_final_adapter"],
             corpus_search_roots=[root.parent / "qwen_train_data"],
-            served_gguf=root / "qwen_train" / "robs4b_q4km.gguf",
-            served_gguf_sha256="65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41",
+            served_gguf=SERVED_GGUF_PATH,
+            served_gguf_sha256=SERVED_GGUF_SHA256,
+            conversion_record=rec,
         )
     except Exception as exc:  # noqa: BLE001
         return [Finding(EXTERNAL_EVIDENCE, "provenance.chain", "error",
@@ -449,15 +1174,36 @@ def run_preflight(
     *,
     root: Path | None = None,
     attestation: Path | None = None,
+    enforcement_capture: Path | None = None,
+    conversion_record: Path | Mapping[str, Any] | str | None = None,
     env: dict[str, str] | None = None,
     adapter_controls: dict[str, str] | None = None,
+    ledgers: Sequence[Path | str] | None = None,
+    registered_tasks: Sequence[str] | None = None,
+    s8_evidence: Path | Mapping[str, Any] | str | None = None,
+    active_lesson: Path | Mapping[str, Any] | str | None = None,
+    s8_state_set: Path | Mapping[str, Any] | str | None = None,
+    batch_audit: Path | Mapping[str, Any] | str | None = None,
 ) -> dict[str, Any]:
     """Run every preflight check and return a deterministic report.
+
+    ``enforcement_capture`` is the host-side enforcement capture that belongs to
+    ``attestation``. It reaches only the Q9 gate, and only the same way the
+    consuming gate takes it (``qwen_train.f2_readiness``); supplying it can
+    shrink the unproven set, never grow the satisfied one.
+
+    ``conversion_record`` is an optional conversion record JSON path or mapping.
+    CLI/explicit argument takes precedence over SWARM_F2_CONVERSION_RECORD.
 
     ``adapter_controls`` overrides the adapter-forced control values that
     ``env.controls`` resolves against. Like ``env`` it exists so a test can
     model a hypothetical child environment; omitting it uses the real adapter
     values from ``F2_ADAPTER_CONTROLS``.
+
+    ``s8_state_set`` optionally supplies the ``f2-s8-state-set/v1`` artifact so
+    the S8 state-digest gate verifies the env values EQUAL the structurally
+    verified aggregates instead of only their shape (additive; None keeps the
+    historical shape-only behavior).
     """
     repo = Path(root) if root else Path(__file__).resolve().parents[1]
     if env is not None:
@@ -468,30 +1214,18 @@ def run_preflight(
     findings: list[Finding] = []
     findings += _code_findings()
     findings += _env_findings()
+    findings += _s8_env_findings(state_set=s8_state_set)
     findings += _env_control_findings(repo, adapter_controls=adapter_controls)
-    findings += _evidence_findings(repo)
-
-    # Q9 attestation, when supplied, is VERIFIED here rather than trusted.
-    if attestation is not None:
-        try:
-            from qwen_train.f2_isolation import (
-                parse_attestation, verify_isolation_attestation,
-            )
-            v = verify_isolation_attestation(parse_attestation(attestation.read_bytes()))
-            findings.append(
-                Finding(READY if v.satisfied else PRIVILEGED_HOST,
-                        "evidence.q9_attestation",
-                        "verified" if v.satisfied else "not_established",
-                        v.detail, "" if v.satisfied else "enforce egress denial")
-            )
-        except Exception as exc:  # noqa: BLE001
-            findings.append(
-                Finding(PRIVILEGED_HOST, "evidence.q9_attestation", "invalid",
-                        f"attestation could not be verified: {exc}",
-                        "regenerate it with qwen_train.f2_isolation")
-            )
-
-    findings += _provenance_findings(repo)
+    findings += _evidence_findings(repo, ledgers=ledgers,
+                                   registered_tasks=registered_tasks,
+                                   s8_evidence=s8_evidence,
+                                   active_lesson=active_lesson,
+                                   batch_audit=batch_audit)
+    # Q9: the privileged control and its attestation evidence are one gate,
+    # VERIFIED (never trusted) from the single supplied artifact, with the host
+    # capture the consuming gate also takes.
+    findings += _q9_findings(attestation, enforcement_capture)
+    findings += _provenance_findings(repo, conversion_record=conversion_record)
 
     for f in findings:
         if f.category not in CATEGORIES:
@@ -569,7 +1303,7 @@ def _parse_operator_env(root: Path) -> dict[str, str]:
 
 
 def _load_operator_env(root: Path) -> None:
-    """Populate ``os.environ`` from the repository's ``.env`` for variables not set.
+    """Populate ``os.environ`` from the repository's ``.env``, ALLOW-LISTED.
 
     Why this exists
     ---------------
@@ -585,6 +1319,17 @@ def _load_operator_env(root: Path) -> None:
     is a mechanism defect, not an operator mistake: the documented check could
     not observe the documented location.
 
+    Why it is now ALLOW-LISTED
+    --------------------------
+    Importing EVERY ``.env`` entry made a ``.env``-only GOVERNED input look
+    satisfied to the preflight, even though the governed execution path
+    (``qwen_train.f2_s8_compose.load_governance_from_env``) reads ``os.environ``
+    only and a separately launched process would never receive the value.  The
+    preflight could therefore report READY for an environment that cannot
+    execute.  Only :data:`DOTENV_ALLOWED_KEYS` -- the receipt key and the seven
+    child controls, the two documented ``.env`` locations -- are imported now;
+    the governed F2 and S8 execution inputs are process/session-only.
+
     This follows the repository's own convention -- ``swarm_os/config/settings.py``
     self-loads ``.env`` for the same reason -- and resolves ``.env`` at the
     REPOSITORY root rather than the current working directory, because the
@@ -595,6 +1340,8 @@ def _load_operator_env(root: Path) -> None:
     * **An explicit process environment always wins.** A variable already present
       in ``os.environ`` is never overwritten, so an operator who exports a value
       in their shell is never silently replaced by a stale file.
+    * **Only the allow-listed keys are imported.** A governed execution input is
+      never taken from ``.env``, so it cannot produce a misleading READY finding.
     * **Values are never logged, printed, or returned.** Only presence is observed.
     * **Nothing is written.** This reads ``.env``; it never modifies it.
     * **Fail-closed behaviour is unchanged.** If ``.env`` is absent or unreadable,
@@ -602,6 +1349,8 @@ def _load_operator_env(root: Path) -> None:
       weakened, skipped, or bypassed.
     """
     for key, value in _parse_operator_env(root).items():
+        if key not in DOTENV_ALLOWED_KEYS:
+            continue
         if key in os.environ:
             continue
         os.environ[key] = value
@@ -612,22 +1361,100 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="emit JSON only")
     ap.add_argument("--attestation", default=None,
                     help="path to a clean-room attestation to verify")
+    ap.add_argument("--enforcement-capture", default=None,
+                    help="host-side enforcement capture that belongs to the "
+                         "supplied attestation (requires --attestation)")
+    ap.add_argument("--conversion-record", default=None,
+                    help="path to a conversion record JSON to verify")
+    ap.add_argument("--admission-ledger", action="append", default=None,
+                    help="registered admission ledger chain (repeatable, in "
+                         "registration order); requires --registered-tasks. "
+                         "Admissions are then measured by "
+                         "f2_s8_batch.reconcile_admissions_across_chains")
+    ap.add_argument("--registered-tasks", default=None,
+                    help="path to a JSON list of registered task ids (the universe "
+                         "the counting rule reconciles against)")
+    ap.add_argument("--s8-evidence", default=None,
+                    help="path to a JSON document {\"tasks\": [...]} of S8 base/gold "
+                         "evidence records to verify with "
+                         "qwen_train.f2_evidence.verify_task_evidence")
+    ap.add_argument("--active-lesson", default=None,
+                    help="path to an f2-active-lesson-evidence/v1 record; when supplied "
+                         "the evidence.active_lesson gate is verified by "
+                         "qwen_train.f2_lesson_evidence (consistency + receipt "
+                         "authenticity + owner authorization). Absent, the gate keeps "
+                         "its historical value")
+    ap.add_argument("--s8-state-set", default=None,
+                    help="path to the f2-s8-state-set/v1 artifact; when supplied, "
+                         "the S8 state-digest gate verifies each env digest EQUALS "
+                         "the corresponding structurally verified aggregate "
+                         "(additive: absent, the gate checks presence+shape only)")
+    ap.add_argument("--batch-audit", default=None,
+                    help="path to the D4 post-batch audit artifact "
+                         "(f2-s8-post-batch-audit/v1). A batch may not be credited "
+                         "and no next batch may be authorized unless this audit "
+                         "verifies as PASS; absent, the gate is BLOCKED")
     ap.add_argument("--provenance", action="store_true",
                     help="print only the conversion-chain verdict")
     args = ap.parse_args(list(argv) if argv is not None else None)
 
+    if args.enforcement_capture and not args.attestation:
+        print(
+            "error: --enforcement-capture requires --attestation: a capture is "
+            "binding evidence for one attestation, not a standalone input",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.admission_ledger and not args.registered_tasks:
+        print(
+            "error: --admission-ledger requires --registered-tasks: the counting "
+            "rule reconciles the credited union against the registered task "
+            "universe, so a ledger alone cannot establish admission",
+            file=sys.stderr,
+        )
+        return 2
+
+    registered_tasks = None
+    if args.registered_tasks:
+        try:
+            registered_tasks = json.loads(
+                Path(args.registered_tasks).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            print(f"error: --registered-tasks could not be read ({exc})",
+                  file=sys.stderr)
+            return 2
+        if not isinstance(registered_tasks, list):
+            print("error: --registered-tasks must be a JSON list of task ids",
+                  file=sys.stderr)
+            return 2
+
     root = Path(__file__).resolve().parents[1]
     _load_operator_env(root)
     att = Path(args.attestation) if args.attestation else None
+    cap = Path(args.enforcement_capture) if args.enforcement_capture else None
+    conv_path = Path(args.conversion_record) if args.conversion_record else None
 
     if args.provenance:
-        for f in _provenance_findings(root):
+        for f in _provenance_findings(root, conversion_record=conv_path):
             print(f"[{f.status:>10}] {f.ident}: {f.detail}")
             if f.action:
                 print(f"             ACTION: {f.action}")
         return 0
 
-    report = run_preflight(root=root, attestation=att)
+    report = run_preflight(root=root, attestation=att,
+                           enforcement_capture=cap,
+                           conversion_record=conv_path,
+                           ledgers=args.admission_ledger,
+                           registered_tasks=registered_tasks,
+                           s8_evidence=(Path(args.s8_evidence)
+                                        if args.s8_evidence else None),
+                           active_lesson=(Path(args.active_lesson)
+                                          if args.active_lesson else None),
+                           s8_state_set=(Path(args.s8_state_set)
+                                         if args.s8_state_set else None),
+                           batch_audit=(Path(args.batch_audit)
+                                        if args.batch_audit else None))
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:

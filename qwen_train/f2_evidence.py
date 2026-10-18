@@ -696,9 +696,16 @@ def verify_task_evidence(
     they describe two DIFFERENT states; and the pair demonstrates the required
     scientific property - the base state does not pass and the gold state does.
 
-    ``expected_gold_state_digest``, when supplied, binds the gold record to a
-    curator-known reference-state digest (e.g. the Q8 ``reference_digest``)
-    WITHOUT that value ever entering a worker-facing manifest.
+    ``expected_gold_state_digest``, when supplied, must be an EXECUTION-STATE
+    digest: it is compared against the gold record's ``execution_state_digest``.
+    It is an operator/caller ASSERTION of which gold state the operator believes
+    ran, not a measurement; the current contract cannot establish that a supplied
+    digest is the genuine state of the guest.
+
+    The Q8 ``reference_digest`` (a SHA-256 over ``repo@commit``) is a digest of the
+    DERIVATION INPUT, not of execution state, and MUST NOT be passed here: it
+    belongs to a different semantic domain and would be rejected. See
+    ``docs/EXPERIMENT_J_F2_S8_GOLD_STATE_EVIDENCE_CONTRACT_PROPOSAL.md``.
     """
     if base_evidence is None and gold_evidence is None:
         return _fail(STATE_MISSING, "no base or gold evidence supplied")
