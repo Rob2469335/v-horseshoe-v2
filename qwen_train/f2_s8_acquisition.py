@@ -68,6 +68,7 @@ __all__ = [
     "expand_requirements_file",
     "parse_requirements_lines",
     "poetry_group_dependencies",
+    "poetry_extra_dependencies",
     "dependency_inputs_from_pyproject",
     "dependency_metadata_status",
     "install_context_from_pyproject",
@@ -138,6 +139,13 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
     # derives -- so the command's ``-n 4`` has a provider.
     "BerriAI__litellm-13675": {
         "groups": ["dev"],
+        # Its optional runtime dependencies -- the ones its proxy suite imports --
+        # are declared in Poetry's ``[tool.poetry.extras]``, which the reader did
+        # not see. Measured before: 10 distinct ModuleNotFoundError
+        # (litellm_enterprise, mcp, polars, botocore, orjson, uvicorn, prisma,
+        # rich, fastapi_sso, email_validator); the ``proxy`` extra lists 23
+        # members covering 7 of them, and ``extra_proxy`` covers prisma.
+        "extras": ["proxy", "extra_proxy"],
         # The project's OWN constraint, taken from the same dev group it declares.
         # Installing that group while the builder held ``pytest==8.3.5`` made the
         # install plan refuse the build: "conflicting declarations for pytest: no
@@ -1687,6 +1695,56 @@ def poetry_group_dependencies(
     return groups, problems
 
 
+def poetry_extra_dependencies(
+    project: Path,
+) -> tuple[dict[str, list[str]], list[dict[str, str]]]:
+    """Poetry's ``[tool.poetry.extras]``, in the PEP 621 extras shape.
+
+    Poetry exposes OPTIONAL runtime dependencies through
+    ``[tool.poetry.extras]``, where each extra maps to a list of DEPENDENCY NAMES
+    declared under ``[tool.poetry.dependencies]`` -- not to requirement strings.
+    Reading Poetry groups while leaving this unread was an arbitrary boundary:
+    a Poetry project's test-visible optional dependencies were unreachable, so a
+    named extra raised a BLOCKING ``declared_test_source_missing``.
+
+    Measured on ``BerriAI__litellm-13675``: the ``proxy`` extra lists 23 members
+    and covers ``mcp``, ``polars``, ``orjson``, ``uvicorn``, ``rich``,
+    ``fastapi_sso`` and ``litellm_enterprise``; ``extra_proxy`` covers ``prisma``.
+
+    Returns ``(extras, problems)``. A member that names no declared dependency, or
+    whose declaration cannot be expressed in PEP 508, is reported as an advisory
+    problem rather than dropped silently.
+    """
+    data = _read_pyproject(Path(project))
+    poetry = (data.get("tool") or {}).get("poetry") or {}
+    declared = poetry.get("dependencies") or {}
+    by_norm = {_norm_source_name(k): k for k in declared}
+    extras: dict[str, list[str]] = {}
+    problems: list[dict[str, str]] = []
+
+    for name, members in (poetry.get("extras") or {}).items():
+        entries: list[str] = []
+        for member in members or ():
+            key = str(member)
+            original = key if key in declared else by_norm.get(_norm_source_name(key))
+            if original is None:
+                problems.append({
+                    "code": "poetry_extra_member_undeclared", "scope": "advisory",
+                    "detail": f"extra:{name}:{key}",
+                })
+                continue
+            converted = _poetry_spec(original, declared[original])
+            if converted is None:
+                problems.append({
+                    "code": "poetry_constraint_unconvertible", "scope": "advisory",
+                    "detail": f"extra:{name}:{original}:{declared[original]!r}",
+                })
+                continue
+            entries.append(converted)
+        extras[str(name)] = entries
+    return extras, problems
+
+
 def declared_test_requirements(
     dependency_inputs: Mapping[str, Any],
     *,
@@ -1761,6 +1819,15 @@ def declared_test_requirements(
         problems.extend(poetry_problems)
         for name, entries in poetry_groups.items():
             expanded.setdefault(name, list(entries))
+        # The same boundary for EXTRAS: a Poetry project lists its optional
+        # runtime dependencies in [tool.poetry.extras], which the PEP 621 reader
+        # never sees. Automatic selection is unchanged -- it still gates on
+        # TEST_DEPENDENCY_SOURCE_NAMES -- so this only makes a NAMED extra
+        # resolvable, which is the sanctioned per-task path.
+        poetry_extras, extra_problems = poetry_extra_dependencies(Path(project))
+        problems.extend(extra_problems)
+        for name, entries in poetry_extras.items():
+            raw_extras = {**raw_extras, name: list(entries)}
 
     group_index = {_norm_source_name(k): str(k) for k in expanded}
     extra_index = {_norm_source_name(k): str(k) for k in raw_extras}

@@ -624,3 +624,87 @@ black = "^24.0.0"
                                             project=root)
         assert result["requirements"] == []
         assert result["groups"] == []
+
+class TestPoetryExtras:
+    """Poetry exposes optional runtime dependencies through
+    ``[tool.poetry.extras]``, where each extra maps to a list of dependency NAMES
+    declared under ``[tool.poetry.dependencies]`` -- a different shape from PEP
+    621 extras. Reading Poetry groups while leaving this unread was an arbitrary
+    boundary: a Poetry project's named extra raised a BLOCKING
+    ``declared_test_source_missing``. Measured on ``BerriAI__litellm-13675``: 10
+    distinct ModuleNotFoundError, of which the ``proxy`` extra covers 7.
+    """
+
+    def _project(self, tmp_path, body):
+        (tmp_path / "pyproject.toml").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_members_resolve_through_the_dependency_table(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import poetry_extra_dependencies
+        root = self._project(tmp_path, """
+[tool.poetry.dependencies]
+python = "^3.11"
+orjson = "^3.9.0"
+uvicorn = { version = ">=0.22.0", optional = true }
+
+[tool.poetry.extras]
+proxy = ["orjson", "uvicorn"]
+""")
+        extras, problems = poetry_extra_dependencies(root)
+        assert extras["proxy"] == ["orjson>=3.9.0,<4.0.0", "uvicorn>=0.22.0"]
+        assert problems == []
+
+    def test_an_optional_member_without_a_version_stays_a_bare_name(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import poetry_extra_dependencies
+        root = self._project(tmp_path, """
+[tool.poetry.dependencies]
+mcp = { optional = true }
+
+[tool.poetry.extras]
+proxy = ["mcp"]
+""")
+        extras, problems = poetry_extra_dependencies(root)
+        assert extras["proxy"] == ["mcp"]
+        assert problems == []
+
+    def test_a_member_naming_no_dependency_is_reported_not_dropped(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import poetry_extra_dependencies
+        root = self._project(tmp_path, """
+[tool.poetry.dependencies]
+orjson = "^3.9.0"
+
+[tool.poetry.extras]
+proxy = ["orjson", "never-declared"]
+""")
+        extras, problems = poetry_extra_dependencies(root)
+        assert extras["proxy"] == ["orjson>=3.9.0,<4.0.0"]
+        assert [p["code"] for p in problems] == ["poetry_extra_member_undeclared"]
+
+    def test_naming_a_poetry_extra_is_no_longer_blocking(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import declared_test_requirements
+        root = self._project(tmp_path, """
+[tool.poetry.dependencies]
+orjson = "^3.9.0"
+
+[tool.poetry.extras]
+proxy = ["orjson"]
+""")
+        result = declared_test_requirements({"groups": {}, "extras": {}},
+                                            extras=["proxy"], project=root)
+        assert [p for p in result["problems"] if p.get("scope") == "blocking"] == []
+        assert result["requirements"] == ["orjson>=3.9.0,<4.0.0"]
+
+    def test_automatic_selection_still_ignores_poetry_extras(self, tmp_path):
+        """Same guard as for groups: reading Poetry extras must not smuggle a
+        non-test-named extra into automatic selection."""
+        from qwen_train.f2_s8_acquisition import declared_test_requirements
+        root = self._project(tmp_path, """
+[tool.poetry.dependencies]
+orjson = "^3.9.0"
+
+[tool.poetry.extras]
+proxy = ["orjson"]
+""")
+        result = declared_test_requirements({"groups": {}, "extras": {}}, project=root)
+        assert result["requirements"] == []
+        assert result["extras"] == []
