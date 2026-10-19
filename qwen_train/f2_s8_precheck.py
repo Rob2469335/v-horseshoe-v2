@@ -78,8 +78,19 @@ DEFAULT_POLICY: dict[str, Any] = {
     "infra_stop_fraction": 0.10,
     # Code-pinned exclusions; a policy file may repeat but never remove them.
     "excluded_tasks": ["networkx__networkx-8207"],
-    # Withheld workspace (P1): not a candidate until its workspace is preserved.
-    "parked_tasks": ["stanfordnlp__dspy-8739"],
+    # Parked = not a candidate until its blocking condition is resolved.
+    #   stanfordnlp__dspy-8739 : withheld workspace (P1); not a candidate until
+    #                            its workspace is preserved.
+    #   QuantEcon__QuantEcon.py-797 : EVIDENCE_AMBIGUOUS (owner remedy 1,
+    #                            2026-10-19). Its retained JUnit emits one test
+    #                            identity twice with DISAGREEING statuses
+    #                            ('failed' vs 'error'), which the evaluator
+    #                            correctly refuses as indeterminate, so its
+    #                            batch audit can never reach PASS. Parking it
+    #                            BEFORE manifest construction is what keeps a
+    #                            permanently-ambiguous task from invalidating a
+    #                            batch's clean siblings -- the r4 failure mode.
+    "parked_tasks": ["stanfordnlp__dspy-8739", "QuantEcon__QuantEcon.py-797"],
 }
 
 FORBIDDEN_SHELL = ("&&", "||", ";", "|", ">", "<")

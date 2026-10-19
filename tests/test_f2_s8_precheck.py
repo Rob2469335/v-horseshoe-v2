@@ -419,3 +419,31 @@ class TestBatchCapRaised:
     def test_the_approved_cap_itself_is_accepted(self):
         from qwen_train.f2_s8_precheck import _policy
         assert _policy({"max_tasks_per_batch": 50})["max_tasks_per_batch"] == 50
+
+class TestEvidenceAmbiguousParking:
+    """Owner remedy 1 (2026-10-19): a permanently evidence-ambiguous task is
+    parked BEFORE manifest construction, so it cannot invalidate the batch audit
+    of its clean siblings -- the r4 failure mode."""
+
+    def test_quant_econ_is_parked(self):
+        from qwen_train.f2_s8_precheck import DEFAULT_POLICY
+        assert "QuantEcon__QuantEcon.py-797" in DEFAULT_POLICY["parked_tasks"]
+
+    def test_the_original_parked_task_is_preserved(self):
+        from qwen_train.f2_s8_precheck import DEFAULT_POLICY
+        assert "stanfordnlp__dspy-8739" in DEFAULT_POLICY["parked_tasks"]
+
+    def test_a_parked_task_is_excluded_with_an_explicit_reason(self):
+        from qwen_train.f2_s8_precheck import (
+            REASON_PARKED, DEFAULT_POLICY, select_candidates,
+        )
+        built = {"QuantEcon__QuantEcon.py-797": {"status": "built"},
+                 "acme__repo-1": {"status": "built"}}
+        selected, excluded = select_candidates(
+            registered=["QuantEcon__QuantEcon.py-797", "acme__repo-1"],
+            build_manifest=built,
+            attempts={}, terminal=set(), recorded=set(), policy=DEFAULT_POLICY,
+        )
+        assert "QuantEcon__QuantEcon.py-797" not in selected
+        assert {"task_id": "QuantEcon__QuantEcon.py-797",
+                "reason": REASON_PARKED} in excluded
