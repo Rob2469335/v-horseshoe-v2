@@ -310,7 +310,7 @@ class TestBuilderInstallPlanDeclaredTestDependencies:
         frozen literal.
         """
         assert re.search(r"declared-test-deps v\d+", BUILDER_SOURCE), BUILDER_SOURCE
-        assert "declared-test-deps v3" in BUILDER_SOURCE
+        assert "declared-test-deps v4" in BUILDER_SOURCE
 
 
 # ---------------------------------------------------------------------------

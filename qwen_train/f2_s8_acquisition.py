@@ -104,8 +104,8 @@ ACQUISITION_SCHEMA = "f2_s8_acquisition_v1"
 #: re-run collection against an environment the new contract never produced.
 BUILDER_SOURCE = (
     "qwen_train/f2_s8_acquisition.py + qwen_train/f2_s8_pilot_build.py"
-    " (declared-test-deps v3: + Poetry dependency groups;"
-    " + plugins implied by the DECLARED COMMAND)"
+    " (declared-test-deps v4: + Poetry groups; + plugins implied by the DECLARED"
+    " COMMAND; + Poetry extras; + Hatch env extra-dependencies)"
 )
 
 #: Declarative, reproducible exceptions.  Each is a *build* decision, recorded in
@@ -1773,6 +1773,49 @@ def poetry_extra_dependencies(
     return extras, problems
 
 
+def hatch_env_dependencies(
+    project: Path,
+) -> tuple[dict[str, list[str]], list[dict[str, str]]]:
+    """Hatch's per-environment extra dependencies, in the PEP 735 shape.
+
+    A Hatch project declares the packages its test environment needs in
+    ``[tool.hatch.envs.<name>].extra-dependencies`` (or ``dependencies``), not in
+    ``[dependency-groups]`` or ``[project.optional-dependencies]``. Not reading it
+    meant the resolver saw NOTHING for such a project.
+
+    Measured on ``Archmonger__django-dbbackup-601``: ``pyproject.toml`` declares
+    ``python-dotenv`` at two places, yet the resolver reported
+    ``extras=[] groups=[] selected=[]``. Its ``tests/settings.py`` does
+    ``from dotenv import load_dotenv``, so pytest died in ``pytest_configure``
+    with ``ModuleNotFoundError: No module named 'dotenv'`` and pytest exited rc=3
+    (INTERNALERROR) -- reported as COLLECT_INTERNAL_ERROR, which looks like a
+    broken task rather than a dependency the project itself declares.
+
+    Returns ``(envs, problems)``. Non-string entries are reported, not dropped.
+    """
+    data = _read_pyproject(Path(project))
+    envs = ((data.get("tool") or {}).get("hatch") or {}).get("envs") or {}
+    out: dict[str, list[str]] = {}
+    problems: list[dict[str, str]] = []
+    for name, block in envs.items():
+        if not isinstance(block, Mapping):
+            continue
+        entries: list[str] = []
+        for key in ("extra-dependencies", "dependencies"):
+            for item in block.get(key) or ():
+                text = str(item).strip()
+                if text:
+                    entries.append(text)
+                else:
+                    problems.append({
+                        "code": "hatch_dependency_empty", "scope": "advisory",
+                        "detail": f"env:{name}:{key}",
+                    })
+        if entries:
+            out[str(name)] = entries
+    return out, problems
+
+
 def declared_test_requirements(
     dependency_inputs: Mapping[str, Any],
     *,
@@ -1831,6 +1874,8 @@ def declared_test_requirements(
     raw_groups: Mapping[str, Any] = dependency_inputs.get("groups") or {}
     raw_extras: Mapping[str, Any] = dependency_inputs.get("extras") or {}
     problems: list[dict[str, str]] = []
+    #: Hatch env names that denote the test environment (auto-selectable).
+    hatch_test_sources: set[str] = set()
 
     expanded, group_problems = resolve_dependency_groups(raw_groups)
     problems.extend(group_problems)
@@ -1856,6 +1901,19 @@ def declared_test_requirements(
         problems.extend(extra_problems)
         for name, entries in poetry_extras.items():
             raw_extras = {**raw_extras, name: list(entries)}
+        # ...and Hatch's per-environment dependencies, which are the third tool
+        # schema a project uses to declare the same thing.
+        hatch_envs, hatch_problems = hatch_env_dependencies(Path(project))
+        problems.extend(hatch_problems)
+        for name, entries in hatch_envs.items():
+            expanded.setdefault(name, list(entries))
+            # A Hatch env named for testing (`hatch-test`, `test`, `testing`) is
+            # auto-selectable under the SAME name heuristic already used for
+            # requirements files -- not a new global widening.
+            key = _norm_source_name(name)
+            if any(key == t or key.startswith(t + "-") or key.endswith("-" + t)
+                   for t in TEST_DEPENDENCY_SOURCE_NAMES):
+                hatch_test_sources.add(key)
 
     group_index = {_norm_source_name(k): str(k) for k in expanded}
     extra_index = {_norm_source_name(k): str(k) for k in raw_extras}
@@ -1881,7 +1939,8 @@ def declared_test_requirements(
         _want("optional_dependency", extra_index, name, wanted_extras)
     if auto:
         for key in sorted(group_index):
-            if key in TEST_DEPENDENCY_SOURCE_NAMES and key not in wanted_groups:
+            if (key in TEST_DEPENDENCY_SOURCE_NAMES or key in hatch_test_sources) \
+                    and key not in wanted_groups:
                 wanted_groups.append(key)
         for key in sorted(extra_index):
             if key in TEST_DEPENDENCY_SOURCE_NAMES and key not in wanted_extras:

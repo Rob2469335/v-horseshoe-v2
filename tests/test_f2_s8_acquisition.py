@@ -708,3 +708,68 @@ proxy = ["orjson"]
         result = declared_test_requirements({"groups": {}, "extras": {}}, project=root)
         assert result["requirements"] == []
         assert result["extras"] == []
+
+class TestHatchEnvDependencies:
+    """Hatch declares a project's test environment in
+    ``[tool.hatch.envs.<name>].extra-dependencies`` -- a third schema, after PEP
+    735/PEP 621 and Poetry. Not reading it meant the resolver saw NOTHING for such
+    a project: measured on ``Archmonger__django-dbbackup-601``, whose pyproject
+    declares ``python-dotenv`` yet yielded ``extras=[] groups=[] selected=[]``, so
+    ``tests/settings.py`` died on ``from dotenv import load_dotenv`` and pytest
+    exited rc=3 (INTERNALERROR) as COLLECT_INTERNAL_ERROR.
+    """
+
+    def _project(self, tmp_path, body):
+        (tmp_path / "pyproject.toml").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_extra_dependencies_are_read(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import hatch_env_dependencies
+        root = self._project(tmp_path, """
+[tool.hatch.envs.hatch-test]
+extra-dependencies = ["python-dotenv", "testfixtures"]
+""")
+        envs, problems = hatch_env_dependencies(root)
+        assert envs["hatch-test"] == ["python-dotenv", "testfixtures"]
+        assert problems == []
+
+    def test_dependencies_key_is_also_read(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import hatch_env_dependencies
+        root = self._project(tmp_path, """
+[tool.hatch.envs.test]
+dependencies = ["pytest"]
+""")
+        envs, _ = hatch_env_dependencies(root)
+        assert envs["test"] == ["pytest"]
+
+    def test_a_test_shaped_env_is_auto_selectable(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import declared_test_requirements
+        root = self._project(tmp_path, """
+[tool.hatch.envs.hatch-test]
+extra-dependencies = ["python-dotenv"]
+""")
+        result = declared_test_requirements({"groups": {}, "extras": {}}, project=root)
+        assert "python-dotenv" in result["requirements"]
+        assert result["groups"] == ["hatch-test"]
+
+    def test_non_test_envs_are_not_auto_selected(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import declared_test_requirements
+        root = self._project(tmp_path, """
+[tool.hatch.envs.docs]
+extra-dependencies = ["sphinx"]
+[tool.hatch.envs.lint]
+extra-dependencies = ["ruff"]
+""")
+        result = declared_test_requirements({"groups": {}, "extras": {}}, project=root)
+        assert result["requirements"] == []
+        assert result["groups"] == []
+
+    def test_a_named_hatch_env_is_explicitly_selectable(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import declared_test_requirements
+        root = self._project(tmp_path, """
+[tool.hatch.envs.functional]
+extra-dependencies = ["python-dotenv"]
+""")
+        result = declared_test_requirements({"groups": {}, "extras": {}},
+                                            groups=["functional"], project=root)
+        assert result["requirements"] == ["python-dotenv"]
