@@ -64,6 +64,7 @@ __all__ = [
     "declared_test_plugins",
     "declared_test_plugins_report",
     "declared_test_requirements",
+    "expand_requirements_file",
     "parse_requirements_lines",
     "dependency_inputs_from_pyproject",
     "dependency_metadata_status",
@@ -562,8 +563,158 @@ def discover_project_root(tree: Path) -> Path:
         f"ambiguous project root under {tree}: {[p.name for p in found]}")
 
 
+_CD_CLAUSE_RE = re.compile(r"(?:^|&&)\s*cd\s+([^\s&;|]+)", re.IGNORECASE)
+_DIFF_TARGET_RE = re.compile(r"^\+\+\+ b/(.+?)\s*$", re.MULTILINE)
+
+
+def _has_build_markers(path: Path) -> bool:
+    return any((path / m).is_file() for m in ("pyproject.toml", "setup.py", "setup.cfg"))
+
+
+def _shared_dir_prefix(paths: Sequence[str]) -> str:
+    """Longest shared DIRECTORY prefix of repo-relative posix paths."""
+    split = [p.split("/") for p in paths if p]
+    if not split:
+        return ""
+    prefix = split[0]
+    for parts in split[1:]:
+        i = 0
+        while i < len(prefix) and i < len(parts) and prefix[i] == parts[i]:
+            i += 1
+        prefix = prefix[:i]
+    # The last shared component is usually the file itself; only keep it when
+    # every path continues past it (i.e. it really is a directory).
+    if prefix and len(prefix) == min(len(p) for p in split):
+        prefix = prefix[:-1]
+    return "/".join(prefix)
+
+
+def resolve_task_project_root(
+    repo: Path,
+    *,
+    test_cmd: str = "",
+    patch_text: str = "",
+    fail_to_pass: Sequence[str] = (),
+    override: str = "",
+) -> Path:
+    """The directory the declared test command must run in and be installed from.
+
+    Monorepos are the reason this exists: ``awslabs/mcp`` keeps 58 subprojects
+    under ``src/`` and ``cirq`` keeps the real package in ``cirq-core``, so
+    installing at the repo root fails with "does not appear to be a Python
+    project" and every declared target is then judged against a tree that does
+    not exist.  uv's own rule is that ``pyproject.toml`` *identifies the project
+    root*, so the resolution below uses declared metadata only -- never a guess.
+
+    Priority, first match wins, and every candidate must stay inside ``repo``:
+
+    1. ``override`` -- a caller-declared layout (e.g. HypothesisWorks).
+    2. ``cd <relpath>`` in the DECLARED test command -- the project says where
+       its tests run.
+    3. The shared directory prefix of the patch's ``+++ b/`` targets and the
+       declared test node paths, walked upward to the nearest build metadata.
+    4. :func:`discover_project_root` (deterministic, ambiguity-refusing).
+
+    Raises :class:`AcquisitionError` when nothing resolves; it never falls back
+    to the repo root silently, because that is exactly the failure being fixed.
+    """
+    repo = Path(repo)
+    if not repo.is_dir():
+        raise AcquisitionError(f"tree does not exist: {repo}")
+
+    def _contained(candidate: Path) -> Path | None:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            return None
+        if resolved == repo.resolve() or repo.resolve() in resolved.parents:
+            return resolved
+        return None
+
+    if override:
+        cand = _contained(repo / override)
+        if cand is not None and _has_build_markers(cand):
+            return cand
+
+    for match in _CD_CLAUSE_RE.finditer(str(test_cmd or "")):
+        rel = match.group(1).strip().strip("'\"")
+        cand = _contained(repo / rel)
+        if cand is not None and cand.is_dir() and _has_build_markers(cand):
+            return cand
+
+    paths = list(_DIFF_TARGET_RE.findall(str(patch_text or "")))
+    paths += [str(node).split("::")[0] for node in (fail_to_pass or ())]
+    prefix = _shared_dir_prefix(paths)
+    current = _contained(repo / prefix) if prefix else _contained(repo)
+    while current is not None and current != repo.resolve():
+        if _has_build_markers(current):
+            return current
+        current = _contained(current.parent)
+        if current is None:
+            break
+
+    return discover_project_root(repo)
+
+
+def resolve_project_subdir(subdir: Any, base: Path, *, require_exists: bool = True) -> Path:
+    """Validate a manifest-declared ``project_subdir`` against ONE side's tree.
+
+    The build records the resolved project root relative to the repo
+    (``project_subdir``).  Pre-check and the live runner MUST use the same root,
+    otherwise a task can pass collection against one tree and be executed
+    against another.
+
+    Fail-closed by construction: an absolute path, a ``..`` component, a path
+    that resolves (through symlinks) outside ``base``, or a missing directory is
+    an error -- never a silent fallback to the repo root, because that is the
+    exact divergence this exists to prevent.  Empty/absent preserves the
+    root-project behaviour.
+    """
+    raw = str(subdir or "").strip()
+    if raw in ("", ".", "./"):
+        return Path(base)
+    candidate = Path(raw)
+    if candidate.is_absolute() or candidate.drive:
+        raise AcquisitionError(f"project_subdir must be relative: {raw!r}")
+    if any(part == ".." for part in candidate.parts):
+        raise AcquisitionError(f"project_subdir may not traverse: {raw!r}")
+    base_resolved = Path(base).resolve()
+    resolved = (base_resolved / candidate).resolve()
+    if resolved != base_resolved and base_resolved not in resolved.parents:
+        raise AcquisitionError(f"project_subdir escapes the workspace: {raw!r}")
+    if require_exists and not resolved.is_dir():
+        raise AcquisitionError(f"project_subdir does not exist: {resolved}")
+    return resolved
+
+
+def declared_required_version(project: Path) -> str:
+    """``[tool.uv].required-version`` -- the uv release the project demands.
+
+    uv documents ``required-version`` as a hard gate: a lockfile or project that
+    declares it cannot be operated by an older uv.  Reading it statically lets
+    the builder refuse with a NAMED reason instead of surfacing an opaque
+    lockfile parse error.
+    """
+    data = _read_pyproject(Path(project))
+    uv_table = (data.get("tool") or {}).get("uv") or {}
+    return str(uv_table.get("required-version") or "").strip()
+
+
 def requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    """Declared ``requires-python`` bounds, read statically (or ``None``)."""
+    """Declared ``requires-python`` bounds, read statically (or ``None``).
+
+    ONE parser for the whole pipeline. The builder previously had its own regex
+    that matched only DOUBLE-quoted assignments, so a project declaring
+    ``requires-python = '>=3.8,<3.14'`` (single quotes -- valid TOML) looked
+    unconstrained and was built on the newest interpreter, which pip then
+    rejected. Reading through ``tomllib`` removes the quote-style dependency.
+
+    Operators are interpreted over ``(major, minor)``: ``>=``/``>`` raise the
+    lower bound, ``<``/``<=`` lower the upper bound, ``==`` pins one minor
+    series, and ``~=`` is PEP 440 compatible-release (allowed to move within the
+    major version). A specifier that yields no interpretable constraint is an
+    error, never "unconstrained".
+    """
     data = _read_pyproject(Path(project))
     spec = str((data.get("project") or {}).get("requires-python") or "")
     if not spec:
@@ -571,13 +722,36 @@ def requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | 
         if f.is_file():
             m = re.search(r"python_requires\s*=\s*(.+)",
                           f.read_text(encoding="utf-8", errors="replace"))
-            spec = m.group(1).strip() if m else ""
+            if m:
+                spec = m.group(1).strip().strip("'\"")
     if not spec:
         return None
-    upper = re.search(r"<\s*(\d+)\.(\d+)", spec)
-    lower = re.search(r">=\s*(\d+)\.(\d+)", spec)
-    lo = (int(lower.group(1)), int(lower.group(2))) if lower else (3, 0)
-    hi = (int(upper.group(1)), int(upper.group(2))) if upper else (99, 0)
+
+    lo: tuple[int, int] = (3, 0)
+    hi: tuple[int, int] = (99, 0)
+    recognised = False
+    for op, major, minor in re.findall(r"(>=|<=|==|~=|>|<)\s*(\d+)\.(\d+)", spec):
+        value = (int(major), int(minor))
+        recognised = True
+        if op == ">=":
+            lo = max(lo, value)
+        elif op == ">":
+            lo = max(lo, (value[0], value[1] + 1))
+        elif op == "<":
+            hi = min(hi, value)
+        elif op == "<=":
+            hi = min(hi, (value[0], value[1] + 1))
+        elif op == "==":
+            lo = max(lo, value)
+            hi = min(hi, (value[0], value[1] + 1))
+        elif op == "~=":
+            lo = max(lo, value)
+            hi = min(hi, (value[0] + 1, 0))
+    if not recognised:
+        raise AcquisitionError(
+            f"requires-python specifier cannot be interpreted: {spec!r}")
+    if lo >= hi:
+        raise AcquisitionError(f"requires-python is unsatisfiable: {spec!r}")
     return lo, hi
 
 
@@ -676,17 +850,35 @@ def parse_requirements_names(text: str) -> list[str]:
 def parse_requirements_lines(text: str) -> tuple[list[str], list[str]]:
     """``(requirements, skipped_options)`` for ONE requirements file's text.
 
-    Keeps the declaration EXACTLY as written (specifier, extras and marker
+    Follows the documented pip requirements-file ordering: **line continuations
+    are processed first**, then comments are stripped.  Doing it the other way
+    round (strip ``#`` first, then join) corrupts any continuation that contains
+    a ``#`` and silently drops the tail of a wrapped requirement.
+
+    Declarations are kept EXACTLY as written (specifier, extras and marker
     included) so pip receives the project's own constraint rather than a
-    re-derived name.  Option lines (``-r``/``-e``/``--index-url``/...) are
-    SPLIT OUT and returned as ``skipped_options`` instead of being followed:
-    an include, an editable target or an alternate index is a build-system
-    decision this acquisition layer does not make, and silently honouring one
-    would install a tree this contract never identified.
+    re-derived name.  Option lines are returned as ``skipped_options`` rather
+    than followed here: ``-r`` is resolved by :func:`expand_requirements_file`,
+    which knows the declaring file, and ``-c``/``-e``/``--index-url`` are build
+    decisions this layer must not make implicitly.
     """
     requirements: list[str] = []
     skipped: list[str] = []
-    for line in text.splitlines():
+
+    # 1. Join continuations (a trailing unescaped backslash continues the line).
+    logical: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        if raw.rstrip().endswith("\\"):
+            buffer += raw.rstrip()[:-1]
+            continue
+        logical.append(buffer + raw)
+        buffer = ""
+    if buffer:
+        logical.append(buffer)
+
+    # 2. Strip comments, then classify.
+    for line in logical:
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
@@ -695,6 +887,89 @@ def parse_requirements_lines(text: str) -> tuple[list[str], list[str]]:
             continue
         requirements.append(line)
     return requirements, skipped
+
+
+def _option_target(option: str) -> str:
+    """The file an ``-r``/``-c`` option points at, or ``""``."""
+    parts = option.split(None, 1)
+    if len(parts) != 2:
+        return ""
+    return parts[1].strip().strip("'\"")
+
+
+def expand_requirements_file(
+    path: Path,
+    *,
+    root: Path,
+    _seen: set[Path] | None = None,
+) -> dict[str, Any]:
+    """Recursively expand ONE requirements file, as pip does.
+
+    pip's format explicitly supports referring to other requirements files
+    (``-r``) and constraints files (``-c``).  Dropping those lines -- which the
+    previous implementation did -- silently truncated every project that splits
+    its test set across files (``mypy``'s ``test-requirements.txt`` includes
+    ``mypy-requirements.txt`` and ``build-requirements.txt``).
+
+    Recursion is bounded to ``root`` and cycle-safe via ``_seen``.  An include
+    that escapes the project, a missing include, or a cycle is reported as a
+    BLOCKING problem: the caller must not install a partially resolved set.
+    """
+    seen = _seen if _seen is not None else set()
+    path = Path(path).resolve()
+    if path in seen:
+        return {"requirements": [], "constraints": [],
+                "problems": [{"code": "requirements_include_cycle",
+                              "scope": "blocking", "detail": str(path)}]}
+    seen.add(path)
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines, options = parse_requirements_lines(text)
+
+    requirements: list[str] = []
+    constraints: list[str] = []
+    problems: list[dict[str, str]] = []
+    for option in options:
+        lowered = option.lower()
+        is_include = lowered.startswith(("-r", "--requirement"))
+        is_constraint = lowered.startswith(("-c", "--constraint"))
+        if not (is_include or is_constraint):
+            problems.append({"code": "requirements_option_not_followed",
+                             "scope": "advisory",
+                             "detail": f"{path.name}:{option}"})
+            continue
+        target = _option_target(option)
+        if not target:
+            problems.append({"code": "requirements_include_unparsed",
+                             "scope": "blocking", "detail": f"{path.name}:{option}"})
+            continue
+        candidate = (path.parent / target).resolve()
+        try:
+            candidate.relative_to(Path(root).resolve())
+        except ValueError:
+            problems.append({"code": "requirements_include_escapes_project",
+                             "scope": "blocking",
+                             "detail": f"{path.name}:{target}"})
+            continue
+        if not candidate.is_file():
+            problems.append({"code": "requirements_include_missing",
+                             "scope": "blocking",
+                             "detail": f"{path.name}:{target}"})
+            continue
+        if is_constraint:
+            # pip reads a constraints file itself; it BOUNDS resolution and is
+            # never installed.  The PATH is passed through so the builder can
+            # hand pip the same `-c` the project declares.
+            constraints.append(str(candidate))
+            continue
+        nested = expand_requirements_file(candidate, root=root, _seen=seen)
+        problems.extend(nested["problems"])
+        requirements.extend(nested["requirements"])
+        constraints.extend(nested["constraints"])
+
+    requirements.extend(lines)
+    return {"requirements": requirements, "constraints": constraints,
+            "problems": problems}
 
 
 def runtime_dependencies_from_pyproject(data: Mapping[str, Any]) -> list[str]:
@@ -1301,6 +1576,7 @@ def declared_test_requirements(
     sources: list[dict[str, Any]] = []
     seen: set[str] = set()
     counts: dict[tuple[str, str], int] = {}
+    constraint_files: list[str] = []
 
     def _push(raw: Any, kind: str, name: str) -> None:
         text = str(raw).strip()
@@ -1344,26 +1620,33 @@ def declared_test_requirements(
             origin = {"file": str(pyproject), "sha256": _sha256_file(pyproject)}
             for source in sources:
                 source.update(origin)
-        for path in sorted(root.glob("requirements*.txt")):
+        # Discovery follows the documented pip layout: files live either at the
+        # project root (``test-requirements.txt``) or in a ``requirements/``
+        # directory (``requirements/requirements-testing.txt``).  Globbing only
+        # ``root/"requirements*.txt"`` missed BOTH shapes.
+        candidate_dirs = [root]
+        req_dir = root / "requirements"
+        if req_dir.is_dir():
+            candidate_dirs.append(req_dir)
+        discovered: list[Path] = []
+        for directory in candidate_dirs:
+            discovered.extend(sorted(directory.glob("*requirements*.txt")))
+        for path in sorted({p.resolve() for p in discovered if p.is_file()}):
             key = _norm_source_name(path.stem)
-            # ``requirements-test`` -> ``requirements-test``; only files whose
-            # own name denotes the test environment are in scope.
+            # Only files whose own name denotes the test environment are in
+            # scope: ``test-requirements``, ``requirements-testing``,
+            # ``requirements-dev`` -- never an arbitrary requirements file.
             if key not in TEST_DEPENDENCY_SOURCE_NAMES and not any(
                 key.startswith(t + "-") or key.endswith("-" + t)
                 for t in TEST_DEPENDENCY_SOURCE_NAMES
             ):
                 continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-            lines, options = parse_requirements_lines(text)
-            for opt in options:
-                problems.append({
-                    "code": "requirements_option_not_followed",
-                    "scope": "advisory",
-                    "detail": f"{path.name}:{opt}",
-                })
+            expanded = expand_requirements_file(path, root=root)
+            problems.extend(expanded["problems"])
             before = len(requirements)
-            for line in lines:
+            for line in expanded["requirements"]:
                 _push(line, "requirements_file", path.name)
+            constraint_files.extend(expanded["constraints"])
             sources.append({
                 "kind": "requirements_file", "name": path.name,
                 "requirements": max(0, len(requirements) - before),
@@ -1372,6 +1655,7 @@ def declared_test_requirements(
 
     return {
         "requirements": requirements,
+        "constraints": constraint_files,
         "sources": sources,
         "problems": problems,
         "groups": list(wanted_groups),

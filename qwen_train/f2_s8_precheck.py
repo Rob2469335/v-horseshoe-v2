@@ -49,7 +49,13 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from qwen_train.f2_evaluator import changed_module_paths, classify_collection_cause
+from qwen_train.f2_evaluator import (
+    analyze_test_invocation,
+    changed_module_paths,
+    classify_collection_cause,
+)
+from qwen_train.f2_population_build import source_to_screen_row
+from qwen_train.f2_s8_acquisition import AcquisitionError, resolve_project_subdir
 
 __all__ = [
     "PRECHECK_SCHEMA",
@@ -121,6 +127,19 @@ REASON_UNEXPLAINED_SKIP = "UNEXPLAINED_SKIP"
 #: A PASS whose backing record is incomplete (no recorded command or
 #: interpreter) is downgraded rather than trusted.
 REASON_INVALID_EVIDENCE = "INVALID_EVIDENCE"
+#: pytest's exit codes are PUBLIC API (``pytest.ExitCode``).  A run that pytest
+#: itself refused to start is a CONFIG or HARNESS state, not a repository
+#: collection outcome, so each code is named rather than folded into
+#: "unknown collection error":
+#:   2 = interrupted by the user / a crash during collection
+#:   3 = internal error inside pytest
+#:   4 = command-line usage error (bad addopts/ini option) -> the declared
+#:       command cannot run at all
+#:   6 = maximum warnings exceeded (``--max-warnings`` abort)
+REASON_COLLECT_INTERRUPTED = "COLLECT_INTERRUPTED"
+REASON_COLLECT_INTERNAL = "COLLECT_INTERNAL_ERROR"
+REASON_TEST_CONFIG_USAGE = "TEST_CONFIG_USAGE_ERROR"
+REASON_WARNINGS_LIMIT = "WARNINGS_LIMIT_EXCEEDED"
 REASON_GOLD_PROJECT_COLLECTION = "GOLD_PROJECT_COLLECTION_ERROR"
 REASON_TARGET_NOT_COLLECTED = "TARGET_NOT_COLLECTED"
 REASON_NO_TESTS = "NO_TESTS_COLLECTED"
@@ -278,13 +297,26 @@ def select_candidates(
     return selected, excluded
 
 
-def _venv_python(workspace: Path, side: str) -> Path | None:
-    candidates = (
-        workspace / (".venv" if side == "base" else ".venv_gold") / "Scripts" / "python.exe",
-        workspace / (".venv" if side == "base" else ".venv_gold") / "bin" / "python",
+def _venv_python(workspace: Path, side: str, project_dir: Path | None = None) -> Path | None:
+    """The side's interpreter, including a monorepo subproject's own ``.venv``.
+
+    ``project_dir`` is the RESOLVED project root (``repo`` or ``repo/<sub>``).
+    A uv-owned monorepo syncs inside that directory, so its environment is at
+    ``<project_dir>/.venv`` and is found by no other candidate.
+    """
+    leaf = ".venv" if side == "base" else ".venv_gold"
+    candidates: list[Path] = []
+    if project_dir is not None:
+        candidates += [
+            Path(project_dir) / ".venv" / "Scripts" / "python.exe",
+            Path(project_dir) / ".venv" / "bin" / "python",
+        ]
+    candidates += [
+        workspace / leaf / "Scripts" / "python.exe",
+        workspace / leaf / "bin" / "python",
         workspace / ("repo" if side == "base" else "repo_gold") / ".venv" / "Scripts" / "python.exe",
         workspace / ("repo" if side == "base" else "repo_gold") / ".venv" / "bin" / "python",
-    )
+    ]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
@@ -402,6 +434,28 @@ def _classify_side(
     }
     if returncode == 0 and not errors and not missing:
         return {**base, "status": SIDE_PASS, "reason_codes": []}
+    # pytest refused to run a valid collection.  Exit 4 (command-line usage
+    # error), 3 (internal error) and 6 (warnings limit) are pytest's OWN states,
+    # so they are named before the error-text analysis -- the error text of a
+    # usage error describes pytest's complaint, not a repository defect.
+    #
+    # Exit 2 is deliberately NOT mapped unconditionally: pytest also uses 2 for
+    # "Interrupted: N errors during collection", which IS a repository
+    # collection outcome.  Only a 2 with no collection errors is a real
+    # interrupt.  Mis-reading this turned ordinary collection failures into
+    # inconclusive results, which is the opposite of fail-closed.
+    if returncode in (3, 4, 6) or (returncode == 2 and not errors):
+        codes = {
+            2: REASON_COLLECT_INTERRUPTED,
+            3: REASON_COLLECT_INTERNAL,
+            4: REASON_TEST_CONFIG_USAGE,
+            6: REASON_WARNINGS_LIMIT,
+        }
+        return {
+            **base,
+            "status": SIDE_FAIL if returncode == 4 else SIDE_INCONCLUSIVE,
+            "reason_codes": [codes[returncode]],
+        }
     if errors:
         cause = classify_collection_cause(errors, changed_modules=changed_modules)
         base["collection_error_cause"] = cause
@@ -604,6 +658,10 @@ def run_precheck(
     for task in selected:
         entry = build_manifest.get(task) or {}
         workspace = Path(str(entry.get("workspace") or ""))
+        # The build records the resolved install/test root. Pre-check MUST use
+        # the same one, or a task can collect against repo/ and then be executed
+        # against repo/<sub>/ by the live runner.
+        project_subdir = entry.get("project_subdir") or ""
         record_path = _find_input_record(Path(inputs_dir), task)
         task_result: dict[str, Any] = {
             "task_id": task,
@@ -634,11 +692,38 @@ def run_precheck(
         p2p = list(record.get("PASS_TO_PASS") or record.get("pass_to_pass") or [])
         targets = [str(t) for t in f2p + p2p]
         changed = changed_module_paths(record.get("patch") or "")
-        test_cmd = record.get("test_cmd") or (record.get("test_cmds") or [""])[0]
+        # One interpretation, shared with the builder and the live runner: the
+        # CANONICAL command from the same source adapter they use. Taking
+        # ``test_cmds[0]`` here (as this code previously did) meant a task could
+        # collect under one command and be executed under another.
+        source_key = str(record.get("source") or "swe-bench-live")
+        try:
+            canonical_cmd = str(source_to_screen_row(source_key, record)["test_cmd"])
+        except Exception:  # noqa: BLE001 - unresolvable identity is fail-closed
+            canonical_cmd = str(record.get("test_cmd") or "")
+        # Analysis uses the SOURCE LIST when the record carries one: the list
+        # preserves the boundary between distinct declared commands, which the
+        # " && "-joined canonical string cannot. Without this, a task whose
+        # declared list is ["cat tasks.py", "python -m pytest ..."] looked like
+        # one command with two executable clauses and was refused.
+        raw_cmds = record.get("test_cmds")
+        analysis_input = (
+            [str(c) for c in raw_cmds]
+            if isinstance(raw_cmds, list) and raw_cmds
+            else canonical_cmd
+        )
+        try:
+            invocation = analyze_test_invocation(analysis_input)
+        except Exception as exc:  # noqa: BLE001
+            raise PrecheckError(f"declared test command cannot be resolved: {exc}") from exc
         task_result["targets_total"] = len(targets)
         task_result["input_record"] = str(record_path)
         try:
-            pytest_args = _pytest_args(str(test_cmd))
+            if not invocation.ok:
+                raise PrecheckError(
+                    "declared test command cannot be interpreted safely: "
+                    + "; ".join(invocation.problems))
+            pytest_args = _pytest_args(" ".join(invocation.argv))
         except PrecheckError as exc:
             task_result.update({
                 "status": SIDE_FAIL,
@@ -651,7 +736,27 @@ def run_precheck(
 
         side_statuses: list[str] = []
         for side in ("base", "gold"):
-            python = _venv_python(workspace, side)
+            # The project root is resolved BEFORE the interpreter is looked up.
+            # A uv-owned monorepo runs `uv sync` inside `repo/<sub>`, so its
+            # `.venv` lives THERE -- probing only `repo/.venv` reported a
+            # perfectly good environment as VENV_MISSING.
+            try:
+                # Same validated root the builder installed and the live runner
+                # will execute in. An invalid/absent subdirectory is a manifest
+                # binding defect, never a silent fallback to the repo root.
+                cwd = resolve_project_subdir(
+                    project_subdir,
+                    workspace / ("repo" if side == "base" else "repo_gold"),
+                )
+            except AcquisitionError as exc:
+                task_result["sides"][side] = {
+                    "side": side, "status": SIDE_INCONCLUSIVE,
+                    "reason_codes": [REASON_INVALID_EVIDENCE],
+                    "detail": str(exc),
+                }
+                side_statuses.append(SIDE_INCONCLUSIVE)
+                continue
+            python = _venv_python(workspace, side, cwd)
             if python is None:
                 task_result["sides"][side] = {
                     "side": side, "status": SIDE_INCONCLUSIVE,
@@ -659,10 +764,38 @@ def run_precheck(
                 }
                 side_statuses.append(SIDE_INCONCLUSIVE)
                 continue
-            cwd = workspace / ("repo" if side == "base" else "repo_gold")
+            # A declared `cd <rel>` must agree with the build's resolved root.
+            # Disagreement means build and collection would use different trees,
+            # which is exactly the divergence this contract forbids.
+            if invocation.workdir_rel:
+                try:
+                    declared_cwd = resolve_project_subdir(
+                        invocation.workdir_rel,
+                        workspace / ("repo" if side == "base" else "repo_gold"),
+                    )
+                except AcquisitionError as exc:
+                    task_result["sides"][side] = {
+                        "side": side, "status": SIDE_INCONCLUSIVE,
+                        "reason_codes": [REASON_TEST_CMD_UNSUPPORTED],
+                        "detail": str(exc),
+                    }
+                    side_statuses.append(SIDE_INCONCLUSIVE)
+                    continue
+                if declared_cwd != cwd:
+                    task_result["sides"][side] = {
+                        "side": side, "status": SIDE_INCONCLUSIVE,
+                        "reason_codes": [REASON_TEST_CMD_UNSUPPORTED],
+                        "detail": (f"declared 'cd {invocation.workdir_rel}' disagrees "
+                                   f"with the manifest project_subdir {project_subdir!r}"),
+                    }
+                    side_statuses.append(SIDE_INCONCLUSIVE)
+                    continue
             env = dict(os.environ)
             env["PATH"] = str(python.parent) + os.pathsep + env.get("PATH", "")
             env["PYTHONDONTWRITEBYTECODE"] = "1"
+            # Declared KEY=VALUE assignments go through the ENVIRONMENT, never
+            # deleted from the command.
+            env.update(dict(invocation.env))
             cmd = [
                 str(python), "-m", "pytest", *pytest_args,
                 "--collect-only", "-q", "-p", "no:cacheprovider", "--no-header",

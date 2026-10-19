@@ -79,6 +79,14 @@ VALID_EXECUTION_STATES = (STATE_BASE, STATE_GOLD)
 RESULT_PASS = "pass"
 RESULT_FAIL = "fail"
 RESULT_ERROR = "error"
+
+#: Marker prefixed to the persisted ``reason`` of an ERROR record (owner
+#: decision, 2026-10-18).  The OUTCOME stays the established
+#: ``infrastructure_failure``; this marker is what makes the ERROR explicitly
+#: classifiable in the hash-chained ledger without adding a second synonymous
+#: outcome to the factory's closed vocabulary.  Defined here so every writer of
+#: an ERROR record uses the identical string.
+ENVIRONMENT_ERROR_PREFIX = "ENVIRONMENT_ERROR"
 VALID_RESULTS = (RESULT_PASS, RESULT_FAIL, RESULT_ERROR)
 
 #: Optional failure classification, so an execution failure, an environment /

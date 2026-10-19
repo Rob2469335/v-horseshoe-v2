@@ -38,7 +38,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from qwen_train import f2_evaluator as evaluator
 from qwen_train import f2_evidence as evidence
@@ -253,6 +253,7 @@ def guest_evidence_from_junit(
     started_at: str = "",
     finished_at: str = "",
     work_dir: Path | str | None = None,
+    changed_modules: Sequence[str] | None = None,
 ) -> GuestEvidence:
     """Run the authoritative evaluator over retained guest JUnit bytes.
 
@@ -287,7 +288,17 @@ def guest_evidence_from_junit(
                 # carries, so no new authority source is introduced. Absent or
                 # unparseable patch metadata yields no modules -> "unknown" ->
                 # inconclusive (fail closed), never a guessed classification.
-                changed_modules=evaluator.changed_module_paths(spec.payload.get("patch")),
+                #
+                # The gold patch is deliberately NOT placed in ``spec.payload``:
+                # that payload is serialised into the guest's ``spec.json``, and
+                # the guest must never receive the answer. The HOST therefore
+                # computes the modules from the task record and passes them in.
+                # Falling back to the payload keeps older callers working.
+                changed_modules=(
+                    tuple(changed_modules)
+                    if changed_modules is not None
+                    else evaluator.changed_module_paths(spec.payload.get("patch"))
+                ),
             )
         except evaluator.EvaluatorError as exc:
             raise S8ComposeError(
@@ -599,6 +610,8 @@ def _result_from_bundles(
             task_id=spec.task_id, outcome="infrastructure_failure", attempt=int(attempt),
             attempt_id=f"{spec.task_id}#{attempt}",
             reason=(
+                f"{evidence.ENVIRONMENT_ERROR_PREFIX} "
+                f"(collection_error_cause=unknown): "
                 "inconclusive evaluation on the " + "/".join(inconclusive)
                 + " side: pytest could not collect the declared tests, so no task "
                 "outcome is established"

@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from qwen_train.f2_evaluator import EvaluatorError, augment_test_command
+from qwen_train.f2_evaluator import EvaluatorError, analyze_test_invocation, augment_test_command
 from qwen_train.f2_s8_channel import read_channel_file
 from qwen_train.f2_s8_record import encode_record
 from qwen_train.f2_s8_runner import publish_atomic
@@ -137,10 +138,26 @@ def _default_run_command(
     indistinguishable from a hang and wastes the whole task budget.
     """
     try:
-        proc = subprocess.run(
-            command, shell=True, cwd=cwd, capture_output=True,
-            timeout=timeout_seconds, stdin=subprocess.DEVNULL,
-        )
+        # ONE shared interpretation of the declared command: the spec carries the
+        # canonical (identity-bound) string, and the safe invocation is derived
+        # here -- argv with no shell, declared KEY=VALUE assignments in the
+        # ENVIRONMENT, `cd` folded into cwd (passed by the caller). A command the
+        # analyser cannot represent falls back to the historical shell path
+        # rather than silently changing its meaning.
+        invocation = analyze_test_invocation(command)
+        if invocation.ok:
+            env = dict(os.environ)
+            env.update(dict(invocation.env))
+            proc = subprocess.run(
+                list(invocation.argv), shell=False, cwd=cwd, env=env,
+                capture_output=True, timeout=timeout_seconds,
+                stdin=subprocess.DEVNULL,
+            )
+        else:
+            proc = subprocess.run(
+                command, shell=True, cwd=cwd, capture_output=True,
+                timeout=timeout_seconds, stdin=subprocess.DEVNULL,
+            )
         return CommandResult(
             exit_status=int(proc.returncode), stdout=proc.stdout, stderr=proc.stderr
         )

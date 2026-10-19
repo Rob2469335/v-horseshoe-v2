@@ -302,6 +302,7 @@ def run_pilot_task(
     path_prefix: str | Mapping[str, str] = "",
     env_extra: Mapping[str, str] | None = None,
     repository_revision: str = "",
+    changed_modules: Sequence[str] | None = None,
 ) -> PilotTaskResult:
     """Drive ONE task's base/gold pair through the real guest and verifiers.
 
@@ -461,6 +462,10 @@ def run_pilot_task(
                     started_at=side_started, finished_at=side_finished,
                 ),
                 started_at=side_started, finished_at=side_finished,
+                # Host-computed from the task record's gold patch. It is passed
+                # here, NOT read from ``spec.payload``, because that payload is
+                # what the guest receives; the guest must never hold the answer.
+                changed_modules=changed_modules,
             )
             # Read the DECLARED facts from the authentic evaluator report, not from
             # a second evaluator pass: these are exactly what the batch report will

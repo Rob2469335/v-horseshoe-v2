@@ -48,6 +48,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -382,9 +383,20 @@ class EvaluationOutcome:
 
     @property
     def all_pass_to_pass_passed(self) -> bool:
+        # An ERROR run establishes nothing, so it cannot satisfy the
+        # pass-to-pass maintenance check either.  Without this guard a run whose
+        # evidence was unusable could still look "maintained" and be admitted on
+        # a technicality.
+        if self.declared_result == RESULT_ERROR:
+            return False
         return bool(self.pass_to_pass) and all(
             s == STATUS_PASSED for s in self.pass_to_pass.values()
         )
+
+    @property
+    def is_error(self) -> bool:
+        """True when the evidence establishes NO scientific result (environment)."""
+        return self.declared_result == RESULT_ERROR
 
 
 def _normalise_declaration(values: Iterable[Any] | None, label: str) -> list[str]:
@@ -492,6 +504,167 @@ def evaluate_execution(
 
 #: Marker appended to an augmented pytest command line.
 JUNIT_FLAG = "--junitxml"
+
+
+@dataclass(frozen=True)
+class EffectiveInvocation:
+    """One task's DECLARED test command, resolved for safe execution.
+
+    ``test_cmds`` from the source dataset is a LIST; ``_as_test_cmd`` joins it
+    with ``" && "`` to form the canonical, identity-bound command.  Those two
+    facts mean a bare ``" && "`` string is AMBIGUOUS: it can be a boundary
+    between two distinct source commands (each tried in turn by the dataset
+    collector) or real shell sequencing inside one command.
+
+    This type keeps the distinction explicit instead of guessing:
+
+    * ``kind`` is ``"single_pytest"`` (a plain pytest command, optionally with
+      setup), ``"multiple_distinct"`` (the source declared several pytest
+      commands -- refused, because picking one silently discards the others), or
+      ``"unsupported"``.
+    * ``workdir_rel`` comes from an explicit ``cd <rel>`` setup clause only.
+    * ``env`` carries leading ``KEY=VALUE`` assignments, which are passed through
+      the ENVIRONMENT rather than deleted from the command.
+    * ``problems`` non-empty means the caller MUST fail closed.
+    """
+
+    argv: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+    workdir_rel: str
+    uses_uv: bool
+    kind: str
+    problems: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+_FORBIDDEN_SHELL = ("||", ";", "|", ">", "<", "`", "$(")
+_UV_CLOUD = ("uv", "run")
+
+
+def _is_pytest_argv(argv: Sequence[str]) -> bool:
+    """True when these tokens invoke pytest (or a runner that will).
+
+    Leading ``KEY=VALUE`` assignments are ENVIRONMENT, not the program: without
+    stripping them, ``PYTHONPATH=. pytest -rA`` was not recognised as a pytest
+    command at all, so a list entry that runs the suite under declared variables
+    could be silently omitted from the invocable set.
+    """
+    if not argv:
+        return False
+    head = list(argv)
+    while head and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head[0]):
+        head.pop(0)
+    if not head:
+        return False
+    if head[:2] == ["uv", "run"]:
+        head = head[2:]
+    elif head[:2] in (["poetry", "run"], ["pdm", "run"]):
+        head = head[2:]
+    if head[:3] == ["python", "-m", "pytest"] or head[:2] == ["py", "-m"]:
+        return True
+    token = head[0].replace("\\", "/") if head else ""
+    return token.endswith("pytest") or token == "py.test"
+
+
+def analyze_test_invocation(
+    test_cmds: Sequence[str] | str,
+) -> EffectiveInvocation:
+    """Resolve the declared test command into ONE safe, shared interpretation.
+
+    Used by the builder (uv detection), the pre-check (argv/env/cwd) and the live
+    runner (spec command), so a task cannot pass collection under one reading and
+    be executed under another.
+
+    Deliberately conservative: anything it cannot represent exactly is reported
+    as a problem rather than approximated.
+
+    ``str`` vs ``Sequence[str]`` is NOT interchangeable and is not treated as
+    such: a joined ``" && "`` string has lost the boundary between "two distinct
+    source commands" and "real shell sequencing inside one command", so it is
+    read as ONE source command (and a chain with more than one executable clause
+    is refused). A list preserves that boundary, so several distinct pytest
+    commands are reported as ``multiple_distinct``. Both refuse; only the
+    diagnostic differs.
+    """
+    source = [test_cmds] if isinstance(test_cmds, str) else list(test_cmds or ())
+    source = [str(c).strip() for c in source if str(c).strip()]
+    if not source:
+        return EffectiveInvocation((), (), "", False, "unsupported",
+                                   ("declared test command is empty",))
+
+    invocable = [c for c in source if _is_pytest_argv(shlex.split(c, posix=False))]
+    if len(invocable) > 1:
+        # Several distinct pytest commands were declared. Choosing one silently
+        # discards the others, and we cannot prove which is authoritative.
+        return EffectiveInvocation((), (), "", False, "multiple_distinct",
+                                   (f"{len(invocable)} distinct pytest commands declared; "
+                                    "the authoritative one cannot be established",))
+    command = invocable[0] if invocable else source[-1]
+
+    clauses = [c.strip() for c in command.split(" && ") if c.strip()]
+    workdir_rel = ""
+    env: dict[str, str] = {}
+    remaining: list[str] = []
+    for clause in clauses:
+        lowered = clause.lower()
+        if lowered.startswith("cd "):
+            target = clause[3:].strip().strip("'\"")
+            if workdir_rel:
+                return EffectiveInvocation((), (), "", False, "unsupported",
+                                           ("more than one 'cd' clause",))
+            if Path(target).is_absolute() or ".." in Path(target).parts:
+                return EffectiveInvocation((), (), "", False, "unsupported",
+                                           (f"unsafe 'cd' target {target!r}",))
+            workdir_rel = target
+            continue
+        if lowered.startswith("export "):
+            for token in clause[7:].split():
+                if "=" in token:
+                    key, value = token.split("=", 1)
+                    env[key] = value
+                else:
+                    return EffectiveInvocation((), (), "", False, "unsupported",
+                                               (f"unparsable export {clause!r}",))
+            continue
+        if lowered.startswith(("source ", ". ")):
+            # Activating a virtualenv is a no-op here: the caller already binds
+            # the exact interpreter for the side, and honouring the activation
+            # would let a POSIX path override it.
+            continue
+        remaining.append(clause)
+
+    if len(remaining) != 1:
+        return EffectiveInvocation((), (), "", False, "unsupported",
+                                   (f"expected exactly one command clause, found "
+                                    f"{len(remaining)}: {remaining!r}",))
+
+    argv = shlex.split(remaining[0], posix=False)
+    # Leading KEY=VALUE assignments belong in the environment, not the argv.
+    while argv and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0]):
+        key, value = argv.pop(0).split("=", 1)
+        env[key] = value
+    if not argv:
+        return EffectiveInvocation((), (), workdir_rel, False, "unsupported",
+                                   ("no command after environment assignments",))
+
+    for token in argv:
+        if any(bad in token for bad in _FORBIDDEN_SHELL):
+            return EffectiveInvocation((), (), "", False, "unsupported",
+                                       (f"unsupported shell construct {token!r}",))
+
+    if not _is_pytest_argv(argv):
+        return EffectiveInvocation(tuple(argv), tuple(sorted(env.items())),
+                                   workdir_rel, False, "unsupported",
+                                   ("the resolved command does not invoke pytest",))
+
+    uses_uv = tuple(argv[:2]) == _UV_CLOUD or argv[0] == "uv"
+    return EffectiveInvocation(
+        tuple(argv), tuple(sorted(env.items())), workdir_rel, uses_uv,
+        "single_pytest", (),
+    )
 
 
 def augment_test_command(test_cmd: str, junit_path: str) -> str:
@@ -678,7 +851,7 @@ def parse_report(data: bytes) -> dict[str, Any]:
             f"not {EVALUATOR_ID!r}"
         )
     result = payload.get("declared_result")
-    if result not in ("pass", "fail"):
+    if result not in ("pass", "fail", RESULT_ERROR):
         raise EvaluatorError(f"evaluator report declares an invalid result {result!r}")
 
     # Self-integrity: any edit to any field (including declared_result) breaks

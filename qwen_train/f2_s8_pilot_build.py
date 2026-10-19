@@ -30,12 +30,16 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from qwen_train.f2_population_build import source_to_screen_row
+from qwen_train.f2_evaluator import analyze_test_invocation
 from qwen_train.f2_s8_acquisition import (
     DECLARED_ADJUSTMENTS,
     builder_install_plan,
+    declared_required_version,
     declared_test_requirements,
     project_install_context,
     repo_url_for,
+    requires_python,
+    resolve_task_project_root,
 )
 
 #: Git executable for the acquisition host. The builder is a Windows-host tool
@@ -55,11 +59,25 @@ PATCHES = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_build\patches")
 HOST_PYTHON = r"C:\Users\rober\Projects\v-horseshoe-v2\.venv\Scripts\python.exe"
 ROOT = Path(r"C:\f2_pilot")
 
-#: Interpreters available on the acquisition host, newest first. A task's
-#: environment must satisfy the project's own ``requires-python``; picking one
-#: interpreter for every task silently breaks any project whose upper bound
-#: excludes it (dspy pins ``>=3.10, <3.14`` and refused 3.14).
+#: Interpreters available on the acquisition host, in PREFERENCE order.
+#:
+#: Order is a deliberate policy, not an accident of installation. Newer is not
+#: better: a task is built on the first interpreter that satisfies its declared
+#: ``requires-python``, and wheel coverage collapses at the newest releases. The
+#: measured case is ``sissbruecker__linkding-1175`` (``>=3.13``), where uv picked
+#: the newly-installed CPython 3.15 and ``psycopg-binary`` had no wheel for it.
+#:
+#: 3.12 and 3.13 lead because they have the widest prebuilt-wheel coverage for
+#: 2024-2025 dependencies; 3.11 then 3.14 follow; 3.10 is the last resort for
+#: projects that still exclude 3.14. Entries that are not installed are skipped
+#: by ``pick_interpreter``, so listing a future version is harmless.
+#:
+#: CPython 3.15 is deliberately ABSENT: it is present on this host and is the
+#: py-launcher default, so leaving it out is what stops it being selected.
 INTERPRETERS = (
+    r"C:\Users\rober\AppData\Local\Programs\Python\Python312\python.exe",  # 3.12
+    r"C:\Users\rober\AppData\Local\Programs\Python\Python313\python.exe",  # 3.13
+    r"C:\Users\rober\AppData\Local\Programs\Python\Python311\python.exe",  # 3.11
     r"C:\Python314\python.exe",                      # 3.14.8
     r"C:\Users\rober\AppData\Local\Programs\Python\Python310\python.exe",  # 3.10.11
     HOST_PYTHON,                                     # 3.14.8, repo venv
@@ -94,7 +112,13 @@ def uses_uv_environment(test_cmd: str) -> bool:
     command rather than a hand-maintained list, so a task added later is handled
     by the same rule as the pilot's two uv tasks (their declared commands are
     ``uv run pytest -rA``).
+
+    The shared analyser is used so the builder, the pre-check and the live runner
+    can never disagree about whether a command is uv-driven.
     """
+    invocation = analyze_test_invocation(str(test_cmd or ""))
+    if invocation.ok:
+        return invocation.uses_uv
     return test_cmd.strip().startswith("uv ")
 
 
@@ -252,27 +276,15 @@ def _version_of(python: str) -> tuple[int, int]:
     return int(major), int(minor)
 
 
-def _requires_python(project: Path) -> tuple[int, int] | None:
-    """Read ``requires-python`` from the project metadata, if it declares one."""
-    import re
+def _requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Declared bounds, delegated to the ONE parser in ``f2_s8_acquisition``.
 
-    for name in ("pyproject.toml", "setup.cfg"):
-        f = project / name
-        if not f.is_file():
-            continue
-        text = f.read_text(encoding="utf-8", errors="replace")
-        m = re.search(r'requires-python\s*=\s*"([^"]+)"', text)
-        if not m:
-            m = re.search(r"python_requires\s*=\s*['\"]([^'\"]+)['\"]", text)
-        if not m:
-            continue
-        spec = m.group(1)
-        upper = re.search(r"<\s*(\d+)\.(\d+)", spec)
-        lower = re.search(r">=\s*(\d+)\.(\d+)", spec)
-        lo = (int(lower.group(1)), int(lower.group(2))) if lower else (3, 0)
-        hi = (int(upper.group(1)), int(upper.group(2))) if upper else (99, 0)
-        return lo, hi  # type: ignore[return-value]
-    return None
+    This used to be a second, weaker regex that matched only double-quoted
+    assignments. ``requires-python = '>=3.8,<3.14'`` (single quotes) therefore
+    looked unconstrained, the newest interpreter was chosen, and pip rejected the
+    package mid-install -- which is exactly how the SDV tasks failed.
+    """
+    return requires_python(Path(project))
 
 
 def pick_interpreter(project: Path) -> str:
@@ -333,10 +345,20 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     run([GIT, "checkout", "--quiet", base_commit], cwd=repo)
     run([GIT, "apply", str(Path(patches) / f"{task_id}.test_patch")], cwd=repo)
 
-    # Python layout differs per repository.
-    sub = ""
-    if task_id.startswith("HypothesisWorks"):
-        sub = "hypothesis-python"
+    # Python layout differs per repository. A monorepo's installable project is
+    # often NOT the repo root (awslabs/mcp keeps 58 subprojects under src/,
+    # cirq keeps the real package in cirq-core), so the root is RESOLVED from
+    # declared metadata rather than assumed. `discover_project_root` existed but
+    # was never called here, and the only special case was hardcoded.
+    project_root = resolve_task_project_root(
+        repo,
+        test_cmd=declared_test_cmd(rec),
+        patch_text=str(rec.get("patch") or ""),
+        fail_to_pass=rec.get("FAIL_TO_PASS") or (),
+        override="hypothesis-python" if task_id.startswith("HypothesisWorks") else "",
+    ).resolve()
+    sub = project_root.relative_to(repo.resolve()).as_posix()
+    sub = "" if sub == "." else sub
     project = repo / sub if sub else repo
     gold_project = gold_repo / sub if sub else gold_repo
 
@@ -446,8 +468,14 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
             # specification requires (a ``test`` group only works when the
             # toolchain also installs ``.``).
             if plan["test_requirements"]:
+                # Constraints the project declares (-c) are handed to pip so its
+                # own bounds apply; they are never installed as requirements.
+                constraint_args: list[str] = []
+                for constraint_file in declared.get("constraints") or ():
+                    constraint_args.extend(["-c", str(constraint_file)])
                 run([str(vpy), "-m", "pip", "install", "--quiet",
-                     "--disable-pip-version-check", *plan["test_requirements"]],
+                     "--disable-pip-version-check", *constraint_args,
+                     *plan["test_requirements"]],
                     timeout=3600)
             run([str(vpy), "-m", "pip", "install", "--quiet",
                  "--disable-pip-version-check", "-e", str(proj)], timeout=3600)
@@ -476,8 +504,25 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # never reach for the network. uv's wheel cache is NOT required for that:
     # a complete venv plus an intact lockfile resolves with an empty cache.
     if uses_uv:
-        for tree in (repo, gold_repo):
-            run(["uv", "sync", "--frozen", "--all-extras"], cwd=tree, timeout=3600)
+        # uv's `required-version` is a HARD gate. Checking it explicitly turns an
+        # opaque "Failed to parse uv.lock / missing field version" into a named
+        # toolchain incompatibility, which is a different class of failure from a
+        # task defect and must not be recorded as one.
+        required = declared_required_version(project)
+        if required:
+            installed = _uv_version()
+            if installed and not _satisfies_version(installed, required):
+                raise RuntimeError(
+                    f"uv required-version: the project requires {required!r} but "
+                    f"the installed uv is {installed!r}; UV_TOOLCHAIN_INCOMPATIBLE")
+        # Sync in the RESOLVED project root, not blindly at the repo root: a
+        # monorepo's lockfile belongs to the subproject.
+        for tree in (project, gold_project):
+            # Pin uv to the SAME interpreter this builder selected. Without
+            # --python, uv discovers its own (newest) interpreter and chose
+            # CPython 3.15 for a >=3.13 task, where psycopg-binary has no wheel.
+            run(["uv", "sync", "--frozen", "--all-extras",
+                 "--python", base_python], cwd=tree, timeout=3600)
 
     return {
         "task_id": task_id, "base_commit": base_commit, "workspace": str(ws),
@@ -486,6 +531,9 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
         "venv": str(ws / ".venv"), "gold_venv": str(ws / ".venv_gold"),
         "python": envs["base"], "gold_python": envs["gold"],
         "project": str(project), "gold_project": str(gold_project),
+        # The resolved install/test root relative to the repo. Recorded so the
+        # pre-check and the guest run in the SAME tree the build installed.
+        "project_subdir": sub,
         "base_interpreter": base_python if not uses_uv else "",
         "extra_deps": extra,
         # Provenance: exactly which packages this build installed on each side,
@@ -494,6 +542,29 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
         "requires_python": list(_requires_python(project)) if _requires_python(project) else None,
         "elapsed_s": int(time.time() - t0),
     }
+
+
+def _uv_version() -> str:
+    """The installed uv's version string, or ``""`` when uv cannot be run."""
+    try:
+        out = run(["uv", "--version"], timeout=120).stdout
+    except Exception:  # noqa: BLE001 - absence is handled by the caller
+        return ""
+    match = re.search(r"uv\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?)", out)
+    return match.group(1) if match else ""
+
+
+def _satisfies_version(installed: str, spec: str) -> bool:
+    """True when ``installed`` satisfies uv's ``required-version`` specifier."""
+    try:
+        from packaging.specifiers import InvalidSpecifier, SpecifierSet
+        from packaging.version import InvalidVersion, Version
+
+        return Version(installed) in SpecifierSet(str(spec))
+    except (InvalidSpecifier, InvalidVersion, ValueError):
+        # An unparseable spec is NOT permission to proceed: fail closed by
+        # reporting incompatibility, which the caller turns into a named reason.
+        return False
 
 
 def classify_build_failure(exc: BaseException) -> str:
@@ -517,6 +588,13 @@ def classify_build_failure(exc: BaseException) -> str:
     msg = str(exc)
     if "declared test dependencies cannot be resolved:" in msg:
         return "DECLARED_TEST_SOURCE_UNRESOLVABLE"
+    if "UV_TOOLCHAIN_INCOMPATIBLE" in msg or "uv required-version:" in msg:
+        return "UV_TOOLCHAIN_INCOMPATIBLE"
+    # A newer uv.lock schema that this uv cannot parse (measured: revision 2 may
+    # omit `version` on the editable root package, which uv 0.5.9's typed parser
+    # rejects).  This is a TOOLCHAIN limit, not a task defect.
+    if "Failed to parse `uv.lock`" in msg or "missing field `version`" in msg:
+        return "UV_TOOLCHAIN_INCOMPATIBLE"
     if "no interpreter satisfies requires-python" in msg:
         return "INTERPRETER_UNAVAILABLE"
     pip_resolution = (

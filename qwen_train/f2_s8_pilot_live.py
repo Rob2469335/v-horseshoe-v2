@@ -33,17 +33,20 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from qwen_train.f2_population_build import source_to_screen_row
+from qwen_train.f2_evaluator import analyze_test_invocation, changed_module_paths
 from qwen_train.f2_s8_compose import load_governance_from_env
 from qwen_train.f2_s8_evidence_index import build_index
 from qwen_train.f2_s8_factory import AppendOnlyLedger, LedgerError
 from qwen_train.f2_s8_pilot import (
     GuestChannel,
+    PilotError,
     PilotTaskResult,
     build_spec_for_task,
     pilot_totals,
     run_pilot_task,
     stage_spec_for_guest,
 )
+from qwen_train.f2_s8_acquisition import resolve_project_subdir
 from qwen_train.f2_s8_post_batch_audit import audit_batch, write_audit
 
 #: The eight authorization gates. Every one must be supplied by the caller --
@@ -180,6 +183,21 @@ def build_specs(manifest: dict[str, Any], inputs_dir: Path,
         # multi-entry list is a command the registration never bound).
         source = "swe-bench-live"
         canonical = source_to_screen_row(source, rec)
+        # The SPEC carries the canonical, identity-bound command: registration
+        # binds test_cmd_sha256 over exactly this string, so it must not be
+        # rewritten here. The safe invocation (argv / env / workdir) is DERIVED
+        # from it at the point of execution by the same shared analyser, so
+        # identity and execution stay separate. A command the analyser cannot
+        # represent is NOT a reason to drop the task here: the guest keeps its
+        # historical execution path for it, and the divergence is confined to
+        # one place instead of silently changing the identity.
+        invocation = analyze_test_invocation(str(canonical["test_cmd"]))
+        declared_subdir = str(entry.get("project_subdir") or "").strip()
+        if (invocation.ok and invocation.workdir_rel
+                and invocation.workdir_rel != declared_subdir):
+            raise PilotError(
+                f"{task_id}: declared 'cd {invocation.workdir_rel}' disagrees with "
+                f"the manifest project_subdir {declared_subdir!r}")
         specs.append(build_spec_for_task(
             task_id=task_id, source=source, repo=rec["repo"],
             base_commit=rec["base_commit"], test_cmd=canonical["test_cmd"],
@@ -189,6 +207,35 @@ def build_specs(manifest: dict[str, Any], inputs_dir: Path,
             timeout_seconds=3600,
         ))
     return specs
+
+
+def changed_modules_by_task(manifest: dict[str, Any],
+                            inputs_dir: Path) -> dict[str, tuple[str, ...]]:
+    """Host-side ``changed_modules`` for every runnable task, from its record.
+
+    Why this exists (D1): the cause discriminator must read the GOLD PATCH's own
+    changed-file list. The patch lives in the task record, which the host owns,
+    and deliberately NOT in ``TaskSpec.payload`` -- that payload is serialised
+    into the guest's ``spec.json``, and the guest must never receive the answer.
+
+    Reading it here (once, host-side) is what makes the live classification agree
+    with ``audit_batch``, which derives the same modules from the same record.
+    A task with no readable record is simply absent; the caller then falls back
+    to the composer's own (fail-closed) derivation.
+    """
+    out: dict[str, tuple[str, ...]] = {}
+    for task_id, entry in manifest.items():
+        if not isinstance(entry, dict) or entry.get("status") != "built":
+            continue
+        record = inputs_dir / f"{task_id}.json"
+        if not record.is_file():
+            continue
+        try:
+            rec = json.loads(record.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - unreadable record = no claim, fail closed
+            continue
+        out[str(task_id)] = changed_module_paths(rec.get("patch"))
+    return out
 
 
 def per_task_env(task_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -223,8 +270,15 @@ def per_task_env(task_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
         gold_prefix = f"{ws}\\.venv_gold\\Scripts;{POSIX_ROOT};{UV_ROOT}"
         env = {"PYTHONPATH": TOOLING_ROOT}
         prefixes = {"base": base_prefix, "gold": gold_prefix}
+    subdir = entry.get("project_subdir") or ""
     return {
-        "workdirs": {"base": str(Path(ws) / "repo"), "gold": str(Path(ws) / "repo_gold")},
+        # Both sides must resolve to the SAME declared subproject; each is
+        # validated against its own tree so a missing directory is caught here
+        # rather than surfacing as a mysterious collection failure.
+        "workdirs": {
+            "base": str(resolve_project_subdir(subdir, Path(ws) / "repo")),
+            "gold": str(resolve_project_subdir(subdir, Path(ws) / "repo_gold")),
+        },
         "python_exe": TOOLING_PYTHON,
         "path_prefix": prefixes,
         "env_extra": env,
@@ -377,18 +431,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(f"pilot: {len(specs)} tasks, ledger={args.ledger}", flush=True)
     results: list[PilotTaskResult] = []
+    # Host-side cause discriminator, computed once from the records. Never placed
+    # in spec.payload, so it cannot leak into the guest's spec.json.
+    changed_modules = changed_modules_by_task(manifest, Path(args.inputs))
     for spec in specs:
         t0 = time.time()
-        env = per_task_env(spec.task_id, manifest)
         stage_spec_for_guest(channel, spec, host_dir=staging, guest_dir=GUEST_DIR)
         try:
+            # Resolved INSIDE the try: an invalid/missing project_subdir is a
+            # per-task fault, not a reason to abort the rest of the batch.
+            env = per_task_env(spec.task_id, manifest)
             result = run_pilot_task(
                 spec=spec, channel=channel, inputs=inputs, ledger=ledger,
                 gates=gates, guest_dir=GUEST_DIR, host_dir=str(staging),
                 registration_sha256=args.registration_sha256,
                 repository_revision=authorized_revision,
                 job_nonce=args.nonce or spec.task_id,
-                timeout_seconds=3600, **env,
+                timeout_seconds=3600,
+                changed_modules=changed_modules.get(spec.task_id),
+                **env,
             )
         except LedgerError as exc:
             # A DESIGNED refusal (a task that already holds a terminal scientific
