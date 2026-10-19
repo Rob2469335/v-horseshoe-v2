@@ -864,6 +864,23 @@ class TestCrossPlatformIdentity:
         assert outcome.fail_to_pass[declared[0]] == "passed"
         assert outcome.fail_to_pass[declared[1]] == "passed"
 
+    def test_a_separator_only_redundant_declaration_is_not_refused(self):
+        """A dataset may list the SAME test twice in two separator renderings --
+        measured on conan-io__conan-18832. That is redundant, not contradictory,
+        so it must not make an otherwise collectable task unscoreable."""
+        from qwen_train.f2_evaluator import evaluate_execution
+        xml = (b'<testsuites><testsuite name="pytest" tests="1">'
+               b'<testcase classname="test.unittests.test_bazel" name="test_x[/my/path/]"/>'
+               b'</testsuite></testsuites>')
+        outcome = evaluate_execution(
+            xml,
+            fail_to_pass=["test/unittests/test_bazel.py::test_x[/my/path/]",
+                          r"test/unittests/test_bazel.py::test_x[\\my\\path\\]"],
+            instance_id="conan-io__conan-18832",
+        )
+        assert outcome.declared_result == "pass"
+        assert set(outcome.fail_to_pass.values()) == {"passed"}
+
     def test_collapsing_two_declared_ids_onto_one_identity_fails_closed(self):
         """A binding that MERGES distinct declared tests must refuse, not score
         one node from the other's evidence."""

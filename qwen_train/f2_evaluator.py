@@ -611,21 +611,35 @@ def _assert_identities_distinct(
     instance_id: str,
     bindings: Mapping[str, Any],
 ) -> None:
-    """Refuse a canonicalisation that MERGES two declared ids onto one identity.
+    """Refuse a canonicalisation that MERGES two genuinely different declared ids.
 
-    Distinct declared ids must stay distinct. If two collapse together, one node
+    Distinct declared ids must stay distinct: if two collapse together, one node
     would be read from the other's evidence entry and could be scored as passing
-    without ever having run -- the failure direction that matters most. Names the
-    colliding canonical forms so the offending binding can be corrected.
+    without ever having run.
+
+    ONE redundancy is legitimate and must NOT be refused. A dataset can list the
+    same test twice in two separator renderings -- measured on
+    ``conan-io__conan-18832``, whose PASS_TO_PASS carries both
+    ``test_bazeldeps_relativize_path[/my/path/--/my/path/]`` and
+    ``...[\\\\my\\\\path\\\\--\\\\my\\\\path\\\\]``. Those are one test on any
+    single platform, so the pair is redundant rather than contradictory, and
+    refusing the whole task over it would turn a collectable task into an
+    unscoreable one. That case is detected exactly: the two raw ids are equal
+    AFTER separator normalisation.
+
+    A collision that survives separator normalisation is a real merger -- caused
+    by the root or enum bindings -- and fails closed with both ids named.
     """
     seen: dict[str, str] = {}
     clashes: list[str] = []
     for nodeid in declared:
         canon = canonical_node_identity(nodeid, **bindings)
-        if canon in seen:
-            clashes.append(f"{seen[canon]!r} and {nodeid!r} -> {canon!r}")
-        else:
+        if canon not in seen:
             seen[canon] = nodeid
+            continue
+        if normalise_node_name(seen[canon]) == normalise_node_name(nodeid):
+            continue                      # same test, two separator renderings
+        clashes.append(f"{seen[canon]!r} and {nodeid!r} -> {canon!r}")
     if clashes:
         raise EvaluatorError(
             f"{label} identities collide after canonicalisation for "
