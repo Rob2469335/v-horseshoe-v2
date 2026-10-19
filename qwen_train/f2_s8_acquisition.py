@@ -137,6 +137,21 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
         "extras": ["s3", "oss", "gs", "webdav", "webhdfs", "hdfs"]},
     "iterative__dvc-10844": {
         "extras": ["s3", "oss", "gs", "webdav", "webhdfs", "hdfs"]},
+    # networkx's test modules call ``pytest.importorskip`` for numpy/scipy AT
+    # MODULE IMPORT. Absent, the module is skipped and its nodes are never
+    # collected -- silently, with ZERO collection errors. Measured on
+    # ``networkx__networkx-8196``: 865 of 6686 declared targets were reported
+    # TARGET_NOT_COLLECTED while pytest's own summary said "5887 tests collected",
+    # and the missing files were exactly the numpy/scipy ones
+    # (``assortativity/tests/test_correlation.py`` and ``test_mixing.py``; their
+    # siblings without ``importorskip`` were collected normally).
+    #
+    # ``default`` is the project's OWN declared extra supplying them
+    # (``numpy>=1.25``, ``scipy>=1.11.2``, matplotlib, pandas). It is not
+    # auto-selected because its name is not test-shaped, so this is per-task
+    # curation of a declared source -- the same pattern as dvc's ``hdfs``.
+    "networkx__networkx-8196": {"extras": ["default"]},
+    "networkx__networkx-8211": {"extras": ["default"]},
     # litellm is a POETRY project: its test dependencies live in
     # ``[tool.poetry.group.dev.dependencies]`` (19 entries, every one converting
     # cleanly to PEP 508), and it declares nothing in ``[dependency-groups]`` or
