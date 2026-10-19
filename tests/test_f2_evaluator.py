@@ -671,3 +671,57 @@ class TestDuplicateJUnitIdentity:
         a = parse_junit_xml(self._xml(["", ""]))
         b = parse_junit_xml(self._xml(["", ""]))
         assert a == b
+
+class TestWindowsParamSeparators:
+    """A parametrised id embeds a filesystem path. The corpus was recorded on
+    Linux (``[dir/subdir]``); Windows pytest emits ``[dir\\subdir]`` for the SAME
+    test. Because identity matching is exact, an un-normalised comparison
+    reported the node ``missing`` although it ran and passed -- measured on
+    ``iterative__dvc-10842``: 89 collectable targets flagged
+    TARGET_NOT_COLLECTED, 87 of them declared PASS_TO_PASS.
+    """
+
+    def test_declared_and_junit_identities_agree_across_separators(self):
+        from qwen_train.f2_evaluator import (
+            nodeid_to_junit_identity, normalise_node_name,
+        )
+        declared = "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]"
+        windows = "tests/func/test_checkout.py::test_partial_checkout[dir\\subdir]"
+        assert nodeid_to_junit_identity(declared) == nodeid_to_junit_identity(windows)
+        assert normalise_node_name("a[b\\c]") == "a[b/c]"
+
+    def test_a_windows_junit_still_scores_a_declared_pass(self):
+        """End-to-end through evaluate_execution: the evidence carries a
+        backslash param id, the contract a POSIX one, and the node must resolve
+        as passed rather than missing."""
+        from qwen_train.f2_evaluator import evaluate_execution
+        xml = (
+            b'<testsuites><testsuite name="pytest" tests="1">'
+            b'<testcase classname="tests.func.test_checkout" '
+            b'name="test_partial_checkout[dir\\subdir]" time="0.01"/>'
+            b'</testsuite></testsuites>')
+        outcome = evaluate_execution(
+            xml,
+            fail_to_pass=[
+                "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]"],
+            instance_id="iterative__dvc-10842",
+        )
+        assert outcome.declared_result == "pass"
+        assert outcome.fail_to_pass[
+            "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]"
+        ] == "passed"
+
+    def test_the_precheck_matches_across_separators(self):
+        from qwen_train.f2_s8_precheck import _target_collected
+        assert _target_collected(
+            "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]",
+            ["tests/func/test_checkout.py::test_partial_checkout[dir\\subdir]"])
+        assert not _target_collected(
+            "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]",
+            ["tests/func/test_checkout.py::test_other[dir\\subdir]"])
+
+    def test_two_genuinely_different_tests_do_not_collapse(self):
+        from qwen_train.f2_s8_precheck import _target_collected
+        assert not _target_collected(
+            "t.py::test_x[a/b]",
+            ["t.py::test_x[a/b/c]", "t.py::test_x[c/d]"])

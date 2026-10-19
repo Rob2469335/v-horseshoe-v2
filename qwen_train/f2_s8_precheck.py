@@ -53,6 +53,7 @@ from qwen_train.f2_evaluator import (
     analyze_test_invocation,
     changed_module_paths,
     classify_collection_cause,
+    normalise_node_name,
 )
 from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_s8_acquisition import AcquisitionError, resolve_project_subdir
@@ -401,10 +402,16 @@ def _parse_collect(stdout: str, stderr: str) -> dict[str, Any]:
 
 
 def _target_collected(target: str, nodes: Sequence[str]) -> bool:
+    # Separators are normalised before comparing. The corpus records POSIX ids
+    # (``test_x[dir/subdir]``) while Windows pytest emits ``test_x[dir\subdir]``
+    # for the same test, so an exact comparison reported 89 collectable dvc
+    # targets as TARGET_NOT_COLLECTED; 87 of them were declared PASS_TO_PASS.
+    wanted = normalise_node_name(target)
     for node in nodes:
-        if node == target:
+        got = normalise_node_name(node)
+        if got == wanted:
             return True
-        if node.endswith("/" + target) or target.endswith("/" + node):
+        if got.endswith("/" + wanted) or wanted.endswith("/" + got):
             return True
     return False
 

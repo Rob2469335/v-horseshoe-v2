@@ -72,6 +72,7 @@ __all__ = [
     "EvaluationOutcome",
     "EvaluatorError",
     "nodeid_to_junit_identity",
+    "normalise_node_name",
     "parse_junit_xml",
     "evaluate_execution",
     "render_report",
@@ -129,6 +130,23 @@ class JUnitIdentity:
         return f"{self.classname}::{self.name}"
 
 
+def normalise_node_name(name: str) -> str:
+    """Normalise path separators inside a pytest test NAME.
+
+    A parametrisation id embeds filesystem paths (``test_x[dir/subdir]``). The
+    corpus was recorded on Linux, where pytest renders those separators as
+    ``/``; on Windows the same test collects as ``test_x[dir\\subdir]``. The
+    identity match is exact, so without this a declared node is reported
+    ``missing`` although it ran and passed -- a scoring defect, not a task
+    outcome.
+
+    Rewriting ``\\`` to ``/`` cannot conflate two genuinely different tests: on
+    any one platform ``a/b`` and ``a\\b`` name the same path. The file-path
+    segment is normalised separately in :func:`nodeid_to_junit_identity`.
+    """
+    return str(name).replace("\\", "/")
+
+
 def nodeid_to_junit_identity(nodeid: str) -> JUnitIdentity:
     """Exact inverse of pytest's ``junitxml`` classname/name split.
 
@@ -159,7 +177,7 @@ def nodeid_to_junit_identity(nodeid: str) -> JUnitIdentity:
     if not module:
         raise EvaluatorError(f"declared test node id {text!r} yields an empty module name")
     classname = ".".join([module, *rest[:-1]])
-    name = rest[-1]
+    name = normalise_node_name(rest[-1])
     if not name:
         raise EvaluatorError(f"declared test node id {text!r} yields an empty test name")
     return JUnitIdentity(classname=classname, name=name)
@@ -202,7 +220,8 @@ def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
             raise EvaluatorError(
                 "junit evidence contains a <testcase> without classname/name"
             )
-        ident = JUnitIdentity(classname=str(classname), name=str(name))
+        ident = JUnitIdentity(classname=str(classname),
+                               name=normalise_node_name(str(name)))
         tags = {child.tag for child in case}
         if "skipped" in tags:
             status = STATUS_SKIPPED
