@@ -332,6 +332,14 @@ def _pytest_args(test_cmd: str) -> list[str]:
     parts = shlex.split(text, posix=False)
     if parts[:2] == ["uv", "run"]:
         parts = parts[2:]
+    # ``poetry run`` / ``pdm run`` are the same shape as ``uv run``: a package
+    # manager invoking the command inside the project's own environment. The
+    # shared analyser already accepts them (``single_pytest``, ``uses_uv``-style
+    # runner detection), so refusing here made a perfectly collectable task
+    # report TEST_CMD_UNSUPPORTED -- measured on ``BerriAI__litellm-13675``
+    # (``poetry run pytest -vv -n 4 -rA tests/test_litellm``).
+    if parts[:2] in (["poetry", "run"], ["pdm", "run"]):
+        parts = parts[2:]
     if parts[:1] == ["pytest"]:
         parts = parts[1:]
     elif parts[:3] == ["python", "-m", "pytest"]:

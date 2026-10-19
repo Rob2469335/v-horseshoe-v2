@@ -114,6 +114,15 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
     "python__mypy-19767": {"pytest_pin": "pytest==8.3.5", "groups": ["test"]},
     "stanfordnlp__dspy-8739": {"pytest_pin": "pytest==8.3.5", "groups": ["test"]},
     "HypothesisWorks__hypothesis-4532": {"pytest_pin": "pytest==8.3.5"},
+    # ``dvc``'s test suite imports its REMOTE backends, which the ``testing`` and
+    # ``tests`` extras do not pull in. The missing modules map 1:1 onto the
+    # project's OWN declared extras, so this is per-task curation of a declared
+    # source -- not an invented package. Measured: pre-check reported
+    # ``MISSING_DECLARED_DEPENDENCY`` for exactly dvc_s3/dvc_oss/dvc_gs/
+    # dvc_webdav/dvc_webhdfs on all three dvc instances.
+    "iterative__dvc-10842": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
+    "iterative__dvc-10843": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
+    "iterative__dvc-10844": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
 }
 
 DEFAULT_PYTEST_PIN = "pytest==8.3.5"

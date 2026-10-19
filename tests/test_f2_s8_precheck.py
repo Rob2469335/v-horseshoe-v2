@@ -363,3 +363,37 @@ class TestPytestArgs:
     def test_a_non_pytest_command_is_refused(self):
         with pytest.raises(PrecheckError):
             _pytest_args("python script.py")
+
+class TestRunnerPrefixes:
+    """Measured defect: ``poetry run pytest`` was refused by the legacy prefix
+    parser while the shared analyser accepted it, so a collectable task
+    reported TEST_CMD_UNSUPPORTED."""
+
+    def test_poetry_run_pytest_is_parsed(self):
+        from qwen_train.f2_s8_precheck import _pytest_args
+        assert _pytest_args(
+            "poetry run pytest -vv -n 4 -rA tests/test_litellm") == [
+            "-n", "4", "tests/test_litellm"]
+
+    def test_pdm_run_pytest_is_parsed(self):
+        from qwen_train.f2_s8_precheck import _pytest_args
+        assert _pytest_args("pdm run pytest -rA tests") == ["tests"]
+
+    def test_uv_run_still_parses(self):
+        from qwen_train.f2_s8_precheck import _pytest_args
+        assert _pytest_args("uv run pytest -rA") == []
+
+    def test_a_non_pytest_command_is_still_refused(self):
+        from qwen_train.f2_s8_precheck import PrecheckError, _pytest_args
+        import pytest as _pytest
+        with _pytest.raises(PrecheckError):
+            _pytest_args("make test")
+
+
+class TestDeclaredAdjustmentExtras:
+    def test_dvc_instances_curate_their_declared_remote_extras(self):
+        from qwen_train.f2_s8_acquisition import DECLARED_ADJUSTMENTS
+        for task in ("iterative__dvc-10842", "iterative__dvc-10843",
+                     "iterative__dvc-10844"):
+            assert DECLARED_ADJUSTMENTS[task]["extras"] == [
+                "s3", "oss", "gs", "webdav", "webhdfs"]
