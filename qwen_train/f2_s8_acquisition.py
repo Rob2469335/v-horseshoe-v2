@@ -124,6 +124,18 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
     "iterative__dvc-10842": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
     "iterative__dvc-10843": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
     "iterative__dvc-10844": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
+    # litellm is a POETRY project: its test dependencies live in
+    # ``[tool.poetry.group.dev.dependencies]`` (19 entries, every one converting
+    # cleanly to PEP 508), and it declares nothing in ``[dependency-groups]`` or
+    # ``[project.optional-dependencies]``. Naming the group is the sanctioned
+    # per-task curation; the ``dev`` name is still NOT auto-selected, precisely so
+    # this stays a per-task declaration rather than a global widening. Measured:
+    # with no dev group installed, collection aborted with 11 distinct
+    # ModuleNotFoundError (fastapi, respx, rich, orjson, backoff, cryptography,
+    # mcp, polars, starlette, opentelemetry, litellm_enterprise). Its own CI
+    # installs ``pytest-xdist`` explicitly, which the DECLARED COMMAND now
+    # derives -- so the command's ``-n 4`` has a provider.
+    "BerriAI__litellm-13675": {"groups": ["dev"]},
 }
 
 DEFAULT_PYTEST_PIN = "pytest==8.3.5"
