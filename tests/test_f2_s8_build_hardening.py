@@ -27,6 +27,7 @@ import copy
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -298,10 +299,18 @@ class TestBuilderInstallPlanDeclaredTestDependencies:
                                  mode="uv", test_requirements=["pandas"])
 
     def test_the_builder_identity_marks_the_contract_change(self):
-        """A workspace built before this change did NOT install the project's
-        declared test set, so reusing it silently would re-run collection
-        against an environment the new contract never produced."""
-        assert "declared-test-deps v2" in BUILDER_SOURCE
+        """A workspace built before a builder change did NOT install what the new
+        contract installs, so reusing it silently would re-run collection against
+        an environment the new contract never produced.
+
+        The marker advances with every such change: v2 introduced declared test
+        dependencies, v3 added Poetry groups and the plugins a DECLARED COMMAND
+        implies. Pinning the CURRENT marker is what makes a stale workspace
+        detectable, so this asserts the versioned form is present rather than a
+        frozen literal.
+        """
+        assert re.search(r"declared-test-deps v\d+", BUILDER_SOURCE), BUILDER_SOURCE
+        assert "declared-test-deps v3" in BUILDER_SOURCE
 
 
 # ---------------------------------------------------------------------------
