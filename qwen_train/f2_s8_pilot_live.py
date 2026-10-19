@@ -163,6 +163,18 @@ class PsDirectChannel(GuestChannel):
 def build_specs(manifest: dict[str, Any], inputs_dir: Path,
                 registration_sha256: str, registration_id: str) -> list:
     specs = []
+    # Owner-authorized policy (2026-10-19): a manifest that DECLARES the
+    # per-task digest policy must bind both expected digests for every built
+    # task; a violation stops the run here, before any guest work or grant
+    # consumption. Historical manifests do not declare it and are unaffected.
+    from qwen_train.f2_evidence import per_task_digest_problems
+
+    digest_problems = per_task_digest_problems(manifest)
+    if digest_problems:
+        raise PilotError(
+            "manifest does not satisfy the per-task state-digest policy: "
+            + "; ".join(digest_problems[:5])
+            + ("" if len(digest_problems) <= 5 else f" (+{len(digest_problems)-5} more)"))
     for task_id in manifest:
         entry = manifest[task_id]
         if not isinstance(entry, dict):

@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -87,6 +88,63 @@ RESULT_ERROR = "error"
 #: outcome to the factory's closed vocabulary.  Defined here so every writer of
 #: an ERROR record uses the identical string.
 ENVIRONMENT_ERROR_PREFIX = "ENVIRONMENT_ERROR"
+
+#: Manifest-level opt-in for the owner-authorized per-task digest policy
+#: (owner decision, 2026-10-19): a NEW F2-S8 manifest must bind BOTH the
+#: expected BASE and the expected GOLD state digest for every built task, and
+#: validation fails closed when either is absent, malformed, or when the two are
+#: identical.  A manifest that does not declare this field is HISTORICAL and is
+#: validated under the previous permissive contract -- historical manifests,
+#: grants, ledgers and evidence are never rewritten to retrofit the policy.
+DIGEST_POLICY_FIELD = "digest_policy"
+DIGEST_POLICY_PER_TASK_REQUIRED = "per-task-required"
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", str(value or "")))
+
+
+def per_task_digest_problems(manifest: Mapping[str, Any]) -> list[str]:
+    """Problems preventing ``manifest`` from satisfying the per-task policy.
+
+    Returns empty for a compliant manifest AND for a manifest that does not
+    declare the policy (historical documents keep their meaning).  Every built
+    task must bind both digests to well-formed, non-identical values.
+
+    A digest is an EXPECTED identity, not a measurement: satisfying this check
+    never proves a guest measured that state, that the evaluator ran correctly,
+    or that a task is admissible.
+    """
+    if not isinstance(manifest, Mapping):
+        return ["manifest is not an object"]
+    if str(manifest.get(DIGEST_POLICY_FIELD) or "") != DIGEST_POLICY_PER_TASK_REQUIRED:
+        return []
+
+    problems: list[str] = []
+    for task_id, entry in sorted(manifest.items()):
+        if str(task_id).startswith("_") or str(task_id) == DIGEST_POLICY_FIELD:
+            continue
+        if not isinstance(entry, Mapping):
+            problems.append(f"{task_id}: entry is not an object")
+            continue
+        if entry.get("status") != "built":
+            continue
+        values: dict[str, str] = {}
+        for name in ("expected_base_state_digest", "expected_gold_state_digest"):
+            value = entry.get(name)
+            if value is None or str(value).strip() == "":
+                problems.append(f"{task_id}: missing required {name}")
+                continue
+            if not _is_sha256_hex(value):
+                problems.append(f"{task_id}: malformed {name}")
+                continue
+            values[name] = str(value)
+        if (len(values) == 2
+                and values["expected_base_state_digest"]
+                == values["expected_gold_state_digest"]):
+            problems.append(
+                f"{task_id}: base and gold expected digests are identical")
+    return problems
 VALID_RESULTS = (RESULT_PASS, RESULT_FAIL, RESULT_ERROR)
 
 #: Optional failure classification, so an execution failure, an environment /
