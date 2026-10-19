@@ -67,6 +67,7 @@ __all__ = [
     "declared_test_requirements",
     "expand_requirements_file",
     "parse_requirements_lines",
+    "poetry_group_dependencies",
     "dependency_inputs_from_pyproject",
     "dependency_metadata_status",
     "install_context_from_pyproject",
@@ -1561,6 +1562,109 @@ def _norm_source_name(name: Any) -> str:
     return canonicalize_name(str(name))
 
 
+def _poetry_spec(name: str, value: Any) -> str | None:
+    """Convert ONE Poetry dependency declaration to a PEP 508 requirement.
+
+    Poetry's caret/tilde are NOT PEP 508, so they cannot be handed to pip
+    verbatim. ``^1.2.3`` becomes ``>=1.2.3,<2.0.0`` and ``~1.2.3`` becomes
+    ``>=1.2.3,<1.3.0``; a plain ``*``/empty becomes the bare name and an already
+    PEP 508 value passes through. Anything else returns ``None`` so the caller
+    records an advisory problem instead of giving pip a specification it will
+    reject -- fail-visible, never a silent misinstall.
+    """
+    if isinstance(value, Mapping):
+        # A ``git``/``path``/``url`` source has no version to express as PEP 508.
+        # Degrading it to the bare distribution name would install an unrelated
+        # PyPI package of the same name, so refuse it visibly instead.
+        if any(k in value for k in ("git", "path", "url")) and "version" not in value:
+            return None
+        value = value.get("version", "*")
+    text = str(value or "").strip()
+    if text in ("", "*"):
+        return name
+    match = re.match(r"^([\^~])\s*(.+)$", text)
+    if not match:
+        # Already a PEP 508 specifier set (``>=1.0``, ``==2.*``, ...).
+        if text[:1] in "<>=!~":
+            return name + text
+        # Poetry reads a bare version as an exact pin (``1.25.0`` == ``==1.25.0``),
+        # so refusing it would silently drop a legitimately declared dependency.
+        if re.match(r"^\d+(\.\d+)*((a|b|rc|\.post|\.dev)\d*)?$", text):
+            return f"{name}=={text}"
+        return None
+    operator, version = match.group(1), match.group(2).strip()
+    if re.search(r"(\|\||,|\s)", version):
+        # A union/composite constraint cannot be expressed by the single bound
+        # computed below; refusing beats silently narrowing it.
+        return None
+    digits = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?", version)
+    if not digits:
+        return None
+    major = int(digits.group(1))
+    minor = int(digits.group(2) or 0)
+    patch = int(digits.group(3) or 0)
+    if operator == "^":
+        # Poetry caret: the LEFTMOST non-zero component is the one that may not
+        # move, so ``^0.2.3`` is ``>=0.2.3,<0.3.0`` -- not unbounded.
+        if major:
+            upper = f">={version},<{major + 1}.0.0"
+        elif minor:
+            upper = f">={version},<0.{minor + 1}.0"
+        else:
+            upper = f">={version},<0.0.{patch + 1}"
+    else:  # ``~`` allows the last given component to move
+        upper = (f">={version},<{major}.{minor + 1}.0" if digits.group(2)
+                 else f">={version},<{major + 1}.0.0")
+    return f"{name}{upper}"
+
+
+def poetry_group_dependencies(
+    project: Path,
+) -> tuple[dict[str, list[str]], list[dict[str, str]]]:
+    """Poetry's own dependency groups, in the PEP 735 shape.
+
+    A Poetry project declares its test dependencies in
+    ``[tool.poetry.group.<name>.dependencies]`` (and legacy
+    ``[tool.poetry.dev-dependencies]``), NOT in ``[dependency-groups]``. Not
+    reading them meant such a project built a venv with none of its declared
+    dependencies: measured on ``BerriAI__litellm-13675``, whose 19-entry ``dev``
+    group was invisible to the resolver, so its declared ``poetry run pytest -vv
+    -n 4 -rA`` exited rc=4 with no dev dependencies installed at all.
+
+    Returns ``(groups, problems)``.  A declaration whose version specification
+    cannot be expressed in PEP 508 is reported as an advisory problem and
+    EXCLUDED from the requirement list, so pip is never handed a specification
+    it would reject and the omission is visible rather than silent.
+    """
+    data = _read_pyproject(Path(project))
+    poetry = (data.get("tool") or {}).get("poetry") or {}
+    groups: dict[str, list[str]] = {}
+    problems: list[dict[str, str]] = []
+
+    def _convert(name: str, spec: Any, group: str) -> str | None:
+        converted = _poetry_spec(name, spec)
+        if converted is None:
+            problems.append({
+                "code": "poetry_constraint_unconvertible", "scope": "advisory",
+                "detail": f"group:{group}:{name}:{spec!r}",
+            })
+        return converted
+
+    for name, block in (poetry.get("group") or {}).items():
+        deps = (block or {}).get("dependencies") or {}
+        groups[str(name)] = [
+            c for c in (_convert(str(n), s, str(name)) for n, s in deps.items())
+            if c is not None
+        ]
+    legacy = poetry.get("dev-dependencies") or {}
+    if isinstance(legacy, Mapping) and legacy:
+        groups.setdefault("dev", [
+            c for c in (_convert(str(n), s, "dev") for n, s in legacy.items())
+            if c is not None
+        ])
+    return groups, problems
+
+
 def declared_test_requirements(
     dependency_inputs: Mapping[str, Any],
     *,
@@ -1622,6 +1726,19 @@ def declared_test_requirements(
 
     expanded, group_problems = resolve_dependency_groups(raw_groups)
     problems.extend(group_problems)
+
+    # A Poetry project declares the SAME concept in
+    # ``[tool.poetry.group.<name>.dependencies]``, which ``resolve_dependency_groups``
+    # never sees.  Merging it here does NOT widen automatic selection -- that still
+    # gates on :data:`TEST_DEPENDENCY_SOURCE_NAMES`, so a ``dev`` group stays out of
+    # scope by default.  What it restores is the documented per-task curation path:
+    # without it, ``groups=["dev"]`` raised a BLOCKING ``declared_test_source_missing``
+    # for every Poetry project, so the sanctioned adjustment was simply unavailable.
+    if project is not None:
+        poetry_groups, poetry_problems = poetry_group_dependencies(Path(project))
+        problems.extend(poetry_problems)
+        for name, entries in poetry_groups.items():
+            expanded.setdefault(name, list(entries))
 
     group_index = {_norm_source_name(k): str(k) for k in expanded}
     extra_index = {_norm_source_name(k): str(k) for k in raw_extras}

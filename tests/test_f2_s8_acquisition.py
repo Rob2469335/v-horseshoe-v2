@@ -538,3 +538,89 @@ class TestDeclaredTestPlugins:
             '[dependency-groups]\ndev = ["pytest-django>=4.9", "mkdocs>=1.6"]\n',
             encoding="utf-8")
         assert declared_test_plugins(static_dependency_inputs(tmp_path)) == ["pytest-django"]
+
+class TestPoetryDependencyGroups:
+    """Poetry declares dependency groups in ``[tool.poetry.group.*]``, not in
+    PEP 735 ``[dependency-groups]``.  Measured on ``BerriAI__litellm-13675``:
+    its 19-entry ``dev`` group was invisible, so ``groups=["dev"]`` -- the
+    documented per-task curation path -- raised a BLOCKING
+    ``declared_test_source_missing`` for every Poetry project, and the build got
+    no dev dependencies at all.
+    """
+
+    def _project(self, tmp_path, body):
+        (tmp_path / "pyproject.toml").write_text(body, encoding="utf-8")
+        return tmp_path
+
+    def test_poetry_groups_are_read(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import poetry_group_dependencies
+        root = self._project(tmp_path, """
+[tool.poetry.group.test.dependencies]
+pytest = "^8.0.0"
+""")
+        groups, problems = poetry_group_dependencies(root)
+        assert groups["test"] == ["pytest>=8.0.0,<9.0.0"]
+        assert problems == []
+
+    def test_legacy_dev_dependencies_are_read(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import poetry_group_dependencies
+        root = self._project(tmp_path, """
+[tool.poetry.dev-dependencies]
+pytest-mock = "*"
+""")
+        groups, _ = poetry_group_dependencies(root)
+        assert groups["dev"] == ["pytest-mock"]
+
+    def test_caret_tilde_and_pin_convert(self):
+        from qwen_train.f2_s8_acquisition import _poetry_spec
+        assert _poetry_spec("a", "^1.2.3") == "a>=1.2.3,<2.0.0"
+        assert _poetry_spec("b", "~1.2.3") == "b>=1.2.3,<1.3.0"
+        assert _poetry_spec("c", "1.25.0") == "c==1.25.0"
+        assert _poetry_spec("d", ">=1.0") == "d>=1.0"
+        # Caret anchors on the LEFTMOST non-zero component, per Poetry's spec.
+        assert _poetry_spec("e", "^0.2.3") == "e>=0.2.3,<0.3.0"
+        assert _poetry_spec("f", "^0.0.3") == "f>=0.0.3,<0.0.4"
+
+    def test_a_git_or_path_source_is_refused_not_degraded(self):
+        from qwen_train.f2_s8_acquisition import _poetry_spec
+        assert _poetry_spec("x", {"git": "https://example.invalid/x.git"}) is None
+        assert _poetry_spec("x", {"path": "../x"}) is None
+
+    def test_a_composite_constraint_is_refused_not_narrowed(self):
+        from qwen_train.f2_s8_acquisition import _poetry_spec
+        assert _poetry_spec("x", "^1.0 || ^2.0") is None
+
+    def test_an_unconvertible_constraint_is_reported_not_dropped(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import poetry_group_dependencies
+        root = self._project(tmp_path, """
+[tool.poetry.group.test.dependencies]
+good = "^8.0.0"
+odd = {git = "https://example.invalid/x.git"}
+""")
+        groups, problems = poetry_group_dependencies(root)
+        assert groups["test"] == ["good>=8.0.0,<9.0.0"]
+        assert [p["code"] for p in problems] == ["poetry_constraint_unconvertible"]
+
+    def test_naming_a_poetry_group_is_no_longer_blocking(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import declared_test_requirements
+        root = self._project(tmp_path, """
+[tool.poetry.group.test.dependencies]
+pytest = "^8.0.0"
+""")
+        result = declared_test_requirements({"groups": {}, "extras": {}},
+                                            groups=["test"], project=root)
+        assert [p for p in result["problems"] if p.get("scope") == "blocking"] == []
+        assert result["requirements"] == ["pytest>=8.0.0,<9.0.0"]
+
+    def test_automatic_selection_still_ignores_dev(self, tmp_path):
+        """The reverted ``dev`` widening must stay reverted: reading Poetry
+        groups must not smuggle ``dev`` into automatic selection."""
+        from qwen_train.f2_s8_acquisition import declared_test_requirements
+        root = self._project(tmp_path, """
+[tool.poetry.group.dev.dependencies]
+black = "^24.0.0"
+""")
+        result = declared_test_requirements({"groups": {}, "extras": {}},
+                                            project=root)
+        assert result["requirements"] == []
+        assert result["groups"] == []
