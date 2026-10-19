@@ -261,6 +261,32 @@ def pytest_config_plugins(project: Path) -> list[str]:
     return sorted(found)
 
 
+def command_plugins(test_cmd: str) -> list[str]:
+    """Distributions the DECLARED test command itself requires.
+
+    ``pytest_config_plugins`` reads the project's ``addopts``; this reads the
+    other place a project declares a pytest option -- its registered command.
+    ``BerriAI__litellm-13675`` declares ``poetry run pytest -vv -n 4 -rA
+    tests/test_litellm`` and its ``dev`` group contains no xdist, so pytest
+    aborted with ``error: unrecognized arguments: -n`` (exit 4, no JUnit). Its
+    own CI declares the plugin explicitly -- ``.github/workflows/test-litellm.yml``
+    installs ``pytest-xdist``, and so do the ``Makefile`` and CircleCI config --
+    so installing it honours the project's declared test environment rather than
+    inventing a dependency. A flag with no unambiguous owner yields nothing.
+    """
+    tokens = str(test_cmd or "").split()
+
+    def _matches(tok: str, opt: str) -> bool:
+        if opt == "-n":
+            return tok == "-n" or (tok.startswith("-n") and not tok.startswith("--"))
+        return tok == opt or tok.startswith(opt)
+
+    return sorted({
+        dist for tok in tokens for opt, dist in _PLUGIN_BY_OPTION
+        if _matches(tok, opt)
+    })
+
+
 def run(cmd, *, cwd=None, timeout=3600, check=True):
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     if check and proc.returncode != 0:
@@ -414,6 +440,13 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # recorded as an infrastructure failure with no JUnit).  Derived from the
     # checked-out project, so it cannot drift.
     derived = [p for p in pytest_config_plugins(project) if p not in extra]
+    # ...and the plugins the DECLARED COMMAND requires, which is the other place
+    # a project states a pytest option. ``addopts`` was the only source read, so
+    # a task whose command carries ``-n 4`` and whose dependency groups omit
+    # xdist aborted with exit 4 and produced no JUnit at all.
+    for dist in command_plugins(declared_test_cmd(rec)):
+        if dist not in extra and dist not in derived:
+            derived.append(dist)
     if derived:
         extra = [*extra, *derived]
     # uv-owned tasks are identified by their DECLARED command; the pilot's

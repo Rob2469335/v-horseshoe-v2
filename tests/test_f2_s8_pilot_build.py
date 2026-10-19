@@ -282,3 +282,26 @@ class TestPytestConfigPlugins:
         p = self._project(tmp_path, "[pytest]\naddopts = -nauto\n", "pytest.ini")
         assert B.pytest_config_plugins(p) == ["pytest-xdist"]
         assert captured["derived"] == ["pytest-xdist"]
+
+class TestCommandDeclaredPlugins:
+    """The DECLARED COMMAND is the project's own statement of the pytest options
+    it needs, exactly like ``addopts``.  Only ``addopts`` was read, so
+    ``BerriAI__litellm-13675`` -- command ``poetry run pytest -vv -n 4 -rA
+    tests/test_litellm``, no xdist in its ``dev`` group -- aborted with
+    ``error: unrecognized arguments: -n`` (exit 4) and produced no JUnit at all.
+    """
+
+    def test_a_declared_n_flag_requires_xdist(self):
+        from qwen_train.f2_s8_pilot_build import command_plugins
+        assert command_plugins(
+            "poetry run pytest -vv -n 4 -rA tests/test_litellm") == ["pytest-xdist"]
+
+    def test_numprocesses_and_cov_are_recognised(self):
+        from qwen_train.f2_s8_pilot_build import command_plugins
+        assert command_plugins("pytest --numprocesses=4 --cov=src") == [
+            "pytest-cov", "pytest-xdist"]
+
+    def test_a_plain_command_requires_nothing(self):
+        from qwen_train.f2_s8_pilot_build import command_plugins
+        assert command_plugins("pytest -q tests/") == []
+        assert command_plugins("") == []
