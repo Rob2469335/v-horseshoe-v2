@@ -58,8 +58,11 @@ class TestD1PreflightEvidenceSources:
         })
         rep = pf.run_preflight(ledgers=LEDGERS, registered_tasks=tasks)
         adm = _by(rep)["population.admission"]
-        assert "credited union 6" in adm["detail"]
-        assert "remaining to 300 = 294" in adm["detail"]
+        # The counting-rule union over the CURRENT chains (append-only; the r4
+        # batch added three admissions). Read from the reconciler, not asserted
+        # from a literal that predates the ledger's growth.
+        assert "credited union 9" in adm["detail"]
+        assert "remaining to 300 = 291" in adm["detail"]
         # 6 < 300, so the gate is honestly still insufficient -- not satisfied.
         assert adm["status"] == "insufficient"
         assert rep["result"] == "BLOCKED"
@@ -135,10 +138,10 @@ class TestD2CapacityAdmissionAccounting:
     def test_six_concepts_are_reported_separately(self):
         a = self._accounting(0)
         assert a["census_admitted"] == 0
-        assert a["operative_ledger_admissions"] == 5
+        assert a["operative_ledger_admissions"] == 8
         assert a["corrective_ledger_admissions"] == 1
-        assert a["credited_admission_union"] == 6
-        assert a["remaining_to_target"] == 294
+        assert a["credited_admission_union"] == 9
+        assert a["remaining_to_target"] == 291
         assert a["target"] == 300
         assert a["basis"] == "docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md"
 

@@ -561,6 +561,12 @@ REAL_TASKS = (
     # is (correctly) reported as unregistered.
     "networkx__networkx-8211",
     "openai__openai-agents-python-1601",
+    # Added 2026-10-19 with the r4 batch admissions. The ledger is append-only and
+    # grew; an admitted task absent from this universe is (correctly) reported as
+    # unregistered_admitted, so the universe must track the chains.
+    "Tuxemon__Tuxemon-3068",
+    "pgmpy__pgmpy-2314",
+    "sdv-dev__SDV-2656",
 )
 
 
@@ -576,28 +582,73 @@ class TestCrossChainPolicyWithRealChains:
         from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
 
         out = real(REAL_CHAINS, REAL_TASKS)
+        # Figures below are the CURRENT ledger truth, not a frozen historical
+        # literal: the chains are append-only and the r4 batch appended three
+        # admissions on 2026-10-19. They are cross-checked against an independent
+        # derivation from the raw ledgers (see the test immediately following), so
+        # updating them is never a matter of trusting the reconciler about itself.
+        #
+        # NOTE (definition): credited_count is the COUNTING-RULE union -- every
+        # admitted scientific record across the registered chains, each task once
+        # (docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md). It is NOT the same
+        # figure as the RFC-Reading-A "accepted credit" count, which additionally
+        # requires the owning BATCH to pass its post-audit; three r4 admissions are
+        # ledger-admitted and counted here but are not accepted credits.
         assert out["operative_admitted"] == [
+            "Tuxemon__Tuxemon-3068",
             "networkx__networkx-8211",
             "openai__openai-agents-python-1601",
             "openai__openai-agents-python-1633",
             "openai__openai-agents-python-1636",
+            "pgmpy__pgmpy-2314",
             "python__mypy-19767",
+            "sdv-dev__SDV-2656",
         ]
-        assert out["credited_count"] == 6
+        assert out["credited_count"] == 9
         assert out["credited_admitted"] == sorted([
             "HypothesisWorks__hypothesis-4532",
+            "Tuxemon__Tuxemon-3068",
             "networkx__networkx-8211",
             "openai__openai-agents-python-1601",
             "openai__openai-agents-python-1633",
             "openai__openai-agents-python-1636",
+            "pgmpy__pgmpy-2314",
             "python__mypy-19767",
+            "sdv-dev__SDV-2656",
         ])
-        assert 300 - out["credited_count"] == 294
+        assert 300 - out["credited_count"] == 291
         assert out["corrections_verified"] == 1
         assert out["refused_terminal_override"] == []
         assert out["unregistered_admitted"] == []
         assert out["registered_chains"] == [
             "s8_pilot_ledger.jsonl", "s8_pilot_ledger_corrected.jsonl"]
+
+    @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
+    def test_the_reported_union_equals_an_independent_derivation(self):
+        """Verify the reconciler against the RULE, not against itself.
+
+        Derived independently from the raw chains: every record with
+        ``admitted`` true and ``outcome_class == "scientific"``, each task counted
+        once. This is what stops the pinned figures above from silently drifting
+        into self-agreement -- a stale literal fails here too, but a WRONG
+        reconciler cannot pass both.
+        """
+        import json as _json
+
+        from qwen_train.f2_s8_batch import reconcile_admissions_across_chains as real
+
+        admitted = set()
+        for chain in REAL_CHAINS:
+            for line in chain.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                row = _json.loads(line)
+                if row.get("admitted") is True and row.get("outcome_class") == "scientific":
+                    admitted.add(row["task_id"])
+        out = real(REAL_CHAINS, REAL_TASKS)
+        assert out["credited_count"] == len(admitted)
+        assert out["credited_admitted"] == sorted(admitted)
+        assert 300 - out["credited_count"] == 300 - len(admitted)
 
     @pytest.mark.skipif(not _real_available(), reason="real ledgers not present")
     def test_removing_the_pinned_exception_drops_the_fourth_credit(self, monkeypatch):
@@ -606,7 +657,8 @@ class TestCrossChainPolicyWithRealChains:
 
         monkeypatch.setattr(B, "GRANDFATHERED_CORRECTION_TASK_IDS", frozenset())
         out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
-        assert out["credited_count"] == 5
+        # the corrected task is refused, so the union loses exactly that one credit
+        assert out["credited_count"] == 8
         assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
         assert [r["task_id"] for r in out["refused_terminal_override"]] == [
             "HypothesisWorks__hypothesis-4532"]
@@ -888,7 +940,7 @@ class TestGrandfatherExceptionAndRegisteredTopology:
             B, "GRANDFATHERED_CORRECTION_TASK_IDS",
             frozenset({"HypothesisWorks__hypothesis-4532-2"}))
         out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
-        assert out["credited_count"] == 5
+        assert out["credited_count"] == 8
         assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
         assert [r["task_id"] for r in out["refused_terminal_override"]] == [
             "HypothesisWorks__hypothesis-4532"]
