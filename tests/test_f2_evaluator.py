@@ -634,3 +634,40 @@ class TestProducerAndCLI:
     # acceptable way to make a test pass. `main()` is exercised in-process
     # above, which covers argument handling and exit codes; the remaining
     # external-process property is covered by that manual invocation.
+
+class TestDuplicateJUnitIdentity:
+    """SOTA decision (2026-10-19): a duplicate identity is ambiguous only when
+    the repeated cases DISAGREE. Agreeing duplicates are determinate and are
+    read; disagreeing duplicates still fail closed.
+
+    Measured: QuantEcon.py-797 emits one identity twice with the same outcome,
+    which previously raised JUNIT_MALFORMED and failed the whole batch's D4
+    audit. Reference harness (SWE-bench) instead takes the LAST occurrence, so
+    its grade is order-dependent.
+    """
+
+    @staticmethod
+    def _xml(cases):
+        body = "".join(
+            '<testcase classname="t" name="n">%s</testcase>' % inner
+            for inner in cases)
+        return ('<?xml version="1.0" encoding="utf-8"?><testsuites>'
+                '<testsuite name="pytest" tests="%d">%s</testsuite></testsuites>'
+                % (len(cases), body)).encode("utf-8")
+
+    def test_agreeing_duplicates_are_read(self):
+        from qwen_train.f2_evaluator import parse_junit_xml
+        statuses = parse_junit_xml(self._xml(["", ""]))
+        assert len(statuses) == 1
+
+    def test_disagreeing_duplicates_still_fail_closed(self):
+        from qwen_train.f2_evaluator import EvaluatorError, parse_junit_xml
+        import pytest as _pytest
+        with _pytest.raises(EvaluatorError, match="DISAGREEING"):
+            parse_junit_xml(self._xml(["", "<failure/>"]))
+
+    def test_reading_agreeing_duplicates_is_order_independent(self):
+        from qwen_train.f2_evaluator import parse_junit_xml
+        a = parse_junit_xml(self._xml(["", ""]))
+        b = parse_junit_xml(self._xml(["", ""]))
+        assert a == b

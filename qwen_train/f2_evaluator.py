@@ -213,10 +213,26 @@ def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
         else:
             status = STATUS_PASSED
         if ident in statuses:
-            raise EvaluatorError(
-                f"junit evidence emits duplicate test identity {ident.as_text()!r}; "
-                "the retained evidence is ambiguous"
-            )
+            # A duplicate identity is AMBIGUOUS only when the repeated cases
+            # DISAGREE. If every occurrence carries the SAME status the identity
+            # is determinate and reading it is order-independent -- which is the
+            # property this guard exists to protect, not the guard itself.
+            #
+            # SOTA comparison: the SWE-bench harness builds its status map with
+            # ``test_status_map[name] = status``, so a duplicate silently takes
+            # the LAST occurrence and the grade becomes order-dependent.
+            # Accepting a duplicate only when the statuses agree is strictly
+            # stronger than that. Measured: QuantEcon.py-797 emits one identity
+            # twice with the same outcome and was refused as JUNIT_MALFORMED,
+            # which failed the whole batch's D4 audit.
+            if statuses[ident] != status:
+                raise EvaluatorError(
+                    f"junit evidence emits duplicate test identity "
+                    f"{ident.as_text()!r} with DISAGREEING statuses "
+                    f"({statuses[ident]!r} vs {status!r}); the retained evidence "
+                    "is ambiguous"
+                )
+            continue
         statuses[ident] = status
 
     if cases == 0:
