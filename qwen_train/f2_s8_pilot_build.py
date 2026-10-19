@@ -32,6 +32,7 @@ from typing import Any, Mapping
 from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_evaluator import analyze_test_invocation
 from qwen_train.f2_s8_acquisition import (
+    BUILDER_SOURCE,
     DECLARED_ADJUSTMENTS,
     builder_install_plan,
     declared_required_version,
@@ -624,6 +625,12 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
         # Provenance: exactly which packages this build installed on each side,
         # derived from the same source of truth the offline classifier checks.
         "install_plan": install_plan,
+        # Which BUILDER produced this environment. Recorded so a workspace built
+        # under an older contract cannot be pre-checked as if the current one had
+        # produced it -- previously the builder version lived only in the
+        # acquisition identity, which this manifest never carried and the
+        # pre-check never recomputes, so a stale workspace passed silently.
+        "builder": BUILDER_SOURCE,
         "requires_python": list(_requires_python(project)) if _requires_python(project) else None,
         "elapsed_s": int(time.time() - t0),
     }
