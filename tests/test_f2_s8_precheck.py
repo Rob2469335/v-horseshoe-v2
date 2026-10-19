@@ -457,3 +457,93 @@ class TestEvidenceAmbiguousParking:
         assert "QuantEcon__QuantEcon.py-797" not in selected
         assert {"task_id": "QuantEcon__QuantEcon.py-797",
                 "reason": REASON_PARKED} in excluded
+
+class TestMatcherIsLinear:
+    """The per-target scan canonicalised EVERY node for EVERY target: O(T x N)
+    regex work. On quantumlib__Cirq-7538 (21,550 targets) that is ~464 million
+    normalisations per side, observed as a long stall with CPU climbing and no
+    child process. The fix canonicalises once per side and indexes exact
+    identities. These tests prove EQUIVALENCE first, then the structural bound.
+    """
+
+    @staticmethod
+    def _old(target, nodes, **bindings):
+        """The previous implementation, kept verbatim as a differential oracle."""
+        from qwen_train.f2_evaluator import canonical_node_identity
+        wanted = canonical_node_identity(target, **bindings)
+        for node in nodes:
+            got = canonical_node_identity(node, **bindings)
+            if got == wanted:
+                return True
+            if got.endswith("/" + wanted) or wanted.endswith("/" + got):
+                return True
+        return False
+
+    def test_equivalence_on_representative_and_adversarial_inputs(self):
+        import random
+
+        from qwen_train.f2_s8_precheck import _target_collected
+
+        random.seed(7)
+        bindings = {"dataset_root": "/testbed", "execution_root": r"C:\f2_pilot\x\repo",
+                    "enum_values": {"TaskStatus": {"RUNNING": 2, "FAILED": 4}}}
+        node_pool = [
+            "pkg/tests/test_a.py::test_x",
+            "pkg/tests/test_a.py::test_x[dir/subdir]",
+            r"pkg/tests/test_a.py::test_x[dir\\subdir]",
+            "pkg/tests/test_a.py::test_show[TaskStatus.RUNNING-True]",
+            "pkg/tests/test_a.py::test_show[2-True]",
+            "/testbed/pkg/tests/test_a.py::test_root[/testbed]",
+            r"C:\f2_pilot\x\repo\tests\test_b.py::test_y[a/b]",
+            "other.py::test_x", "x", "", "a/b",
+        ]
+        for _ in range(400):
+            nodes = [random.choice(node_pool) for _ in range(random.randint(0, 6))]
+            target = random.choice(node_pool)
+            assert _target_collected(target, nodes, **bindings) == \
+                self._old(target, nodes, **bindings), (target, nodes)
+
+    def test_exact_suffix_duplicate_and_missing_cases(self):
+        from qwen_train.f2_s8_precheck import _target_collected
+        # exact
+        assert _target_collected("t.py::a", ["t.py::a"])
+        # suffix form: the collected node carries a path prefix
+        assert _target_collected("t.py::a", ["pkg/t.py::a"])
+        # ...but a bare fragment is NOT a match (the heuristic needs a path
+        # boundary, "/"+target, not a plain string suffix)
+        assert not _target_collected("a", ["pkg/t.py::a"])
+        # duplicate nodes are harmless
+        assert _target_collected("t.py::a", ["t.py::a", "t.py::a", "t.py::a"])
+        # missing
+        assert not _target_collected("t.py::b", ["t.py::a"])
+        # normalization: escaped separators and enum rendering still match
+        assert _target_collected(r"t.py::x[dir\\sub]", ["t.py::x[dir/sub]"])
+        assert _target_collected("t.py::s[TaskStatus.RUNNING]",
+                                 ["t.py::s[2]"],
+                                 enum_values={"TaskStatus": {"RUNNING": 2}})
+
+    def test_canonicalisation_is_per_side_not_per_target_pair(self, monkeypatch):
+        """Structural proof: the number of canonicalisation calls must scale with
+        the NODE count, not with nodes x targets. A wall-clock threshold would be
+        machine-dependent; a call count is exact."""
+        from qwen_train import f2_s8_precheck as P
+
+        nodes = [f"pkg/tests/test_m.py::test_{i}" for i in range(200)]
+        targets = [f"pkg/tests/test_m.py::test_{i}" for i in range(200)]
+
+        calls = {"n": 0}
+        real = P.canonical_node_identity
+
+        def counting(text, **kw):
+            calls["n"] += 1
+            return real(text, **kw)
+
+        monkeypatch.setattr(P, "canonical_node_identity", counting)
+        canonical = P._canonical_nodes(nodes)
+        calls["n"] = 0                      # count only the per-target work
+        for t in targets:
+            P._target_collected(t, canonical=canonical)
+
+        # 200 targets -> at most 200 canonicalisations (one per target).
+        assert calls["n"] <= len(targets), calls["n"]
+        assert calls["n"] < 400, "per-target canonicalisation regressed"

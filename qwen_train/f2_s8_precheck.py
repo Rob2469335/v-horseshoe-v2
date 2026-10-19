@@ -415,13 +415,42 @@ def _enum_class_names(targets: Sequence[str]) -> list[str]:
     return sorted(names)
 
 
-def _target_collected(
-    target: str,
+def _canonical_nodes(
     nodes: Sequence[str],
     *,
     dataset_root: str = "",
     execution_root: str = "",
     enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> tuple[tuple[str, ...], frozenset[str]]:
+    """Canonicalise a collected node list ONCE per side.
+
+    ``_target_collected`` used to canonicalise every node for every declared
+    target -- O(targets x nodes) regular-expression work. For
+    ``quantumlib__Cirq-7538`` (21,550 targets) that is ~464 million
+    normalisations for one side, minutes of CPU with no child process running:
+    measured as a long stall with the CPU counter climbing and no new artifact.
+
+    Canonicalising once and indexing exact identities in a set makes the common
+    case O(1) and leaves the suffix fallback as the only scan.
+    """
+    canonical = tuple(
+        canonical_node_identity(
+            node, dataset_root=dataset_root, execution_root=execution_root,
+            enum_values=enum_values,
+        )
+        for node in nodes
+    )
+    return canonical, frozenset(canonical)
+
+
+def _target_collected(
+    target: str,
+    nodes: Sequence[str] = (),
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+    canonical: tuple[Sequence[str], frozenset[str]] | None = None,
 ) -> bool:
     """Is ``target`` present in a collected node list?
 
@@ -430,18 +459,25 @@ def _target_collected(
     exactly what the scorer can resolve. Separators alone accounted for 89
     collectable dvc targets reported TARGET_NOT_COLLECTED (87 of them declared
     PASS_TO_PASS); the workspace root and enum rendering account for the rest.
+
+    ``canonical`` carries the precomputed ``(canonical_nodes, exact_set)`` for a
+    side. Passing it preserves the ORIGINAL semantics exactly -- an exact hit is
+    the same condition as ``got == wanted``, and the suffix checks are evaluated
+    on the same canonical strings, so the boolean result is identical.
     """
     wanted = canonical_node_identity(
         target, dataset_root=dataset_root, execution_root=execution_root,
         enum_values=enum_values,
     )
-    for node in nodes:
-        got = canonical_node_identity(
-            node, dataset_root=dataset_root, execution_root=execution_root,
+    if canonical is None:
+        canonical = _canonical_nodes(
+            nodes, dataset_root=dataset_root, execution_root=execution_root,
             enum_values=enum_values,
         )
-        if got == wanted:
-            return True
+    canonical_nodes, exact = canonical
+    if wanted in exact:
+        return True
+    for got in canonical_nodes:
         if got.endswith("/" + wanted) or wanted.endswith("/" + got):
             return True
     return False
@@ -485,12 +521,15 @@ def _classify_side(
     parsed = _parse_collect(stdout, stderr)
     nodes = parsed["nodes"]
     errors = parsed["errors"]
-    bindings = {
-        "dataset_root": dataset_root,
-        "execution_root": execution_root,
-        "enum_values": enum_values,
-    }
-    missing = [t for t in targets if not _target_collected(t, nodes, **bindings)]
+    canonical = _canonical_nodes(
+        nodes, dataset_root=dataset_root, execution_root=execution_root,
+        enum_values=enum_values,
+    )
+    missing = [t for t in targets
+               if not _target_collected(t, canonical=canonical,
+                                        dataset_root=dataset_root,
+                                        execution_root=execution_root,
+                                        enum_values=enum_values)]
     base = {
         "side": side,
         "returncode": returncode,
