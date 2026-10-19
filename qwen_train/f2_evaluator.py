@@ -131,20 +131,22 @@ class JUnitIdentity:
 
 
 def normalise_node_name(name: str) -> str:
-    """Normalise path separators inside a pytest test NAME.
+    """Normalise filesystem-path separators inside a pytest test NAME.
 
     A parametrisation id embeds filesystem paths (``test_x[dir/subdir]``). The
     corpus was recorded on Linux, where pytest renders those separators as
-    ``/``; on Windows the same test collects as ``test_x[dir\\subdir]``. The
-    identity match is exact, so without this a declared node is reported
-    ``missing`` although it ran and passed -- a scoring defect, not a task
-    outcome.
+    ``/``; on Windows the same test collects as ``test_x[dir\\\\subdir]`` -- and
+    crucially pytest ESCAPES the backslash in an id (``ascii_escaped`` doubles
+    it), so the retained node carries TWO literal backslashes. The identity match
+    is exact, so without this a declared node is reported ``missing`` although it
+    ran and passed -- a scoring defect, not a task outcome.
 
-    Rewriting ``\\`` to ``/`` cannot conflate two genuinely different tests: on
-    any one platform ``a/b`` and ``a\\b`` name the same path. The file-path
-    segment is normalised separately in :func:`nodeid_to_junit_identity`.
+    Both the escaping and the separator are therefore collapsed to ``/``:
+    any run of backslashes becomes one ``/``. This cannot conflate two genuinely
+    different tests, because on any one platform ``a/b``, ``a\\b`` and the
+    escaped ``a\\\\b`` all name the same path.
     """
-    return str(name).replace("\\", "/")
+    return re.sub(r"\\+", "/", str(name))
 
 
 def nodeid_to_junit_identity(nodeid: str) -> JUnitIdentity:

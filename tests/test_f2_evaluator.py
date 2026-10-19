@@ -674,10 +674,11 @@ class TestDuplicateJUnitIdentity:
 
 class TestWindowsParamSeparators:
     """A parametrised id embeds a filesystem path. The corpus was recorded on
-    Linux (``[dir/subdir]``); Windows pytest emits ``[dir\\subdir]`` for the SAME
-    test. Because identity matching is exact, an un-normalised comparison
-    reported the node ``missing`` although it ran and passed -- measured on
-    ``iterative__dvc-10842``: 89 collectable targets flagged
+    Linux (``[dir/subdir]``); Windows pytest emits ``[dir\\subdir]`` -- and pytest
+    ESCAPES the backslash, so the retained node carries TWO literal backslashes,
+    ``[dir\\\\subdir]``. The fixtures below use that exact emitted shape: a
+    single-backslash fixture is what let the defect through the first time.
+    Measured on ``iterative__dvc-10842``: 89 collectable targets were flagged
     TARGET_NOT_COLLECTED, 87 of them declared PASS_TO_PASS.
     """
 
@@ -686,19 +687,21 @@ class TestWindowsParamSeparators:
             nodeid_to_junit_identity, normalise_node_name,
         )
         declared = "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]"
-        windows = "tests/func/test_checkout.py::test_partial_checkout[dir\\subdir]"
+        windows = "tests/func/test_checkout.py::test_partial_checkout[dir\\\\subdir]"
         assert nodeid_to_junit_identity(declared) == nodeid_to_junit_identity(windows)
+        # Both the ESCAPED (two backslashes) and the unescaped form collapse.
+        assert normalise_node_name("a[b\\\\c]") == "a[b/c]"
         assert normalise_node_name("a[b\\c]") == "a[b/c]"
 
     def test_a_windows_junit_still_scores_a_declared_pass(self):
-        """End-to-end through evaluate_execution: the evidence carries a
+        """End-to-end through evaluate_execution: the evidence carries an escaped
         backslash param id, the contract a POSIX one, and the node must resolve
         as passed rather than missing."""
         from qwen_train.f2_evaluator import evaluate_execution
         xml = (
             b'<testsuites><testsuite name="pytest" tests="1">'
             b'<testcase classname="tests.func.test_checkout" '
-            b'name="test_partial_checkout[dir\\subdir]" time="0.01"/>'
+            b'name="test_partial_checkout[dir\\\\subdir]" time="0.01"/>'
             b'</testsuite></testsuites>')
         outcome = evaluate_execution(
             xml,
@@ -711,14 +714,14 @@ class TestWindowsParamSeparators:
             "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]"
         ] == "passed"
 
-    def test_the_precheck_matches_across_separators(self):
+    def test_the_precheck_matches_the_real_escaped_form(self):
         from qwen_train.f2_s8_precheck import _target_collected
         assert _target_collected(
             "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]",
-            ["tests/func/test_checkout.py::test_partial_checkout[dir\\subdir]"])
+            ["tests/func/test_checkout.py::test_partial_checkout[dir\\\\subdir]"])
         assert not _target_collected(
             "tests/func/test_checkout.py::test_partial_checkout[dir/subdir]",
-            ["tests/func/test_checkout.py::test_other[dir\\subdir]"])
+            ["tests/func/test_checkout.py::test_other[dir\\\\subdir]"])
 
     def test_two_genuinely_different_tests_do_not_collapse(self):
         from qwen_train.f2_s8_precheck import _target_collected
