@@ -305,3 +305,52 @@ class TestCommandDeclaredPlugins:
         from qwen_train.f2_s8_pilot_build import command_plugins
         assert command_plugins("pytest -q tests/") == []
         assert command_plugins("") == []
+
+class TestDeclaredPytestPin:
+    """``DECLARED_ADJUSTMENTS[...]["pytest_pin"]`` was recorded in ``build_identity``
+    but never READ by the installer, so the global pin always won. That stopped
+    being cosmetic when litellm's Poetry dev group declared ``pytest>=7.4.3,<8.0.0``
+    and the install plan refused the build:
+    "conflicting declarations for pytest: no version satisfies lower 8.3.5 and
+    upper 8.0.0". The build refusing is correct; the dead field is the defect.
+    """
+
+    def test_a_declared_pin_wins_over_the_global_pin(self):
+        from qwen_train.f2_s8_pilot_build import (
+            PYTEST_PIN, effective_pytest_pin,
+        )
+        assert effective_pytest_pin({"pytest_pin": "pytest>=7.4.3,<8.0.0"}) == \
+            "pytest>=7.4.3,<8.0.0"
+        assert effective_pytest_pin({}) == PYTEST_PIN
+        assert effective_pytest_pin({"groups": ["dev"]}) == PYTEST_PIN
+
+    def test_litellm_declares_the_pin_its_dev_group_requires(self):
+        """The two must agree, or the install plan refuses the build. Checked by
+        intersection, not by string equality: both specifiers must accept a
+        common pytest version."""
+        from packaging.requirements import Requirement
+
+        from qwen_train.f2_s8_acquisition import (
+            DECLARED_ADJUSTMENTS, poetry_group_dependencies,
+        )
+        from qwen_train.f2_s8_pilot_build import effective_pytest_pin
+
+        project = Path(r"C:\f2_pilot\BerriAI__litellm-13675\repo")
+        if not project.is_dir():
+            import pytest
+            pytest.skip("litellm workspace is not built on this host")
+
+        groups, _ = poetry_group_dependencies(project)
+        group_reqs = [r for r in groups["dev"] if r.lower().startswith("pytest")]
+        assert group_reqs, "the dev group no longer declares pytest"
+        group_spec = Requirement(group_reqs[0]).specifier
+
+        pin_spec = Requirement(
+            effective_pytest_pin(DECLARED_ADJUSTMENTS["BerriAI__litellm-13675"])
+        ).specifier
+
+        common = [v for v in ("7.4.3", "7.4.4", "7.9.9", "8.3.5")
+                  if group_spec.contains(v) and pin_spec.contains(v)]
+        assert common, (
+            f"no pytest version satisfies both the dev group {group_spec} and the "
+            f"declared pin {pin_spec}; the install plan would refuse the build")

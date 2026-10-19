@@ -287,6 +287,19 @@ def command_plugins(test_cmd: str) -> list[str]:
     })
 
 
+def effective_pytest_pin(adjustment: Mapping[str, Any]) -> str:
+    """The pytest requirement the installer will use for one task.
+
+    ``DECLARED_ADJUSTMENTS[...]["pytest_pin"]`` was recorded in ``build_identity``
+    but never read, so the global pin always won. ``BerriAI__litellm-13675``
+    declares ``pytest>=7.4.3,<8.0.0`` in its Poetry dev group, and installing that
+    group against the global ``pytest==8.3.5`` made the install plan refuse the
+    build outright. A declared pin is the project's own statement of which pytest
+    its suite runs on, so it takes precedence.
+    """
+    return str(adjustment.get("pytest_pin") or PYTEST_PIN)
+
+
 def run(cmd, *, cwd=None, timeout=3600, check=True):
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     if check and proc.returncode != 0:
@@ -432,6 +445,16 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # so an adjustment naming ``test`` installed nothing beyond the pytest
     # plugins that happen to live there.
     adjustment: dict[str, Any] = dict(DECLARED_ADJUSTMENTS.get(task_id, {}))
+    # ``pytest_pin`` was declared per task and recorded in ``build_identity`` but
+    # never READ, so the installer always used the global pin.  That is not
+    # cosmetic once a task's own group constrains pytest: ``BerriAI__litellm-13675``
+    # declares ``pytest>=7.4.3,<8.0.0`` in its Poetry dev group, and the install
+    # plan refused the build outright -- "conflicting declarations for pytest: no
+    # version satisfies lower 8.3.5 and upper 8.0.0".  Honouring the declared pin
+    # is the faithful resolution: the project states which pytest its suite runs
+    # on, and the conflict detector cannot be satisfied by silently dropping one
+    # side of it.
+    pin = effective_pytest_pin(adjustment)
     # UNION the plugins the project's OWN pytest configuration demands.  The
     # hard-coded table above is keyed by instance id and goes stale the moment a
     # DIFFERENT instance of the same project is built (the phase-2 set contains
@@ -474,7 +497,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
             run([str(vpy), "-m", "pip", "install", "--quiet",
                  "--disable-pip-version-check", "--upgrade", "pip"], timeout=1800)
             run([str(vpy), "-m", "pip", "install", "--quiet",
-                 "--disable-pip-version-check", PYTEST_PIN, *extra], timeout=1800)
+                 "--disable-pip-version-check", pin, *extra], timeout=1800)
             # The project's OWN declared pytest plugins (e.g. pytest-django).
             # Without them pytest ignores DJANGO_SETTINGS_MODULE and every
             # module that imports the framework fails COLLECTION, so the declared
@@ -513,7 +536,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
                     f"declared test dependencies cannot be resolved: {detail}")
             plan = builder_install_plan(
                 context["dependency_inputs"],
-                pinned=[PYTEST_PIN],
+                pinned=[pin],
                 extra_deps=extra,
                 runtime_dependencies=context["runtime_dependencies"],
                 test_requirements=declared["requirements"],

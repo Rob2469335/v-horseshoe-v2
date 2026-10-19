@@ -136,7 +136,16 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
     # mcp, polars, starlette, opentelemetry, litellm_enterprise). Its own CI
     # installs ``pytest-xdist`` explicitly, which the DECLARED COMMAND now
     # derives -- so the command's ``-n 4`` has a provider.
-    "BerriAI__litellm-13675": {"groups": ["dev"]},
+    "BerriAI__litellm-13675": {
+        "groups": ["dev"],
+        # The project's OWN constraint, taken from the same dev group it declares.
+        # Installing that group while the builder held ``pytest==8.3.5`` made the
+        # install plan refuse the build: "conflicting declarations for pytest: no
+        # version satisfies lower 8.3.5 and upper 8.0.0". litellm's suite is
+        # written for pytest 7 and its CI runs that pin, so the project's
+        # declaration is the one that holds here.
+        "pytest_pin": "pytest>=7.4.3,<8.0.0",
+    },
 }
 
 DEFAULT_PYTEST_PIN = "pytest==8.3.5"
