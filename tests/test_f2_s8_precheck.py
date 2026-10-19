@@ -396,7 +396,17 @@ class TestDeclaredAdjustmentExtras:
         for task in ("iterative__dvc-10842", "iterative__dvc-10843",
                      "iterative__dvc-10844"):
             assert DECLARED_ADJUSTMENTS[task]["extras"] == [
-                "s3", "oss", "gs", "webdav", "webhdfs"]
+                "s3", "oss", "gs", "webdav", "webhdfs", "hdfs"]
+
+    def test_the_curated_dvc_extras_are_all_declared_by_the_project(self):
+        """Every curated extra must be one the project ITSELF declares -- this is
+        per-task curation of a declared source, never an invented package."""
+        from qwen_train.f2_s8_acquisition import DECLARED_ADJUSTMENTS
+        declared = {"s3", "oss", "gs", "webdav", "webhdfs", "hdfs",
+                    "azure", "gdrive", "ssh", "ssh_gssapi", "webhdfs_kerberos",
+                    "all", "dev", "lint", "testing", "tests"}
+        curated = DECLARED_ADJUSTMENTS["iterative__dvc-10842"]["extras"]
+        assert set(curated) <= declared
 
 class TestBatchCapRaised:
     """Owner-authorised raise 10 -> 50 (2026-10-19). The ceiling guard must

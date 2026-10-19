@@ -123,9 +123,20 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
     # source -- not an invented package. Measured: pre-check reported
     # ``MISSING_DECLARED_DEPENDENCY`` for exactly dvc_s3/dvc_oss/dvc_gs/
     # dvc_webdav/dvc_webhdfs on all three dvc instances.
-    "iterative__dvc-10842": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
-    "iterative__dvc-10843": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
-    "iterative__dvc-10844": {"extras": ["s3", "oss", "gs", "webdav", "webhdfs"]},
+    #
+    # ``hdfs`` added on separate evidence: ``tests/unit/fs/test_fs.py``
+    # parametrises over the filesystem classes it can import, so the declared
+    # target ``test_get_fs_cls[hdfs://example.com/dir/path-HDFSFileSystem]`` is
+    # only COLLECTED when ``HDFSFileSystem`` is importable. dvc declares
+    # ``hdfs = ["dvc-hdfs>=3,<4"]`` for exactly that class. Without it the
+    # param is never generated and the target is reported TARGET_NOT_COLLECTED
+    # -- an environment gap masquerading as an uncollectable task.
+    "iterative__dvc-10842": {
+        "extras": ["s3", "oss", "gs", "webdav", "webhdfs", "hdfs"]},
+    "iterative__dvc-10843": {
+        "extras": ["s3", "oss", "gs", "webdav", "webhdfs", "hdfs"]},
+    "iterative__dvc-10844": {
+        "extras": ["s3", "oss", "gs", "webdav", "webhdfs", "hdfs"]},
     # litellm is a POETRY project: its test dependencies live in
     # ``[tool.poetry.group.dev.dependencies]`` (19 entries, every one converting
     # cleanly to PEP 508), and it declares nothing in ``[dependency-groups]`` or
@@ -139,13 +150,6 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
     # derives -- so the command's ``-n 4`` has a provider.
     "BerriAI__litellm-13675": {
         "groups": ["dev"],
-        # Its optional runtime dependencies -- the ones its proxy suite imports --
-        # are declared in Poetry's ``[tool.poetry.extras]``, which the reader did
-        # not see. Measured before: 10 distinct ModuleNotFoundError
-        # (litellm_enterprise, mcp, polars, botocore, orjson, uvicorn, prisma,
-        # rich, fastapi_sso, email_validator); the ``proxy`` extra lists 23
-        # members covering 7 of them, and ``extra_proxy`` covers prisma.
-        "extras": ["proxy", "extra_proxy"],
         # The project's OWN constraint, taken from the same dev group it declares.
         # Installing that group while the builder held ``pytest==8.3.5`` made the
         # install plan refuse the build: "conflicting declarations for pytest: no
@@ -153,6 +157,15 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
         # written for pytest 7 and its CI runs that pin, so the project's
         # declaration is the one that holds here.
         "pytest_pin": "pytest>=7.4.3,<8.0.0",
+        # ``extras: ["proxy", "extra_proxy"]`` was TRIALLED and REVERTED. Those
+        # are the project's own declared extras and they do cover 8 of the 10
+        # modules its suite fails to import -- but the set includes ``uvloop``,
+        # which is Unix-only: installing it aborts with
+        # "RuntimeError: uvloop does not support Windows at the moment" and the
+        # build fails outright, which is strictly worse than a collection gap.
+        # Making this curation viable needs a member-level platform check (honour
+        # each declaration's PEP 508 marker), a mechanism the resolver does not
+        # yet have; until then the extras stay off and the gap is reported.
     },
 }
 
