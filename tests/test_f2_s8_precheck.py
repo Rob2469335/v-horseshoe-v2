@@ -397,3 +397,25 @@ class TestDeclaredAdjustmentExtras:
                      "iterative__dvc-10844"):
             assert DECLARED_ADJUSTMENTS[task]["extras"] == [
                 "s3", "oss", "gs", "webdav", "webhdfs"]
+
+class TestBatchCapRaised:
+    """Owner-authorised raise 10 -> 50 (2026-10-19). The ceiling guard must
+    track the approved cap and still refuse anything above it."""
+
+    def test_default_policy_cap_is_50(self):
+        from qwen_train.f2_s8_precheck import DEFAULT_POLICY
+        assert DEFAULT_POLICY["max_tasks_per_batch"] == 50
+
+    def test_phase_ops_max_batch_is_50(self):
+        from qwen_train.f2_s8_phase_ops import MAX_BATCH
+        assert MAX_BATCH == 50
+
+    def test_a_policy_above_the_approved_cap_is_still_refused(self):
+        from qwen_train.f2_s8_precheck import PrecheckError, _policy
+        import pytest as _pytest
+        with _pytest.raises(PrecheckError, match="50"):
+            _policy({"max_tasks_per_batch": 51})
+
+    def test_the_approved_cap_itself_is_accepted(self):
+        from qwen_train.f2_s8_precheck import _policy
+        assert _policy({"max_tasks_per_batch": 50})["max_tasks_per_batch"] == 50

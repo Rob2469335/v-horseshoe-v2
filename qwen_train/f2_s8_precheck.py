@@ -72,7 +72,8 @@ PRECHECK_VERSION = "1.0.0"
 
 DEFAULT_POLICY: dict[str, Any] = {
     "max_attempts": 3,
-    "max_tasks_per_batch": 10,
+    #: Raised 10 -> 50 on the owner's explicit authorization (2026-10-19).
+    "max_tasks_per_batch": 50,
     "max_grants_per_session": 5,
     "infra_stop_fraction": 0.10,
     # Code-pinned exclusions; a policy file may repeat but never remove them.
@@ -218,8 +219,11 @@ def _policy(policy: Mapping[str, Any] | None) -> dict[str, Any]:
     merged["infra_stop_fraction"] = float(merged["infra_stop_fraction"])
     if merged["max_attempts"] != 3:
         raise PrecheckError("max_attempts is frozen at 3")
-    if merged["max_tasks_per_batch"] > 10:
-        raise PrecheckError("max_tasks_per_batch may not exceed 10")
+    # Hard ceiling on the operative cap. Owner-authorised raise 10 -> 50
+    # (2026-10-19); this guard exists so a manifest can never widen the cap
+    # silently -- it must match the ceilng the owner actually approved.
+    if merged["max_tasks_per_batch"] > 50:
+        raise PrecheckError("max_tasks_per_batch may not exceed 50")
     return merged
 
 

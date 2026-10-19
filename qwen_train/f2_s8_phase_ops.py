@@ -40,7 +40,12 @@ __all__ = [
 
 PHASE_SCHEMA = "f2-s8-phase-manifest/v2"
 TARGET = 300
-MAX_BATCH = 10
+#: Operative batch cap. Raised 10 -> 50 on the owner's explicit authorization
+#: (2026-10-19) so a single-use grant amortises over a useful number of tasks
+#: instead of six. At the measured ~25% admission yield, 293 remaining
+#: admissions need ~1,170 scored tasks: at cap 10 that is ~195 single-use
+#: grants (each requiring an owner signature), at cap 50 it is ~24.
+MAX_BATCH = 50
 
 
 class PhaseOpsError(RuntimeError):
