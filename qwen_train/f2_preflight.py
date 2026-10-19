@@ -644,6 +644,7 @@ def _s8_base_gold_finding(s8_evidence: Any) -> Finding:
                 artifact_root=entry.get("artifact_root"),
                 authorized_evaluators=entry.get("authorized_evaluators"),
                 expected_gold_state_digest=entry.get("expected_gold_state_digest"),
+                expected_base_state_digest=entry.get("expected_base_state_digest"),
             )
         except Exception as exc:  # noqa: BLE001 - fail closed
             rejected.append(f"{tid or '?'}: verifier error: {exc}")

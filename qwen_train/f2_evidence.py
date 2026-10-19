@@ -696,6 +696,7 @@ def verify_task_evidence(
     artifact_root: Path | str | None = None,
     authorized_evaluators: Mapping[str, tuple[str, ...]] | None = None,
     expected_gold_state_digest: str | None = None,
+    expected_base_state_digest: str | None = None,
 ) -> EvidenceVerification:
     """Verify the base/gold PAIR for one task.
 
@@ -792,6 +793,21 @@ def verify_task_evidence(
         return _fail(
             STATE_IDENTITY_MISMATCH,
             "gold evidence state digest does not match the expected reference "
+            "state for this task",
+        )
+
+    # Symmetric per-task base verification. Owner-authorized additive amendment
+    # (2026-10-18): the ENVIRONMENT-level pair in SWARM_S8_BASE_STATE_DIGEST /
+    # SWARM_S8_GOLD_STATE_DIGEST is an environment assertion and is preserved
+    # unchanged; these per-task expected values are a SEPARATE, finer binding
+    # carried on the task's manifest entry. A task states the exact base state it
+    # claims, and a mismatch is a hard failure -- never a warning.
+    if expected_base_state_digest is not None and (
+        base_rec.execution_state_digest != expected_base_state_digest
+    ):
+        return _fail(
+            STATE_IDENTITY_MISMATCH,
+            "base evidence state digest does not match the expected reference "
             "state for this task",
         )
 

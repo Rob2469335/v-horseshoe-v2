@@ -744,3 +744,29 @@ class TestManifestSummary:
         assert s["evidence_verified"] == 1
         assert s["evidence_scientifically_sufficient"] == 1
         assert s["evidence_states"][STATE_VERIFIED] == 1
+    def test_12e_expected_base_state_digest_enforced(self, tmp_path):
+        """Owner-authorized additive amendment: per-task BASE binding, symmetric
+        with the existing gold one. A mismatch is a hard failure."""
+        base, gold = _pair(tmp_path)
+        v = _vp(base, gold, tmp_path, expected_base_state_digest=_sha("other"))
+        assert v.state == STATE_IDENTITY_MISMATCH
+
+    def test_12f_matching_per_task_digests_pass(self, tmp_path):
+        base, gold = _pair(tmp_path)
+        v = _vp(base, gold, tmp_path,
+                expected_base_state_digest=base.execution_state_digest,
+                expected_gold_state_digest=gold.execution_state_digest)
+        assert v.ok
+
+    def test_12g_omitting_per_task_bindings_preserves_prior_behaviour(self, tmp_path):
+        """Historical records carry no per-task binding and must keep working."""
+        base, gold = _pair(tmp_path)
+        assert _vp(base, gold, tmp_path).ok
+
+    def test_12h_base_and_gold_bindings_are_independent(self, tmp_path):
+        """A correct base binding must not excuse a wrong gold binding."""
+        base, gold = _pair(tmp_path)
+        v = _vp(base, gold, tmp_path,
+                expected_base_state_digest=base.execution_state_digest,
+                expected_gold_state_digest=_sha("other"))
+        assert v.state == STATE_IDENTITY_MISMATCH
