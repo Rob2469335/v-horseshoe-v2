@@ -1204,6 +1204,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--expected-revision", default=None)
     parser.add_argument("--expected-run-id", default=None)
     parser.add_argument("--out", default="post_batch_audit.json")
+    # ``audit_batch`` requires a sidecar evidence index by default, but the CLI
+    # never supplied one, so this entry point could NEVER return PASS -- it
+    # always reported EVIDENCE_INDEX_MISSING regardless of the batch. That made
+    # the CLI useless for the historical re-derivation it exists for, and it
+    # masked the real discrepancy underneath.
+    parser.add_argument("--evidence-index", default=None,
+                        help="sidecar evidence index produced for this batch")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     result = audit_batch(
@@ -1211,6 +1218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         staging_root=args.staging_root,
         manifest_path=args.manifest,
         inputs_dir=args.inputs,
+        evidence_index_path=args.evidence_index,
         expected_manifest_digest=args.expected_manifest_digest,
         expected_repository_revision=args.expected_revision,
         expected_run_id=args.expected_run_id,
