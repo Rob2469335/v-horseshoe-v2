@@ -103,7 +103,8 @@ ACQUISITION_SCHEMA = "f2_s8_acquisition_v1"
 #: re-run collection against an environment the new contract never produced.
 BUILDER_SOURCE = (
     "qwen_train/f2_s8_acquisition.py + qwen_train/f2_s8_pilot_build.py"
-    " (declared-test-deps v2)"
+    " (declared-test-deps v3: + Poetry dependency groups;"
+    " + plugins implied by the DECLARED COMMAND)"
 )
 
 #: Declarative, reproducible exceptions.  Each is a *build* decision, recorded in
