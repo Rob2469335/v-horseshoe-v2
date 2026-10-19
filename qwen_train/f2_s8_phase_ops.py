@@ -158,7 +158,13 @@ def build_phase(
         task for task in registered
         if isinstance(build.get(task), dict) and build[task].get("status") == "built"
     ]
-    policy = RetryPolicy()
+    # The operative cap must reach the SCHEDULER, not just the slice below.
+    # RetryPolicy defaults to max_tasks_per_run=25, so constructing it with no
+    # argument silently truncated every phase to 25 even though the owner raised
+    # MAX_BATCH to 50 -- i.e. 50-task phases were unplannable while the code
+    # claimed a cap of 50. Compute the effective size first and pass it through.
+    effective = max(1, min(int(size or MAX_BATCH), MAX_BATCH))
+    policy = RetryPolicy(max_tasks_per_run=effective)
     plan = plan_run(
         ordered_task_ids=built_registered,
         ledger=CombinedLedger(ledger_paths),
@@ -167,7 +173,6 @@ def build_phase(
         expected_registration_sha256=registration_sha256,
         policy=policy,
     )
-    effective = max(1, min(int(size or MAX_BATCH), MAX_BATCH))
     selected = list(plan.runnable[:effective])
     if not selected:
         raise PhaseOpsError(
@@ -208,7 +213,8 @@ def build_phase(
         "policy": policy.as_dict(),
         "selection": {
             "rule": "built only; plan_run skips admitted, terminal-scientific and "
-                    "retry-exhausted; then registration order; cap 10",
+                    "retry-exhausted; then registration order; cap "
+                    f"{effective} (MAX_BATCH={MAX_BATCH})",
             "registered": len(registered),
             "built_registered": len(built_registered),
             "runnable": len(plan.runnable),

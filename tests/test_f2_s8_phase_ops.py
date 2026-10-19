@@ -108,16 +108,49 @@ class TestBuildPhase:
         # t2 is admitted only in the second chain; it must be skipped.
         assert "t2" not in [t["task_id"] for t in phase["tasks"]]
 
-    def test_the_size_cap_is_ten(self, tmp_path):
+    def test_the_size_cap_is_the_operative_batch_cap(self, tmp_path):
+        from qwen_train.f2_s8_phase_ops import MAX_BATCH
+
         fx = _fixture(tmp_path)
         phase = build_phase(
             repo_root=REPO, build_manifest_path=fx["manifest"],
             registration_path=fx["registration"], registration_id="reg-1",
             registration_sha256="a" * 64,
             ledger_paths=[fx["chain1"], fx["chain2"]], out_path=fx["out"],
-            size=99,
+            size=MAX_BATCH + 1000,
         )
-        assert phase["selection"]["selected"] <= 10
+        assert phase["selection"]["selected"] <= MAX_BATCH
+
+    def test_the_effective_cap_reaches_the_scheduler_not_just_the_slice(self, tmp_path):
+        """A phase larger than the scheduler default must actually be planned.
+
+        ``RetryPolicy`` defaults to ``max_tasks_per_run=25``. Because
+        ``build_phase`` constructed it with no argument, every phase was silently
+        truncated to 25 tasks even though the owner had raised ``MAX_BATCH`` to 50
+        -- a 50-task phase was unplannable while the code claimed a cap of 50.
+        This test fails before that fix (30 selected -> 25) and passes after it.
+        """
+        fx = _fixture(tmp_path)
+        ws = tmp_path / "ws"
+        build = json.loads(fx["manifest"].read_text(encoding="utf-8"))
+        reg = json.loads(fx["registration"].read_text(encoding="utf-8"))
+        for i in range(30):
+            task = f"cap{i:02d}"
+            (ws / task).mkdir(parents=True, exist_ok=True)
+            build[task] = {"status": "built", "workspace": str(ws / task)}
+            reg.append(task)
+        fx["manifest"].write_text(json.dumps(build), encoding="utf-8")
+        fx["registration"].write_text(json.dumps(reg), encoding="utf-8")
+
+        phase = build_phase(
+            repo_root=REPO, build_manifest_path=fx["manifest"],
+            registration_path=fx["registration"], registration_id="reg-1",
+            registration_sha256="a" * 64,
+            ledger_paths=[fx["chain1"], fx["chain2"]], out_path=fx["out"],
+            size=30,
+        )
+        assert phase["selection"]["selected"] == 30
+        assert len(phase["tasks"]) == 30
 
     def test_an_empty_phase_is_refused(self, tmp_path):
         fx = _fixture(tmp_path)
