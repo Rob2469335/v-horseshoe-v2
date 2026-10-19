@@ -63,6 +63,27 @@ SOURCES: dict[str, dict[str, str]] = {
 
 _HEX40 = set("0123456789abcdef")
 
+#: The container directory a source's tests were RECORDED in, per the source's
+#: own harness contract -- not inferred from any task's expected node ids.
+#:
+#: A parametrised id can embed the directory pytest ran in, because a project's
+#: test source may parameterise over ``os.getcwd()`` (dvc's
+#: ``tests/unit/test_config.py`` does exactly that). The corpus was recorded in
+#: the dataset's evaluation container, so such ids embed that container's repo
+#: directory; this host executes in its own checkout. Declaring the root here lets
+#: both be canonicalised to one form instead of comparing unequal.
+#:
+#: ``swe-bench-live``: SWE-bench's ``make_test_spec`` sets ``env_name = "testbed"``
+#: and ``repo_directory = f"/{env_name}"``, i.e. ``/testbed`` -- the harness
+#: contract this source is built on.
+#:
+#: A source ABSENT from this map has no established root, so its ids are not
+#: root-mapped at all. That is deliberate: an unestablished binding must leave the
+#: node unresolved (fail-closed) rather than be guessed.
+DATASET_ROOTS: dict[str, str] = {
+    "swe-bench-live": "/testbed",
+}
+
 
 def _sha256_file(path: Path) -> str:
     h = hashlib.sha256()

@@ -728,3 +728,169 @@ class TestWindowsParamSeparators:
         assert not _target_collected(
             "t.py::test_x[a/b]",
             ["t.py::test_x[a/b/c]", "t.py::test_x[c/d]"])
+
+class TestCrossPlatformIdentity:
+    """Pre-check and scorer must make the SAME identity decision on the same
+    evidence. Two platform/version artefacts made one test compare unequal:
+    the workspace ROOT embedded by ``os.getcwd()`` parametrisation (the corpus
+    recorded ``/testbed``, this host runs in its own checkout) and the Python 3.11
+    ``IntEnum.__str__`` change (``TaskStatus.RUNNING`` vs ``2``). Measured on dvc:
+    all 5/8/8 residual PASS_TO_PASS targets resolved once both were canonicalised.
+    """
+
+    DATASET_ROOT = "/testbed"
+    EXEC_ROOT = r"C:\f2_pilot\iterative__dvc-10842\repo"
+
+    def test_the_known_root_mismatch_maps_when_the_binding_is_valid(self):
+        from qwen_train.f2_evaluator import canonical_node_identity
+        declared = "tests/unit/test_config.py::test_to_relpath[/testbed-/testbed]"
+        collected = ("tests/unit/test_config.py::test_to_relpath"
+                     r"[C:\\f2_pilot\\iterative__dvc-10842\\repo-"
+                     r"C:\\f2_pilot\\iterative__dvc-10842\\repo]")
+        assert (canonical_node_identity(
+            declared, dataset_root=self.DATASET_ROOT, execution_root=self.EXEC_ROOT)
+            == canonical_node_identity(
+                collected, dataset_root=self.DATASET_ROOT,
+                execution_root=self.EXEC_ROOT))
+
+    def test_a_subpath_still_carries_its_relative_tail(self):
+        from qwen_train.f2_evaluator import ROOT_SENTINEL, canonical_node_identity
+        got = canonical_node_identity(
+            "t.py::test_resolve[cache-/testbed/conf_dir/cache]",
+            dataset_root=self.DATASET_ROOT, execution_root=self.EXEC_ROOT)
+        assert got == "t.py::test_resolve[cache-%s/conf_dir/cache]" % ROOT_SENTINEL
+
+    def test_an_unrelated_absolute_path_is_not_mapped(self):
+        """Nothing but the two supplied roots may be rewritten."""
+        from qwen_train.f2_evaluator import canonical_node_identity
+        for unrelated in ("ssh://some/path-ssh://some/path",
+                          "s3://bucket/key",
+                          "/testbedfoo/x"):
+            got = canonical_node_identity(
+                "t.py::test_x[%s]" % unrelated,
+                dataset_root=self.DATASET_ROOT, execution_root=self.EXEC_ROOT)
+            assert unrelated in got, unrelated
+
+    def test_a_root_is_only_matched_as_a_complete_path_prefix(self):
+        """``/testbed`` must not match inside ``/testbedfoo``."""
+        from qwen_train.f2_evaluator import ROOT_SENTINEL, canonical_node_identity
+        assert ROOT_SENTINEL not in canonical_node_identity(
+            "t.py::test_x[/testbedfoo]", dataset_root=self.DATASET_ROOT)
+        assert ROOT_SENTINEL in canonical_node_identity(
+            "t.py::test_x[/testbed/foo]", dataset_root=self.DATASET_ROOT)
+
+    def test_no_bindings_leaves_the_node_unresolved(self):
+        """Fail-closed: without a binding nothing is mapped, so the mismatch
+        survives rather than being papered over."""
+        from qwen_train.f2_evaluator import canonical_node_identity
+        declared = "t.py::test_x[/testbed-/testbed]"
+        collected = "t.py::test_x[C:/repo-C:/repo]"
+        assert canonical_node_identity(declared) != canonical_node_identity(collected)
+
+    def test_a_malformed_root_binding_cannot_create_a_false_match(self):
+        from qwen_train.f2_evaluator import canonical_node_identity
+        assert canonical_node_identity(
+            "t.py::test_x[a]", dataset_root="", execution_root="") == "t.py::test_x[a]"
+
+    def test_the_known_enum_case_maps_only_when_equivalence_is_established(self):
+        from qwen_train.f2_evaluator import canonical_node_identity
+        table = {"TaskStatus": {"PENDING": 0, "PREPARING": 1, "RUNNING": 2,
+                                "SUCCESS": 3, "FAILED": 4}}
+        assert canonical_node_identity(
+            "test_show.py::test_show_running[TaskStatus.RUNNING-True]",
+            enum_values=table) == "test_show.py::test_show_running[2-True]"
+        # An UNKNOWN member is left verbatim -- never guessed.
+        assert canonical_node_identity(
+            "test_show.py::test_show_running[TaskStatus.QUANTUM-True]",
+            enum_values=table) == "test_show.py::test_show_running[TaskStatus.QUANTUM-True]"
+
+    def test_an_unrelated_numeric_param_is_never_rewritten(self):
+        """The forbidden direction: numeric values must not become enum names."""
+        from qwen_train.f2_evaluator import canonical_node_identity
+        table = {"TaskStatus": {"RUNNING": 2}}
+        assert canonical_node_identity(
+            "t.py::test_x[2-True]", enum_values=table) == "t.py::test_x[2-True]"
+        assert canonical_node_identity(
+            "other.py::Other.RUNNING", enum_values=table) == "other.py::Other.RUNNING"
+
+    def test_distinct_members_keep_distinct_values(self, tmp_path):
+        from qwen_train.f2_evaluator import enum_member_values
+        (tmp_path / "m.py").write_text(
+            "from enum import IntEnum\n\n\nclass TaskStatus(IntEnum):\n"
+            "    PENDING = 0\n    RUNNING = 2\n    FAILED = 4\n\n\n"
+            "class Unrelated:\n    RUNNING = 2\n", encoding="utf-8")
+        table = enum_member_values(tmp_path, ["TaskStatus", "Unrelated"])
+        # Only the class actually asked for, and only if it is an Enum subclass.
+        assert table == {"TaskStatus": {"PENDING": 0, "RUNNING": 2, "FAILED": 4}}
+        assert len(set(table["TaskStatus"].values())) == 3
+
+    def test_the_same_evidence_resolves_identically_in_precheck_and_scoring(self):
+        """The agreement that matters: one retained JUnit, one declared contract,
+        two different code paths, one verdict."""
+        from qwen_train.f2_evaluator import evaluate_execution
+        from qwen_train.f2_s8_precheck import _target_collected
+
+        declared = [
+            "tests/unit/test_config.py::test_to_relpath[/testbed-/testbed]",
+            "tests/func/experiments/test_show.py::test_show_running[TaskStatus.RUNNING-True]",
+        ]
+        collect_id = (
+            r"tests/unit/test_config.py::test_to_relpath[C:\\f2_pilot\\repo-C:\\f2_pilot\\repo]")
+        junit_id = "test_show_running[2-True]"
+        nodes = [collect_id]
+        assert "2-True" in junit_id
+
+        assert _target_collected(
+            declared[0], nodes, dataset_root=self.DATASET_ROOT,
+            execution_root=r"C:\f2_pilot\repo")
+        assert not _target_collected(
+            declared[1], nodes, dataset_root=self.DATASET_ROOT,
+            execution_root=r"C:\f2_pilot\repo")
+
+        xml = (
+            b'<testsuites><testsuite name="pytest" tests="2">'
+            b'<testcase classname="tests.unit.test_config" '
+            b'name="test_to_relpath[C:\\\\f2_pilot\\\\repo-C:\\\\f2_pilot\\\\repo]"/>'
+            b'<testcase classname="tests.func.experiments.test_show" '
+            b'name="test_show_running[2-True]"/>'
+            b'</testsuite></testsuites>')
+        outcome = evaluate_execution(
+            xml, fail_to_pass=declared,
+            dataset_root=self.DATASET_ROOT, execution_root=r"C:\f2_pilot\repo",
+            enum_values={"TaskStatus": {"RUNNING": 2}},
+            instance_id="iterative__dvc-10842",
+        )
+        # Both code paths must see BOTH nodes as present.
+        assert outcome.fail_to_pass[declared[0]] == "passed"
+        assert outcome.fail_to_pass[declared[1]] == "passed"
+
+    def test_collapsing_two_declared_ids_onto_one_identity_fails_closed(self):
+        """A binding that MERGES distinct declared tests must refuse, not score
+        one node from the other's evidence."""
+        from qwen_train.f2_evaluator import EvaluatorError, evaluate_execution
+        xml = (b'<testsuites><testsuite name="pytest" tests="1">'
+               b'<testcase classname="m" name="test_x[2]"/>'
+               b'</testsuite></testsuites>')
+        import pytest as _pytest
+        with _pytest.raises(EvaluatorError, match="collide"):
+            evaluate_execution(
+                xml,
+                fail_to_pass=["m.py::test_x[TaskStatus.RUNNING]",
+                              "m.py::test_x[2]"],
+                enum_values={"TaskStatus": {"RUNNING": 2}},
+                instance_id="merge-test",
+            )
+
+    def test_precheck_and_scoring_agree_without_bindings_too(self):
+        """Unchanged legacy behaviour: with no bindings both sides still compare
+        separators only -- the mapping layer is additive."""
+        from qwen_train.f2_evaluator import evaluate_execution
+        from qwen_train.f2_s8_precheck import _target_collected
+        declared = "t.py::test_x[dir/subdir]"
+        nodes = [r"t.py::test_x[dir\\subdir]"]
+        assert _target_collected(declared, nodes)
+        xml = (b'<testsuites><testsuite name="pytest" tests="1">'
+               b'<testcase classname="t" name="test_x[dir\\\\subdir]"/>'
+               b'</testsuite></testsuites>')
+        outcome = evaluate_execution(xml, fail_to_pass=[declared], instance_id="x")
+        assert outcome.fail_to_pass[declared] == "passed"

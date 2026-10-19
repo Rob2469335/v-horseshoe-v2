@@ -51,11 +51,13 @@ from typing import Any, Callable, Mapping, Sequence
 
 from qwen_train.f2_evaluator import (
     analyze_test_invocation,
+    canonical_node_identity,
     changed_module_paths,
     classify_collection_cause,
-    normalise_node_name,
+    enum_member_values,
 )
 from qwen_train.f2_population_build import source_to_screen_row
+from qwen_train.f2_population_acquire import DATASET_ROOTS
 from qwen_train.f2_s8_acquisition import AcquisitionError, resolve_project_subdir
 
 __all__ = [
@@ -401,14 +403,43 @@ def _parse_collect(stdout: str, stderr: str) -> dict[str, Any]:
     return {"nodes": sorted(set(nodes)), "errors": errors}
 
 
-def _target_collected(target: str, nodes: Sequence[str]) -> bool:
-    # Separators are normalised before comparing. The corpus records POSIX ids
-    # (``test_x[dir/subdir]``) while Windows pytest emits ``test_x[dir\subdir]``
-    # for the same test, so an exact comparison reported 89 collectable dvc
-    # targets as TARGET_NOT_COLLECTED; 87 of them were declared PASS_TO_PASS.
-    wanted = normalise_node_name(target)
+def _enum_class_names(targets: Sequence[str]) -> list[str]:
+    """Class names the declared ids reference as ``Name.MEMBER``.
+
+    Bounded on purpose: only classes actually named by a target are looked up, so
+    the project scan runs for tasks that need it and never invents a class.
+    """
+    names: set[str] = set()
+    for target in targets:
+        names.update(re.findall(r"\b([A-Za-z_]\w*)\.[A-Za-z_]\w*\b", str(target)))
+    return sorted(names)
+
+
+def _target_collected(
+    target: str,
+    nodes: Sequence[str],
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> bool:
+    """Is ``target`` present in a collected node list?
+
+    Both sides go through the SAME :func:`canonical_node_identity` the scorer
+    uses, with the SAME bindings, so what the pre-check accepts as collected is
+    exactly what the scorer can resolve. Separators alone accounted for 89
+    collectable dvc targets reported TARGET_NOT_COLLECTED (87 of them declared
+    PASS_TO_PASS); the workspace root and enum rendering account for the rest.
+    """
+    wanted = canonical_node_identity(
+        target, dataset_root=dataset_root, execution_root=execution_root,
+        enum_values=enum_values,
+    )
     for node in nodes:
-        got = normalise_node_name(node)
+        got = canonical_node_identity(
+            node, dataset_root=dataset_root, execution_root=execution_root,
+            enum_values=enum_values,
+        )
         if got == wanted:
             return True
         if got.endswith("/" + wanted) or wanted.endswith("/" + got):
@@ -447,11 +478,19 @@ def _classify_side(
     stderr: str,
     targets: Sequence[str],
     changed_modules: Sequence[str],
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
     parsed = _parse_collect(stdout, stderr)
     nodes = parsed["nodes"]
     errors = parsed["errors"]
-    missing = [t for t in targets if not _target_collected(t, nodes)]
+    bindings = {
+        "dataset_root": dataset_root,
+        "execution_root": execution_root,
+        "enum_values": enum_values,
+    }
+    missing = [t for t in targets if not _target_collected(t, nodes, **bindings)]
     base = {
         "side": side,
         "returncode": returncode,
@@ -461,6 +500,13 @@ def _classify_side(
         "targets_total": len(targets),
         "targets_missing": missing,
         "error_text": "\n".join(errors)[:4000],
+        # The bindings actually used, so a later reader can re-derive the same
+        # identity decisions instead of trusting the outcome.
+        "identity_bindings": {
+            "dataset_root": dataset_root,
+            "execution_root": execution_root,
+            "enum_classes": sorted((enum_values or {}).keys()),
+        },
     }
     if returncode == 0 and not errors and not missing:
         return {**base, "status": SIDE_PASS, "reason_codes": []}
@@ -727,6 +773,16 @@ def run_precheck(
         # ``test_cmds[0]`` here (as this code previously did) meant a task could
         # collect under one command and be executed under another.
         source_key = str(record.get("source") or "swe-bench-live")
+        # Identity bindings for this task. The dataset root comes from the
+        # SOURCE's declared harness contract, never from the task's own expected
+        # ids; the execution root is each side's actual cwd and is supplied per
+        # side at the comparison. The enum table is read from the project's own
+        # source, and only for classes the declared ids actually reference -- so a
+        # task with no dotted param never pays for the scan.
+        dataset_root = DATASET_ROOTS.get(source_key, "")
+        enum_values = enum_member_values(
+            workspace / "repo", _enum_class_names(targets)
+        )
         try:
             canonical_cmd = str(source_to_screen_row(source_key, record)["test_cmd"])
         except Exception:  # noqa: BLE001 - unresolvable identity is fail-closed
@@ -862,6 +918,8 @@ def run_precheck(
             side_result = _classify_side(
                 side=side, returncode=returncode, stdout=stdout, stderr=stderr,
                 targets=targets, changed_modules=changed,
+                dataset_root=dataset_root, execution_root=str(cwd),
+                enum_values=enum_values,
             )
             side_result["command"] = cmd
             side_result["venv_python"] = str(python)

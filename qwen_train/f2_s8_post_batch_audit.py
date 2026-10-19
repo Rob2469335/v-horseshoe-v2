@@ -41,14 +41,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from qwen_train.f2_evaluator import (
     changed_module_paths,
+    enum_member_values,
     evaluate_execution,
 )
+from qwen_train.f2_population_acquire import DATASET_ROOTS
 
 __all__ = [
     "SCHEMA",
@@ -202,6 +205,27 @@ class TaskContract:
     fail_to_pass: tuple[str, ...]
     pass_to_pass: tuple[str, ...]
     changed_modules: tuple[str, ...]
+    #: Identity bindings (see :func:`qwen_train.f2_evaluator.canonical_node_identity`).
+    #: Carried ON THE CONTRACT so the scorer derives them the same way the
+    #: pre-check does, from the same declarations -- a binding supplied in one
+    #: place only is exactly the disagreement this exists to prevent.
+    #:
+    #: ``workspace`` is the built task workspace; the EXECUTION root is its
+    #: ``repo``/``repo_gold`` per side, resolved at the comparison. ``dataset_root``
+    #: comes from the source's declared harness contract. ``enum_values`` is read
+    #: from the project's own source. All default to empty, which maps nothing and
+    #: preserves the previous behaviour for callers that do not supply them.
+    workspace: str = ""
+    dataset_root: str = ""
+    enum_values: Mapping[str, Mapping[str, int]] | None = None
+
+
+def _enum_class_names(values: Sequence[str]) -> list[str]:
+    """Class names the declared ids reference as ``Name.MEMBER`` (bounded)."""
+    names: set[str] = set()
+    for value in values:
+        names.update(re.findall(r"\b([A-Za-z_]\w*)\.[A-Za-z_]\w*\b", str(value)))
+    return sorted(names)
 
 
 def _as_node_ids(value: Any, label: str) -> tuple[str, ...]:
@@ -228,8 +252,16 @@ def _as_node_ids(value: Any, label: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-def contract_from_record(record: Mapping[str, Any]) -> TaskContract:
-    """Build a contract from a pilot input record (the canonical source)."""
+def contract_from_record(
+    record: Mapping[str, Any], *, workspace: str = ""
+) -> TaskContract:
+    """Build a contract from a pilot input record (the canonical source).
+
+    The identity bindings are derived HERE, from the same declarations the
+    pre-check reads: ``dataset_root`` from the record's own ``source``, and
+    ``enum_values`` from the built project's source. Nothing is inferred from the
+    expected ids themselves.
+    """
     f2p = _as_node_ids(
         record.get("FAIL_TO_PASS", record.get("fail_to_pass")), "FAIL_TO_PASS"
     )
@@ -237,18 +269,30 @@ def contract_from_record(record: Mapping[str, Any]) -> TaskContract:
         record.get("PASS_TO_PASS", record.get("pass_to_pass")), "PASS_TO_PASS"
     )
     patch = str(record.get("patch") or "")
+    source_key = str(record.get("source") or "swe-bench-live")
+    enum_values: dict[str, dict[str, int]] = {}
+    if workspace:
+        enum_values = enum_member_values(
+            Path(workspace) / "repo", _enum_class_names((*f2p, *p2p))
+        )
     return TaskContract(
         fail_to_pass=f2p,
         pass_to_pass=p2p,
         changed_modules=changed_module_paths(patch),
+        workspace=str(workspace or ""),
+        dataset_root=DATASET_ROOTS.get(source_key, ""),
+        enum_values=enum_values,
     )
 
 
-def load_contracts(inputs_dir: Path | str) -> dict[str, TaskContract]:
+def load_contracts(
+    inputs_dir: Path | str, *, workspaces: Mapping[str, str] | None = None
+) -> dict[str, TaskContract]:
     """Load every task contract from a pilot inputs directory, fail closed."""
     root = Path(inputs_dir)
     if not root.is_dir():
         raise BatchAuditError(f"inputs directory does not exist: {root}")
+    by_task = {str(k): str(v) for k, v in (workspaces or {}).items()}
     contracts: dict[str, TaskContract] = {}
     for path in sorted(root.glob("*.json")):
         try:
@@ -259,7 +303,8 @@ def load_contracts(inputs_dir: Path | str) -> dict[str, TaskContract]:
             raise BatchAuditError(f"input record {path} is not a JSON object")
         task_id = str(record.get("instance_id") or path.stem)
         try:
-            contracts[task_id] = contract_from_record(record)
+            contracts[task_id] = contract_from_record(
+                record, workspace=by_task.get(task_id, ""))
         except BatchAuditError as exc:
             raise BatchAuditError(f"input record {path} is malformed: {exc}") from exc
     return contracts
@@ -716,7 +761,12 @@ def audit_batch(
     # ---- contracts --------------------------------------------------------
     if contracts is None and inputs_dir is not None:
         try:
-            contracts = load_contracts(inputs_dir)
+            # The built workspace per task, so the contract can carry the
+            # execution-side identity bindings the pre-check used for it.
+            contracts = load_contracts(inputs_dir, workspaces={
+                str(k): str((v or {}).get("workspace") or "")
+                for k, v in manifest.items()
+            })
         except BatchAuditError as exc:
             contracts = {}
             discrepancies.append(
@@ -848,6 +898,16 @@ def audit_batch(
                         side_info["status"] = "no_contract"
                         continue
                     try:
+                        # Same identity bindings the pre-check used for this task:
+                        # the dataset root the source declares, this side's actual
+                        # execution root, and the project's own enum table. A
+                        # binding applied in one place only would make the two
+                        # disagree about the same retained evidence.
+                        execution_root = (
+                            str(Path(contract.workspace) /
+                                ("repo" if side == "base" else "repo_gold"))
+                            if contract.workspace else ""
+                        )
                         outcome_obj = evaluate_execution(
                             junit_bytes,
                             fail_to_pass=list(contract.fail_to_pass),
@@ -855,6 +915,9 @@ def audit_batch(
                             instance_id=task_id,
                             execution_state_identity=side,
                             changed_modules=list(contract.changed_modules),
+                            dataset_root=contract.dataset_root,
+                            execution_root=execution_root,
+                            enum_values=contract.enum_values,
                         )
                     except Exception as exc:  # noqa: BLE001 - any evaluator failure is malformed evidence
                         task_discrepancies.append(

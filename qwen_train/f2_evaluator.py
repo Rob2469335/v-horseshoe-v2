@@ -73,6 +73,10 @@ __all__ = [
     "EvaluatorError",
     "nodeid_to_junit_identity",
     "normalise_node_name",
+    "canonical_node_identity",
+    "canonicalise_enum_members",
+    "enum_member_values",
+    "ROOT_SENTINEL",
     "parse_junit_xml",
     "evaluate_execution",
     "render_report",
@@ -149,13 +153,142 @@ def normalise_node_name(name: str) -> str:
     return re.sub(r"\\+", "/", str(name))
 
 
-def nodeid_to_junit_identity(nodeid: str) -> JUnitIdentity:
+#: The canonical stand-in a workspace ROOT is rewritten to before comparison.
+#: A sentinel rather than a real path, so a param that legitimately contains a
+#: path string cannot collide with a mapped root.
+ROOT_SENTINEL = "<repo-root>"
+
+
+def _root_pattern(root: str) -> re.Pattern[str]:
+    """A BOUNDED pattern matching one workspace root as a complete path prefix.
+
+    ``/testbed`` must not match inside ``/testbedfoo`` (guarded lookahead) nor be
+    reached through an enclosing path (guarded lookbehind), so substituting a root
+    can never rewrite an unrelated absolute path into a match.
+    """
+    norm = re.escape(normalise_node_name(root).rstrip("/"))
+    return re.compile(r"(?<![A-Za-z0-9_./\\])" + norm + r"(?![A-Za-z0-9_.])")
+
+
+def canonical_node_identity(
+    name: str,
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> str:
+    """The canonical comparison form of one pytest node name.
+
+    Three platform/version artefacts make the SAME test compare unequal, and each
+    is repaired here so the pre-check and the scorer cannot disagree:
+
+    1. **Separators and pytest's escaping** -- see :func:`normalise_node_name`.
+    2. **Workspace ROOT.** A parametrised id may embed the directory pytest ran
+       in (``test_to_relpath[/testbed-/testbed]``, where the parameter is literally
+       ``os.getcwd()``). The corpus was recorded in the dataset's container, whose
+       repo directory is ``/testbed``; this host executes in its own checkout, so
+       the same test collects as ``[C:/f2_pilot/.../repo-...]``. Both roots are
+       rewritten to :data:`ROOT_SENTINEL`. Each root must be supplied
+       EXPLICITLY -- the dataset root from its source declaration, the execution
+       root from the build manifest -- so nothing here guesses a binding, and an
+       unsupplied root simply does not map (leaving the node unresolved, which is
+       fail-closed).
+    3. **Enum rendering.** Python 3.11 changed ``IntEnum.__str__`` to render the
+       VALUE, so a parameter that pytest id-rendered as ``TaskStatus.RUNNING``
+       under the corpus's Python now renders as ``2``. Member names are rewritten
+       to their VALUES, using a table read from the project's own source (see
+       :func:`enum_member_values`). Only names present in that table are touched,
+       so unrelated parameters and bare integers are left exactly as they were --
+       distinct members keep distinct values.
+    """
+    text = normalise_node_name(name)
+    if enum_values:
+        text = canonicalise_enum_members(text, enum_values)
+    for root in (dataset_root, execution_root):
+        if root:
+            text = _root_pattern(root).sub(ROOT_SENTINEL, text)
+    return text
+
+
+def canonicalise_enum_members(
+    text: str, enum_values: Mapping[str, Mapping[str, int]]
+) -> str:
+    """Rewrite ``Class.MEMBER`` to the member's integer value, table permitting.
+
+    The table comes from the project's own source, so a token is only rewritten
+    when the project actually defines that member. A dotted token whose class or
+    member is absent is left verbatim -- never guessed -- so an unmapped or
+    genuinely different parameter keeps its own identity.
+    """
+    def _replace(match: re.Match[str]) -> str:
+        table = enum_values.get(match.group(1))
+        if table and match.group(2) in table:
+            return str(table[match.group(2)])
+        return match.group(0)
+
+    return re.sub(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b", _replace, text)
+
+
+def enum_member_values(
+    project: Path, class_names: Iterable[str]
+) -> dict[str, dict[str, int]]:
+    """Member-name to integer value, read from the project's OWN source.
+
+    Bounded and deterministic: only classes explicitly asked for are collected,
+    and only plain ``NAME = <int>`` assignments are read, so an enum's identity is
+    taken from the authoritative definition rather than assumed from a rendered
+    id. A class the project does not define yields no entry, which leaves the
+    tokens that reference it unresolved instead of fabricating a match.
+    """
+    wanted = {str(n) for n in class_names if str(n)}
+    table: dict[str, dict[str, int]] = {}
+    if not wanted:
+        return table
+    root = Path(project)
+    for path in sorted(root.rglob("*.py")):
+        if any(part in (".venv", ".venv_gold", "__pycache__") for part in path.parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in re.finditer(
+            r"^class\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:\s*$", text, re.MULTILINE
+        ):
+            name, bases = match.group(1), match.group(2)
+            if name not in wanted or "Enum" not in bases:
+                continue
+            body = text[match.end():]
+            members: dict[str, int] = {}
+            for line in body.splitlines():
+                if line and not line.startswith((" ", "\t")):
+                    break                      # end of the class body
+                assign = re.match(r"\s+([A-Za-z_]\w*)\s*=\s*(\d+)\s*(?:#.*)?$", line)
+                if assign:
+                    members[assign.group(1)] = int(assign.group(2))
+            if members:
+                table[name] = members
+    return table
+
+
+def nodeid_to_junit_identity(
+    nodeid: str,
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> JUnitIdentity:
     """Exact inverse of pytest's ``junitxml`` classname/name split.
 
     pytest writes ``classname`` as the module path with ``/`` replaced by ``.``
     and the ``.py`` suffix removed, followed by the class chain joined with
     ``.``. ``name`` is the final ``::`` segment with any parametrisation
     bracket intact.
+
+    The ``name`` is passed through :func:`canonical_node_identity`, so platform
+    and version artefacts (separators, workspace root, enum rendering) resolve the
+    same way here as in the pre-check. The bindings MUST be the same values the
+    pre-check used, or the two would disagree about the same evidence.
 
     Raises :class:`EvaluatorError` for a node id that cannot be decomposed,
     rather than guessing.
@@ -179,19 +312,32 @@ def nodeid_to_junit_identity(nodeid: str) -> JUnitIdentity:
     if not module:
         raise EvaluatorError(f"declared test node id {text!r} yields an empty module name")
     classname = ".".join([module, *rest[:-1]])
-    name = normalise_node_name(rest[-1])
+    name = canonical_node_identity(
+        rest[-1], dataset_root=dataset_root, execution_root=execution_root,
+        enum_values=enum_values,
+    )
     if not name:
         raise EvaluatorError(f"declared test node id {text!r} yields an empty test name")
     return JUnitIdentity(classname=classname, name=name)
 
 
-def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
+def parse_junit_xml(
+    data: bytes,
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> dict[JUnitIdentity, str]:
     """Parse retained JUnit XML into ``{identity: status}``.
 
     Fails closed on anything that is not well-formed, bounded, doctype-free
     JUnit XML. A duplicate ``(classname, name)`` pair is an error: pytest can
     legitimately emit two cases for one identity under ``--lf``/rerun plugins,
     and silently picking one would make the result order-dependent.
+
+    Each case ``name`` is canonicalised with the SAME bindings the declared
+    contract is canonicalised with, so an artefact of the executing platform
+    cannot make a test that ran and passed look absent.
     """
     if not isinstance(data, (bytes, bytearray)):
         raise EvaluatorError(f"junit evidence must be bytes, got {type(data).__name__}")
@@ -222,8 +368,13 @@ def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
             raise EvaluatorError(
                 "junit evidence contains a <testcase> without classname/name"
             )
-        ident = JUnitIdentity(classname=str(classname),
-                               name=normalise_node_name(str(name)))
+        ident = JUnitIdentity(
+            classname=str(classname),
+            name=canonical_node_identity(
+                str(name), dataset_root=dataset_root,
+                execution_root=execution_root, enum_values=enum_values,
+            ),
+        )
         tags = {child.tag for child in case}
         if "skipped" in tags:
             status = STATUS_SKIPPED
@@ -454,6 +605,34 @@ def _normalise_declaration(values: Iterable[Any] | None, label: str) -> list[str
     return out
 
 
+def _assert_identities_distinct(
+    declared: Sequence[str],
+    label: str,
+    instance_id: str,
+    bindings: Mapping[str, Any],
+) -> None:
+    """Refuse a canonicalisation that MERGES two declared ids onto one identity.
+
+    Distinct declared ids must stay distinct. If two collapse together, one node
+    would be read from the other's evidence entry and could be scored as passing
+    without ever having run -- the failure direction that matters most. Names the
+    colliding canonical forms so the offending binding can be corrected.
+    """
+    seen: dict[str, str] = {}
+    clashes: list[str] = []
+    for nodeid in declared:
+        canon = canonical_node_identity(nodeid, **bindings)
+        if canon in seen:
+            clashes.append(f"{seen[canon]!r} and {nodeid!r} -> {canon!r}")
+        else:
+            seen[canon] = nodeid
+    if clashes:
+        raise EvaluatorError(
+            f"{label} identities collide after canonicalisation for "
+            f"{instance_id or 'this task'}: {'; '.join(clashes)}"
+        )
+
+
 def evaluate_execution(
     junit_bytes: bytes,
     *,
@@ -462,6 +641,9 @@ def evaluate_execution(
     instance_id: str = "",
     execution_state_identity: str = "",
     changed_modules: Sequence[str] | None = None,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
 ) -> EvaluationOutcome:
     """Evaluate one execution's retained JUnit evidence against the declared contract.
 
@@ -473,6 +655,13 @@ def evaluate_execution(
     PASS_TO_PASS is evaluated and reported but never changes ``declared_result``:
     a PASS_TO_PASS regression is a separate, pre-declared exclusion reason
     handled by admission, not a substitute for the primary FAIL_TO_PASS verdict.
+
+    ``dataset_root`` / ``execution_root`` / ``enum_values`` are the identity
+    bindings (see :func:`canonical_node_identity`). They MUST be the same values
+    the pre-check used for the same task: supplying them here and not there -- or
+    different values in each -- is exactly the disagreement this parameter set
+    exists to prevent. All three default to empty, which maps nothing and leaves
+    the previous behaviour intact.
     """
     declared_f2p = _normalise_declaration(fail_to_pass, "FAIL_TO_PASS")
     declared_p2p = _normalise_declaration(pass_to_pass, "PASS_TO_PASS")
@@ -482,17 +671,30 @@ def evaluate_execution(
             "empty declared contract"
         )
 
-    statuses = parse_junit_xml(junit_bytes)
+    bindings = {
+        "dataset_root": dataset_root,
+        "execution_root": execution_root,
+        "enum_values": enum_values,
+    }
+    statuses = parse_junit_xml(junit_bytes, **bindings)
 
     resolved: dict[str, str] = {}
     for nodeid in declared_f2p:
-        ident = nodeid_to_junit_identity(nodeid)
+        ident = nodeid_to_junit_identity(nodeid, **bindings)
         resolved[nodeid] = statuses.get(ident, STATUS_MISSING)
 
     resolved_p2p: dict[str, str] = {}
     for nodeid in declared_p2p:
-        ident = nodeid_to_junit_identity(nodeid)
+        ident = nodeid_to_junit_identity(nodeid, **bindings)
         resolved_p2p[nodeid] = statuses.get(ident, STATUS_MISSING)
+
+    # Canonicalisation must never MERGE two declared ids onto one evidence
+    # identity: the second node would then inherit the first's status, which could
+    # pass a node that never ran. The enum table maps distinct members to distinct
+    # values and each root is a single prefix, so a collision means the bindings do
+    # not describe this task -- fail closed and name it rather than score it.
+    _assert_identities_distinct(declared_f2p, "FAIL_TO_PASS", instance_id, bindings)
+    _assert_identities_distinct(declared_p2p, "PASS_TO_PASS", instance_id, bindings)
 
     not_passed = {k: v for k, v in sorted(resolved.items()) if v != STATUS_PASSED}
     collection_errors = count_collection_errors(junit_bytes)
