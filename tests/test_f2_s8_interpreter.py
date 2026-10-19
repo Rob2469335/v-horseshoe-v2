@@ -150,3 +150,76 @@ class TestSelection:
         chosen = _choose(proj, list(versions), versions)
         lo, hi = requires_python(proj)
         assert lo <= versions[chosen] < hi
+
+class TestInterpreterDiscovery:
+    """Discovery must be verified, deterministic and machine-independent."""
+
+    @staticmethod
+    def _tree(tmp_path, layout):
+        """Build a fake search root from {dirname: (major, minor)}."""
+        root = tmp_path / "root"
+        versions = {}
+        for name, ver in layout.items():
+            exe = root / name / "python.exe"
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_bytes(b"")
+            versions[str(exe.resolve())] = ver
+        return root, versions
+
+    def test_orders_by_policy_not_by_directory_name(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import discover_interpreters
+        root, versions = self._tree(tmp_path, {
+            "Python314": (3, 14), "Python310": (3, 10),
+            "cpython-3.13.1-windows-x86_64-none": (3, 13),
+            "cpython-3.12.8-windows-x86_64-none": (3, 12),
+        })
+        got = discover_interpreters(version_of=lambda p: versions[p], roots=[root])
+        assert [versions[p] for p in got] == [(3, 12), (3, 13), (3, 14), (3, 10)]
+
+    def test_an_unlisted_version_is_excluded_not_appended(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import discover_interpreters
+        root, versions = self._tree(tmp_path, {"Python315": (3, 15), "Python312": (3, 12)})
+        got = discover_interpreters(version_of=lambda p: versions[p], roots=[root])
+        assert [versions[p] for p in got] == [(3, 12)]
+
+    def test_an_unrunnable_executable_is_skipped(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import discover_interpreters
+        root, versions = self._tree(tmp_path, {"Python312": (3, 12), "Python313": (3, 13)})
+        bad = next(p for p, v in versions.items() if v == (3, 13))
+
+        def version_of(path):
+            if path == bad:
+                raise OSError("not executable")
+            return versions[path]
+
+        got = discover_interpreters(version_of=version_of, roots=[root])
+        assert [versions[p] for p in got] == [(3, 12)]
+
+    def test_a_reported_version_wins_over_the_directory_name(self, tmp_path):
+        """A directory named Python312 that reports 3.11 is ordered as 3.11."""
+        from qwen_train.f2_s8_acquisition import discover_interpreters
+        root, _ = self._tree(tmp_path, {"Python312": (3, 12), "Python310": (3, 10)})
+        lying = str((root / "Python312" / "python.exe").resolve())
+        real = str((root / "Python310" / "python.exe").resolve())
+        got = discover_interpreters(
+            version_of=lambda p: (3, 11) if p == lying else (3, 10), roots=[root])
+        # 3.11 ranks before 3.10 regardless of the directory it lives in.
+        assert got == [lying, real]
+
+    def test_discovery_is_deterministic_and_deduplicated(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import discover_interpreters
+        root, versions = self._tree(tmp_path, {"Python312": (3, 12)})
+        first = discover_interpreters(version_of=lambda p: versions[p],
+                                      roots=[root, root])
+        second = discover_interpreters(version_of=lambda p: versions[p], roots=[root])
+        assert first == second and len(first) == 1
+
+    def test_version_of_is_required(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import discover_interpreters
+        with pytest.raises(AcquisitionError, match="version_of is required"):
+            discover_interpreters(roots=[tmp_path])
+
+    def test_an_empty_root_yields_no_candidates(self, tmp_path):
+        from qwen_train.f2_s8_acquisition import discover_interpreters
+        assert discover_interpreters(version_of=lambda p: (3, 12),
+                                     roots=[tmp_path / "nope"]) == []

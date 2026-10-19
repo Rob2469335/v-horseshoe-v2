@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tomllib
 from dataclasses import dataclass, field
@@ -698,6 +699,77 @@ def declared_required_version(project: Path) -> str:
     data = _read_pyproject(Path(project))
     uv_table = (data.get("tool") or {}).get("uv") or {}
     return str(uv_table.get("required-version") or "").strip()
+
+
+#: Directories searched for installed CPython executables.  A glob over these is
+#: used rather than hard-coded version-directory names, because the layout
+#: differs per installer (uv uses ``cpython-3.13.1-windows-x86_64-none``,
+#: python.org uses ``Python313``) and a pinned path silently goes stale.
+INTERPRETER_SEARCH_ROOTS = (
+    r"%APPDATA%\uv\python",             # uv-managed (python-build-standalone)
+    r"%LOCALAPPDATA%\Programs\Python",  # python.org, per-user
+    r"C:\\",                            # python.org, system-wide (C:\Python3XX)
+)
+
+#: Preference order over (major, minor).  Newest is NOT best: wheel coverage
+#: collapses at the newest releases, and the measured case is
+#: ``sissbruecker__linkding-1175`` (``>=3.13``) where uv chose CPython 3.15 and
+#: ``psycopg-binary`` had no wheel.  A version absent from this tuple is
+#: EXCLUDED from selection -- which is how CPython 3.15 stays out even though it
+#: is installed and is the py-launcher default.
+PREFERRED_PYTHON_MINORS: tuple[tuple[int, int], ...] = (
+    (3, 12), (3, 13), (3, 11), (3, 14), (3, 10),
+)
+
+
+def discover_interpreters(
+    *,
+    version_of: Any = None,
+    roots: Sequence[str | Path] | None = None,
+    prefer: Sequence[tuple[int, int]] | None = None,
+) -> list[str]:
+    """Installed CPython executables, VERIFIED and in documented preference order.
+
+    ``version_of`` is injected (``path -> (major, minor)``) so discovery is
+    testable without executing anything and without depending on this machine's
+    directory names.  Each candidate is executed once and its reported version
+    is what orders it; a path whose name claims a version it does not report is
+    therefore impossible.
+
+    Only versions listed in ``prefer`` are returned.  That is deliberate: an
+    unlisted version is excluded from selection rather than appended, so a newly
+    released interpreter cannot silently become the default for every task.
+    """
+    if version_of is None:
+        raise AcquisitionError("version_of is required to verify interpreters")
+    if prefer is None:
+        prefer = PREFERRED_PYTHON_MINORS
+    rank = {value: index for index, value in enumerate(prefer)}
+
+    search: list[Path] = []
+    for root in (roots if roots is not None else INTERPRETER_SEARCH_ROOTS):
+        expanded = Path(os.path.expandvars(str(root)))
+        if expanded.is_dir():
+            search.append(expanded)
+
+    found: dict[str, tuple[int, int]] = {}
+    for base in search:
+        for exe in sorted(base.glob("*/python.exe")):
+            resolved = str(exe.resolve())
+            if resolved in found:
+                continue
+            try:
+                version = tuple(version_of(resolved))
+            except Exception:  # noqa: BLE001 - an unrunnable exe is not a candidate
+                continue
+            if len(version) < 2:
+                continue
+            found[resolved] = (int(version[0]), int(version[1]))
+
+    return sorted(
+        (path for path, version in found.items() if version in rank),
+        key=lambda path: (rank[found[path]], path),
+    )
 
 
 def requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | None:

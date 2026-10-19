@@ -36,6 +36,7 @@ from qwen_train.f2_s8_acquisition import (
     builder_install_plan,
     declared_required_version,
     declared_test_requirements,
+    discover_interpreters,
     project_install_context,
     repo_url_for,
     requires_python,
@@ -287,25 +288,53 @@ def _requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] |
     return requires_python(Path(project))
 
 
+_DISCOVERED_INTERPRETERS: list[str] | None = None
+
+
+def available_interpreters() -> list[str]:
+    """Verified installed interpreters, discovered once per process.
+
+    Discovery executes each candidate, so it is cached.  If discovery finds
+    nothing usable the static ``INTERPRETERS`` list is the fallback, so a machine
+    whose layout is not recognised degrades to the previous behaviour instead of
+    failing outright.
+    """
+    global _DISCOVERED_INTERPRETERS
+    if _DISCOVERED_INTERPRETERS is None:
+        try:
+            _DISCOVERED_INTERPRETERS = (
+                discover_interpreters(version_of=_version_of) or list(INTERPRETERS)
+            )
+        except Exception:  # noqa: BLE001 - never let discovery break a build
+            _DISCOVERED_INTERPRETERS = list(INTERPRETERS)
+    return _DISCOVERED_INTERPRETERS
+
+
 def pick_interpreter(project: Path) -> str:
     """Choose the first available interpreter the project's metadata accepts.
 
     Fails loudly rather than building an environment the package manager will
     reject mid-install, which is how a pin mismatch first surfaced for dspy.
+
+    Candidates come from DISCOVERY, not from a hard-coded path list: Python
+    3.12.8 and 3.13.1 were already installed here under uv's managed directory
+    and were invisible to the builder, so tasks whose declared range needs them
+    were built on the wrong interpreter.
     """
     bounds = _requires_python(project)
-    for candidate in INTERPRETERS:
+    candidates = available_interpreters()
+    for candidate in candidates:
         if not Path(candidate).is_file():
             continue
         if bounds is None:
             return candidate
-        lo, hi = bounds  # type: ignore[misc]
+        lo, hi = bounds
         ver = _version_of(candidate)
         if lo <= ver < hi:
-            return candidate
+            return str(candidate)
     raise RuntimeError(
         f"no available interpreter satisfies requires-python={bounds!r} "
-        f"from {INTERPRETERS}"
+        f"from {candidates}"
     )
 
 
@@ -595,6 +624,13 @@ def classify_build_failure(exc: BaseException) -> str:
     # rejects).  This is a TOOLCHAIN limit, not a task defect.
     if "Failed to parse `uv.lock`" in msg or "missing field `version`" in msg:
         return "UV_TOOLCHAIN_INCOMPATIBLE"
+    # A POSIX-only dependency cannot be built on Windows at any interpreter
+    # version. Measured: `uwsgi`'s sdist calls `os.uname()`, which does not exist
+    # on Windows, so `sissbruecker__linkding-1175` failed AFTER the interpreter
+    # was corrected -- the interpreter was never the real blocker.
+    if ("os.uname" in msg or "has no attribute 'uname'" in msg
+            or "No module named 'fcntl'" in msg):
+        return "PLATFORM_INCOMPATIBLE"
     if "no interpreter satisfies requires-python" in msg:
         return "INTERPRETER_UNAVAILABLE"
     pip_resolution = (

@@ -638,3 +638,13 @@ class TestReauditFixes:
         # Both writers of an ERROR record must carry the same marker.
         assert evidence.ENVIRONMENT_ERROR_PREFIX in inspect.getsource(
             compose._result_from_bundles)
+
+    def test_a_posix_only_dependency_is_named_not_left_unclassified(self):
+        """Measured: linkding failed on uwsgi AFTER the interpreter was fixed."""
+        from qwen_train.f2_s8_pilot_build import classify_build_failure
+        exc = RuntimeError(
+            "command failed rc=1: uv sync\n"
+            "  File \"...uwsgiconfig.py\", line 8, in <module>\n"
+            "    uwsgi_os = os.uname()[0]\n"
+            "AttributeError: module 'os' has no attribute 'uname'")
+        assert classify_build_failure(exc) == "PLATFORM_INCOMPATIBLE"
