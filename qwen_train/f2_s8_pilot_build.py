@@ -19,6 +19,7 @@ the guest never needs git, a compiler or the network.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -329,41 +330,260 @@ def _requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] |
     return requires_python(Path(project))
 
 
-_DISCOVERED_INTERPRETERS: list[str] | None = None
+_DISCOVERED_INTERPRETERS: dict[tuple[tuple[int, int], ...] | None, list[str]] = {}
+
+#: OWNER-RATIFIED environment sidecar (owner decision 2026-10-20).  Read-only
+#: input; the builder never writes it.  Only records with status ``ratified``
+#: are usable.  ``proposed`` is explicitly NOT accepted: correct hashes are an
+#: integrity property, not an authorization.
+DECLARED_ENVIRONMENTS_SIDECAR = Path(
+    r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_20261020.json"
+)
+DECLARED_ENVIRONMENTS_PROVENANCE = Path(
+    r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_provenance_20261020.json"
+)
+_SIDECAR_SCHEMA = "f2-s8-declared-environments/v2"
+_PROVENANCE_SCHEMA = "f2-s8-declared-environments-provenance/v2"
+_EVIDENCE_SCHEMA = "f2-s8-live-image-map/v1"
+_OLD_SIDECAR_SCHEMA = "f2-s8-declared-environments/v1"
+_SIDECAR_RATIFIED_STATUS = "ratified"
+_SIDECAR_BLOCKED_STATUS = "blocked_conflict"
+_SIDECAR_REJECTED_STATUSES = ("proposed",)
 
 
-def available_interpreters() -> list[str]:
+class DeclaredInterpreterError(RuntimeError):
+    """A task's DECLARED Python minor is missing, ambiguous or unsatisfiable."""
+
+
+class DeclaredEnvironmentError(RuntimeError):
+    """The declared-environment sidecar is untrustworthy or inconsistent."""
+
+
+def declared_minor_tuple(declared: str | int | None) -> tuple[int, int] | None:
+    """(major, minor) from the evidence forms used by the task records.
+
+    Accepts ``python_base_310``, ``3.10``, ``3.10.18`` and ``310``.  Returns
+    ``None`` when nothing parseable is present -- callers MUST fail closed.
+    """
+    if declared is None:
+        return None
+    text = str(declared).strip()
+    if not text:
+        return None
+    m = re.search(r"python_base_3(\d+)", text)
+    if m:
+        return (3, int(m.group(1)))
+    nums = re.findall(r"\d+", text)
+    if len(nums) >= 2:
+        return (int(nums[0]), int(nums[1]))
+    if len(nums) == 1 and len(nums[0]) == 3 and nums[0].startswith("3"):
+        return (3, int(nums[0][1:]))
+    return None
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _strict_json(text: str, what: str):
+    """json.loads that refuses duplicate keys (no silent last-wins)."""
+
+    def _hook(pairs):
+        seen = set()
+        for k, _ in pairs:
+            if k in seen:
+                raise DeclaredEnvironmentError(f"{what}: duplicate key {k!r}")
+            seen.add(k)
+        return dict(pairs)
+
+    try:
+        return json.loads(text, object_pairs_hook=_hook)
+    except DeclaredEnvironmentError:
+        raise
+    except ValueError as exc:
+        raise DeclaredEnvironmentError(f"{what}: malformed JSON: {exc}") from exc
+
+
+def _check_bound(defn: dict, key: str, expected_schema: str, what: str) -> Path:
+    """Validate one {path, sha256, schema} binding and return the path."""
+    rec = defn.get(key)
+    if not isinstance(rec, dict):
+        raise DeclaredEnvironmentError(f"provenance.{key} is not an object")
+    p = Path(str(rec.get("path", "")))
+    if not p.is_file():
+        raise DeclaredEnvironmentError(f"{what} missing: {p}")
+    if _sha256_file(p) != rec.get("sha256"):
+        raise DeclaredEnvironmentError(f"{what} digest mismatch: {p}")
+    if rec.get("schema") != expected_schema:
+        raise DeclaredEnvironmentError(
+            f"{what} schema {rec.get('schema')!r} != {expected_schema!r}")
+    return p
+
+
+def load_declared_environments(
+    sidecar: Path | str | None = None,
+    provenance: Path | str | None = None,
+) -> dict[str, str]:
+    """Validated {task_id: minor} from the RATIFIED sidecar, or raise.
+
+    Integrity is bound to the ACTUAL bytes of the sidecar, of the old (proposed)
+    sidecar it was derived from, and of the policy evidence, all via the
+    provenance record.  Authorization is separate: only ``ratified`` records are
+    usable, whatever their hashes say.
+    """
+    sp = Path(sidecar or DECLARED_ENVIRONMENTS_SIDECAR)
+    pv = Path(provenance or DECLARED_ENVIRONMENTS_PROVENANCE)
+    if not sp.is_file():
+        raise DeclaredEnvironmentError(f"sidecar missing: {sp}")
+    if not pv.is_file():
+        raise DeclaredEnvironmentError(f"provenance missing: {pv}")
+
+    prov = _strict_json(pv.read_text(encoding="utf-8"), "provenance")
+    if prov.get("schema") != _PROVENANCE_SCHEMA:
+        raise DeclaredEnvironmentError(
+            f"provenance schema {prov.get('schema')!r} != {_PROVENANCE_SCHEMA!r}")
+    if prov.get("ratified_by") != "Rob":
+        raise DeclaredEnvironmentError(
+            f"provenance ratifying authority {prov.get('ratified_by')!r} is not authorised")
+
+    side_rec = prov.get("sidecar")
+    if not isinstance(side_rec, dict):
+        raise DeclaredEnvironmentError("provenance.sidecar is not an object")
+    if Path(str(side_rec.get("path", ""))).resolve() != sp.resolve():
+        raise DeclaredEnvironmentError(
+            f"provenance names a different sidecar: {side_rec.get('path')!r}")
+    if _sha256_file(sp) != side_rec.get("sha256"):
+        raise DeclaredEnvironmentError("sidecar digest mismatch")
+
+    _check_bound(prov, "source_old_sidecar", _OLD_SIDECAR_SCHEMA, "source old sidecar")
+    _check_bound(prov, "policy_evidence", _EVIDENCE_SCHEMA, "policy evidence")
+
+    body = _strict_json(sp.read_text(encoding="utf-8"), "sidecar")
+    if body.get("schema") != _SIDECAR_SCHEMA:
+        raise DeclaredEnvironmentError(
+            f"sidecar schema {body.get('schema')!r} != {_SIDECAR_SCHEMA!r}")
+    if body.get("ratified_by") != "Rob":
+        raise DeclaredEnvironmentError("sidecar ratifying authority is not Rob")
+    decls = body.get("declarations")
+    if not isinstance(decls, dict) or not decls:
+        raise DeclaredEnvironmentError("sidecar.declarations must be a non-empty object")
+
+    out: dict[str, str] = {}
+    for task, rec in decls.items():
+        if not isinstance(task, str) or not task:
+            raise DeclaredEnvironmentError(f"invalid task id in sidecar: {task!r}")
+        if not isinstance(rec, dict):
+            raise DeclaredEnvironmentError(f"{task}: record is not an object")
+        status = rec.get("status")
+        if status == _SIDECAR_BLOCKED_STATUS:
+            continue                      # explicitly blocked: no usable declaration
+        if status in _SIDECAR_REJECTED_STATUSES:
+            raise DeclaredEnvironmentError(
+                f"{task}: status {status!r} is not ratified and cannot be used")
+        if status != _SIDECAR_RATIFIED_STATUS:
+            raise DeclaredEnvironmentError(f"{task}: unknown sidecar status {status!r}")
+        if rec.get("ratified_by") != "Rob":
+            raise DeclaredEnvironmentError(f"{task}: record is not ratified by the authorised owner")
+        minor = rec.get("declared_python_minor")
+        if not isinstance(minor, str) or declared_minor_tuple(minor) is None:
+            raise DeclaredEnvironmentError(f"{task}: malformed declared_python_minor {minor!r}")
+        if rec.get("requires_python_compatibility") != "OK":
+            raise DeclaredEnvironmentError(
+                f"{task}: compatibility {rec.get('requires_python_compatibility')!r} is not OK")
+        out[task] = minor
+    return out
+
+
+def _declare_from_input(task_id: str, inputs: Path) -> str | None:
+    """The task's OWN declaration from its input record, or None."""
+    try:
+        rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    install = rec.get("install_config") or {}
+    for value in (rec.get("declared_python_minor"), install.get("base_image_name"),
+                  rec.get("base_image_name")):
+        if value:
+            return str(value)
+    return None
+
+
+def _declared_minor_for(
+    task_id: str,
+    inputs: Path,
+    *,
+    sidecar: Path | str | None = None,
+    provenance: Path | str | None = None,
+) -> str | None:
+    """The task's declared Python minor: input record first, else the RATIFIED sidecar.
+
+    Conflicts, unratified records, and an untrustworthy sidecar when it is the
+    only source all raise -- nothing is silently defaulted.
+    """
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise DeclaredInterpreterError(f"invalid task id: {task_id!r}")
+    from_input = _declare_from_input(task_id, inputs)
+    try:
+        side = load_declared_environments(sidecar, provenance)
+    except DeclaredEnvironmentError:
+        if from_input:
+            return from_input          # the input record is its own authority
+        raise
+    from_side = side.get(task_id)
+    if from_input and from_side:
+        a = declared_minor_tuple(from_input)
+        b = declared_minor_tuple(from_side)
+        if a != b:
+            raise DeclaredEnvironmentError(
+                f"{task_id}: input declares {from_input!r} but sidecar declares {from_side!r}")
+        return from_input
+    return from_input or from_side
+
+
+def available_interpreters(
+    prefer: tuple[tuple[int, int], ...] | None = None,
+) -> list[str]:
     """Verified installed interpreters, discovered once per process.
 
-    Discovery executes each candidate, so it is cached.  If discovery finds
-    nothing usable the static ``INTERPRETERS`` list is the fallback, so a machine
-    whose layout is not recognised degrades to the previous behaviour instead of
-    failing outright.
+    ``prefer`` narrows the candidate set to an explicit minor list.  When it is
+    supplied, an empty discovery result is returned AS EMPTY: the static
+    ``INTERPRETERS`` fallback contains the preference default and must never be
+    substituted for a declared minor.
     """
-    global _DISCOVERED_INTERPRETERS
-    if _DISCOVERED_INTERPRETERS is None:
+    key = tuple(prefer) if prefer is not None else None
+    if key not in _DISCOVERED_INTERPRETERS:
         try:
-            _DISCOVERED_INTERPRETERS = (
-                discover_interpreters(version_of=_version_of) or list(INTERPRETERS)
-            )
+            if prefer is None:
+                found = discover_interpreters(version_of=_version_of)
+                _DISCOVERED_INTERPRETERS[key] = found or list(INTERPRETERS)
+            else:
+                _DISCOVERED_INTERPRETERS[key] = discover_interpreters(
+                    version_of=_version_of, prefer=prefer
+                )
         except Exception:  # noqa: BLE001 - never let discovery break a build
-            _DISCOVERED_INTERPRETERS = list(INTERPRETERS)
-    return _DISCOVERED_INTERPRETERS
+            _DISCOVERED_INTERPRETERS[key] = (
+                list(INTERPRETERS) if prefer is None else []
+            )
+    return _DISCOVERED_INTERPRETERS[key]
 
 
-def pick_interpreter(project: Path) -> str:
+def pick_interpreter(
+    project: Path,
+    *,
+    prefer: tuple[tuple[int, int], ...] | None = None,
+) -> str:
     """Choose the first available interpreter the project's metadata accepts.
 
-    Fails loudly rather than building an environment the package manager will
-    reject mid-install, which is how a pin mismatch first surfaced for dspy.
-
-    Candidates come from DISCOVERY, not from a hard-coded path list: Python
-    3.12.8 and 3.13.1 were already installed here under uv's managed directory
-    and were invisible to the builder, so tasks whose declared range needs them
-    were built on the wrong interpreter.
+    ``prefer`` restricts the search to the given minors.  With ``prefer=None``
+    the documented preference order applies (legacy behaviour, retained only for
+    callers that have no declared environment).
     """
     bounds = _requires_python(project)
-    candidates = available_interpreters()
+    candidates = available_interpreters(prefer)
     for candidate in candidates:
         if not Path(candidate).is_file():
             continue
@@ -377,6 +597,23 @@ def pick_interpreter(project: Path) -> str:
         f"no available interpreter satisfies requires-python={bounds!r} "
         f"from {candidates}"
     )
+
+
+def resolve_declared_interpreter(project: Path, declared_minor: str | int | None) -> str:
+    """Interpreter for a task's DECLARED minor, or fail closed."""
+    minor = declared_minor_tuple(declared_minor)
+    if minor is None:
+        raise DeclaredInterpreterError(
+            f"declared Python minor is missing or unparseable: {declared_minor!r}; "
+            "refusing to fall back to the preference default"
+        )
+    bounds = _requires_python(project)
+    if bounds is not None and not (bounds[0] <= minor < bounds[1]):
+        raise DeclaredInterpreterError(
+            f"declared Python minor {minor[0]}.{minor[1]} violates the project's "
+            f"requires-python={bounds!r}"
+        )
+    return pick_interpreter(project, prefer=(minor,))
 
 
 def _rmtree(path: Path) -> None:
@@ -399,7 +636,8 @@ def _rmtree(path: Path) -> None:
 
 
 def build(task_id: str, url: str, *, inputs: Path = INPUTS,
-          patches: Path = PATCHES) -> dict:
+          patches: Path = PATCHES,
+          declared_python_minor: str | int | None = None) -> dict:
     rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
     base_commit = rec["base_commit"]
     ws = ROOT / task_id
@@ -443,7 +681,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # call to build() must not be able to pip-install a task (and so run its
     # build backend) with an administrator identity.
     require_unprivileged_identity("qwen_train.f2_s8_pilot_build.build")
-    base_python = pick_interpreter(project)
+    base_python = resolve_declared_interpreter(project, declared_python_minor)
     extra = EXTRA_DEPS.get(task_id, [])
     # The declared (never invented) per-task build adjustments.  ``groups`` /
     # ``extras`` name the project's OWN dependency groups and extras; they were
@@ -777,7 +1015,10 @@ def main(argv=None) -> int:
             continue
         print(f"BUILD {task_id} ...", flush=True)
         try:
-            entry = build(task_id, url, inputs=inputs, patches=patches)
+            entry = build(
+                task_id, url, inputs=inputs, patches=patches,
+                declared_python_minor=_declared_minor_for(task_id, inputs),
+            )
         except Exception as exc:  # noqa: BLE001 - recorded, not fatal to the batch
             reason = classify_build_failure(exc)
             print(f"  FAILED [{reason}]: {type(exc).__name__}: {exc}", flush=True)
