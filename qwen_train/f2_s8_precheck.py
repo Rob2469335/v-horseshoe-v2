@@ -191,6 +191,72 @@ def _digest(payload: Mapping[str, Any]) -> str:
     return _sha256_bytes(_canonical_bytes(payload))
 
 
+#: Sibling-record suffix used by the registration derivation tool.
+_REGISTRATION_PROVENANCE_SUFFIX = ".provenance.json"
+
+
+def _declared_registration_file_digest(registration_file: Path) -> str | None:
+    """Return the RAW-BYTES digest a sibling provenance record declares.
+
+    ``registered_tasks.json`` carries a sibling
+    ``registered_tasks.provenance.json`` that records two digests of the same
+    artifact in two DIFFERENT domains::
+
+        tasks_sha256               = sha256(raw file bytes)
+        registration_content_sha256 = canonical content digest
+
+    Only ``tasks_sha256`` describes the bytes that ``run_precheck`` actually
+    reads, so it is the only one that can detect a substituted or regenerated
+    registration file.  The operational launcher's ``REGSHA`` is the CONTENT
+    digest, which is why comparing it against itself (see the declared-vs-
+    declared check in ``run_precheck``) can never fail.
+
+    Returns ``None`` when no provenance record exists: the binding is then
+    unenforceable from disk and is recorded as absent rather than assumed.
+    Raises ``PrecheckError`` when a provenance record exists but is unusable,
+    because a malformed trust input must fail closed.
+    """
+    provenance = registration_file.with_name(
+        registration_file.stem + _REGISTRATION_PROVENANCE_SUFFIX
+    )
+    if not provenance.is_file():
+        return None
+    try:
+        payload = json.loads(provenance.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PrecheckError(
+            f"registration provenance {provenance.name} is unreadable: {exc}"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise PrecheckError(
+            f"registration provenance {provenance.name} is not a JSON object"
+        )
+    declared = payload.get("tasks_sha256")
+    if not isinstance(declared, str) or not declared:
+        raise PrecheckError(
+            f"registration provenance {provenance.name} declares no tasks_sha256"
+        )
+    return declared
+
+
+def _check_registration_file_digest(
+    registration_file: Path, actual: str, expected: str | None
+) -> str | None:
+    """Bind the registration BYTES to a declared digest, or fail closed.
+
+    ``expected`` (an operator-supplied expectation) takes precedence; otherwise
+    the sibling provenance record supplies it.  Returns the digest the bytes
+    were bound to, or ``None`` when no expectation is available.
+    """
+    declared = expected or _declared_registration_file_digest(registration_file)
+    if declared and actual != declared:
+        raise PrecheckError(
+            "registration file digest does not match its declared provenance: "
+            f"file is {actual}, declared {declared}"
+        )
+    return declared
+
+
 def _git_revision(repo_root: Path) -> str:
     try:
         out = subprocess.run(
@@ -707,6 +773,7 @@ def run_precheck(
     expected_revision: str | None = None,
     expected_manifest_digest: str | None = None,
     expected_registration_sha256: str | None = None,
+    expected_registration_file_sha256: str | None = None,
     expected_task_list_digest: str | None = None,
     expected_policy_digest: str | None = None,
     runner: Callable[..., Any] | None = None,
@@ -743,6 +810,14 @@ def run_precheck(
     registered = _registered_task_ids(registration_file)
     if expected_registration_sha256 and registration_sha256 != expected_registration_sha256:
         raise PrecheckError("registration digest is stale")
+    # The check above compares a DECLARED label against a DECLARED label, so it
+    # proves only that the caller passed the same constant twice -- it passes
+    # while proving nothing about the file. Bind the bytes instead, before any
+    # task code can run.
+    declared_registration_file_digest = _check_registration_file_digest(
+        registration_file, registration_file_digest,
+        expected_registration_file_sha256 or None,
+    )
 
     resolved_policy = _policy(policy)
     policy_digest = _digest(resolved_policy)
@@ -1010,6 +1085,8 @@ def run_precheck(
             "manifest_digest": manifest_digest,
             "registration_path": str(registration_file.resolve()),
             "registration_file_sha256": registration_file_digest,
+            "registration_file_sha256_declared": (
+                declared_registration_file_digest or ""),
             "registration_id": registration_id,
             "registration_sha256": registration_sha256,
             "task_list_digest": task_list_digest,
@@ -1086,6 +1163,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--expected-revision", default="")
     parser.add_argument("--expected-manifest-digest", default="")
     parser.add_argument("--expected-registration-sha256", default="")
+    parser.add_argument(
+        "--expected-registration-file-sha256", default="",
+        help=("sha256 of the registration file's RAW BYTES; overrides the "
+              "sibling provenance record's tasks_sha256 when supplied"),
+    )
     parser.add_argument("--expected-task-list-digest", default="")
     parser.add_argument("--expected-policy-digest", default="")
     parser.add_argument("--timeout", type=int, default=300)
@@ -1106,6 +1188,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         expected_revision=args.expected_revision or None,
         expected_manifest_digest=args.expected_manifest_digest or None,
         expected_registration_sha256=args.expected_registration_sha256 or None,
+        expected_registration_file_sha256=(
+            args.expected_registration_file_sha256 or None),
         expected_task_list_digest=args.expected_task_list_digest or None,
         expected_policy_digest=args.expected_policy_digest or None,
         timeout_seconds=args.timeout,
