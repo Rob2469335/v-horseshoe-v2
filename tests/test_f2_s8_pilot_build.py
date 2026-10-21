@@ -145,6 +145,9 @@ class TestManifestIsScopedToTheRun:
                 "base_commit": "a" * 40,
                 "elapsed_s": 0,
             })
+        monkeypatch.setattr(
+            pb, "_declared_minor_for",
+            lambda task_id, inputs, **kw: None)
 
     @staticmethod
     def _argv(tmp_path) -> list[str]:
@@ -199,6 +202,7 @@ class TestManifestIsScopedToTheRun:
             raise RuntimeError("clone failed")
 
         monkeypatch.setattr(pb, "build", _boom)
+        monkeypatch.setattr(pb, "_declared_minor_for", lambda task_id, inputs, **kw: None)
         assert pb.main(self._argv(tmp_path) + ["built__task-2"]) == 0
 
         written = json.loads(

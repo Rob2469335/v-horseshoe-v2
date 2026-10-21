@@ -861,6 +861,7 @@ class TestPrivilegeGuard:
 
         p = P(); p.returncode = returncode; p.stdout = stdout
         monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: p)
+        monkeypatch.setattr(A.os, "name", "nt")
 
     def test_enabled_administrators_group_is_detected(self, monkeypatch):
         from qwen_train import f2_s8_acquisition as A
@@ -887,7 +888,18 @@ class TestPrivilegeGuard:
         def boom(*a, **k):
             raise OSError("whoami unavailable")
 
+        monkeypatch.setattr(A.os, "name", "nt")
         monkeypatch.setattr(A.subprocess, "run", boom)
+        assert A.effective_identity_is_admin() is True
+
+    def test_non_windows_platform_fails_closed(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+        monkeypatch.setattr(A.os, "name", "posix")
+        assert A.effective_identity_is_admin() is True
+
+    def test_windows_returncode_error_fails_closed(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+        self._fake(monkeypatch, returncode=1, stdout="")
         assert A.effective_identity_is_admin() is True
 
     def test_the_guard_raises_and_has_no_override(self, monkeypatch):

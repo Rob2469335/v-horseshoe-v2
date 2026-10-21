@@ -271,6 +271,10 @@ def test_main_passes_the_declared_minor():
 
 
 def test_real_ratified_sidecar_is_accepted_and_alexa_excluded():
+    if not pb.DECLARED_ENVIRONMENTS_SIDECAR.is_file() or not pb.DECLARED_ENVIRONMENTS_PROVENANCE.is_file():
+        pytest.skip(
+            f"External owner-ratified sidecar integration prerequisite missing on this runner: {pb.DECLARED_ENVIRONMENTS_SIDECAR}"
+        )
     loaded = pb.load_declared_environments()
     assert len(loaded) == 10
     assert ALEXA not in loaded

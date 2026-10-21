@@ -337,10 +337,12 @@ _DISCOVERED_INTERPRETERS: dict[tuple[tuple[int, int], ...] | None, list[str]] = 
 #: are usable.  ``proposed`` is explicitly NOT accepted: correct hashes are an
 #: integrity property, not an authorization.
 DECLARED_ENVIRONMENTS_SIDECAR = Path(
-    r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_20261020.json"
+    os.environ.get("F2_S8_DECLARED_ENVIRONMENTS_SIDECAR")
+    or r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_20261020.json"
 )
 DECLARED_ENVIRONMENTS_PROVENANCE = Path(
-    r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_provenance_20261020.json"
+    os.environ.get("F2_S8_DECLARED_ENVIRONMENTS_PROVENANCE")
+    or r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_provenance_20261020.json"
 )
 _SIDECAR_SCHEMA = "f2-s8-declared-environments/v2"
 _PROVENANCE_SCHEMA = "f2-s8-declared-environments-provenance/v2"
