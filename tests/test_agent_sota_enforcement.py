@@ -11,6 +11,54 @@ KNOWN_LEGACY_VIOLATIONS = {
 }
 
 
+def _has_bullet_source(block_lines: list[str]) -> bool:
+    bullet_items: list[list[str]] = []
+    current_bullet: list[str] = []
+    for line in block_lines:
+        stripped = line.strip()
+        if re.match(r"^[-*•]\s+", stripped):
+            if current_bullet:
+                bullet_items.append(current_bullet)
+            current_bullet = [stripped]
+        elif current_bullet:
+            current_bullet.append(stripped)
+    if current_bullet:
+        bullet_items.append(current_bullet)
+
+    for item_lines in bullet_items:
+        first_line = item_lines[0]
+        if re.match(
+            r"^[-*•]\s*(?:(?:1\.\s*)?Source|(?:2\.\s*)?(?:Assumption|Finding)|(?:3\.\s*)?Reconciliation):",
+            first_line,
+            re.IGNORECASE,
+        ):
+            continue
+        combined = " ".join(item_lines)
+        source_part = re.split(
+            r"(?:\b|^)(?:Assumption|Finding|Reconciliation)(?:.*?):",
+            combined,
+            flags=re.IGNORECASE,
+        )[0].strip()
+        source_part = re.sub(r"^[-*•]\s+", "", source_part).strip()
+        urls = re.findall(r"https?://\S+", source_part)
+        if not urls:
+            continue
+        title_part = source_part
+        for u in urls:
+            title_part = title_part.replace(u, " ")
+        title_part = title_part.strip()
+        if not re.search(r"[a-zA-Z]", title_part):
+            continue
+        valid_urls = [
+            u
+            for u in urls
+            if re.match(r"^https?://[a-zA-Z0-9][-a-zA-Z0-9.]*(?::\d+)?(?:/\S*)?$", u)
+        ]
+        if valid_urls:
+            return True
+    return False
+
+
 def parse_sota_basis(message: str) -> bool:
     lines = message.splitlines()
     sota_starts = [i for i, line in enumerate(lines) if line.startswith("SOTA-Basis:")]
@@ -60,23 +108,26 @@ def parse_sota_basis(message: str) -> bool:
 
     full_block = "\n".join(block_lines)
 
-    has_source = bool(
-        re.search(
-            r"^(?:1\.\s*)?Source(?:.*?):\s*(?=.*[a-zA-Z].*[ \t]+https?://\S+|.*?https?://\S+[ \t]+.*[a-zA-Z]).+",
-            full_block,
-            re.IGNORECASE | re.MULTILINE,
+    has_source = (
+        bool(
+            re.search(
+                r"^(?:[-*•]\s*)?(?:1\.\s*)?Source(?:.*?):\s*(?=.*[a-zA-Z].*[ \t]+https?://\S+|.*?https?://\S+[ \t]+.*[a-zA-Z]).+",
+                full_block,
+                re.IGNORECASE | re.MULTILINE,
+            )
         )
+        or _has_bullet_source(block_lines)
     )
     has_finding = bool(
         re.search(
-            r"^(?:2\.\s*)?(?:Assumption|Finding)(?:.*?):\s*(?=.*[a-zA-Z0-9]).+",
+            r"(?:^|[-*•]\s*|\b)(?:2\.\s*)?(?:Assumption|Finding)(?:.*?):\s*(?=.*[a-zA-Z0-9]).+",
             full_block,
             re.IGNORECASE | re.MULTILINE,
         )
     )
     has_recon = bool(
         re.search(
-            r"^(?:3\.\s*)?Reconciliation(?:.*?):\s*(?=.*[a-zA-Z0-9]).+",
+            r"(?:^|[-*•]\s*|\b)(?:3\.\s*)?Reconciliation(?:.*?):\s*(?=.*[a-zA-Z0-9]).+",
             full_block,
             re.IGNORECASE | re.MULTILINE,
         )
@@ -194,6 +245,56 @@ def test_sota_parser_cases():
         ("SERVICE: valid\nSOTA-Basis: None\nJustification: text", True),
         # Test legacy fail closed (None without Justification)
         ("ARCH: fail\nSOTA-Basis: None\nBecause we said so", False),
+        # Markdown bullet source entries (positive cases)
+        (
+            "ARCH: bullet1\nSOTA-Basis:\n- Official Docs https://example.com\nFinding: We should do X\nReconciliation: We did X",
+            True,
+        ),
+        (
+            "ARCH: bullet2\nSOTA-Basis:\n- https://example.com Official Docs\nFinding: We should do X\nReconciliation: We did X",
+            True,
+        ),
+        (
+            "ARCH: bullet3\nSOTA-Basis:\n* PEP 735 Spec\n  https://packaging.python.org/pep735\nFinding: We should do X\nReconciliation: We did X",
+            True,
+        ),
+        (
+            "ARCH: bullet4\nSOTA-Basis:\n- PyPA PEP 735\n  https://packaging.python.org/pep735\n  Finding: We should do X\n  Reconciliation: We did X",
+            True,
+        ),
+        # Markdown bullet source entries (negative cases)
+        (
+            "ARCH: bullet_neg1\nSOTA-Basis:\n- https://example.com\nFinding: X\nReconciliation: Y",
+            False,
+        ),
+        (
+            "ARCH: bullet_neg2\nSOTA-Basis:\n- Title Only Without Link\nFinding: X\nReconciliation: Y",
+            False,
+        ),
+        (
+            "ARCH: bullet_neg3\nSOTA-Basis:\n- Title With Invalid Link httpnotavalidurl\nFinding: X\nReconciliation: Y",
+            False,
+        ),
+        (
+            "ARCH: bullet_neg4\nSOTA-Basis:\n- Title Incomplete Scheme http://\nFinding: X\nReconciliation: Y",
+            False,
+        ),
+        (
+            "ARCH: bullet_neg5\nSOTA-Basis:\n- Unrelated prose text without any link\nFinding: X\nReconciliation: Y",
+            False,
+        ),
+        (
+            "ARCH: bullet_neg6\nSOTA-Basis:\n- Valid Title https://example.com\nReconciliation: Y",
+            False,
+        ),
+        (
+            "ARCH: bullet_neg7\nSOTA-Basis:\n- Valid Title https://example.com\nFinding: X",
+            False,
+        ),
+        (
+            "ARCH: bullet_neg8\nSOTA-Basis:\n- \nFinding: X\nReconciliation: Y",
+            False,
+        ),
     ]
     for msg, expected in cases:
         assert parse_sota_basis(msg) == expected, f"Failed on:\n{msg}"
