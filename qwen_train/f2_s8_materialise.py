@@ -39,6 +39,9 @@ from qwen_train.f2_registration import eligible
 __all__ = [
     "POPULATION_SOURCES",
     "MATERIALISE_SCHEMA",
+    "MaterialiseError",
+    "case_key",
+    "find_case_collisions",
     "load_population_rows",
     "materialise_batch",
 ]
@@ -50,6 +53,39 @@ POPULATION_SOURCES: dict[str, str] = {
 }
 
 MATERIALISE_SCHEMA = "f2_s8_materialise_v1"
+
+
+class MaterialiseError(RuntimeError):
+    """Materialisation cannot proceed safely.  Always fail closed."""
+
+
+def case_key(instance_id: str) -> str:
+    """Filesystem collision key for an instance id.
+
+    Everything downstream is keyed by the id: ``inputs/<id>.json``,
+    ``patches/<id>.gold_patch``, ``patches/<id>.test_patch`` and the workspace
+    ``C:\\f2_pilot\\<id>``.  On a case-INSENSITIVE volume -- the Windows default,
+    confirmed for ``F2_EVIDENCE`` with ``fsutil file queryCaseSensitiveInfo`` --
+    two ids differing only in case address the *same* file and the *same*
+    directory, so the second write silently destroys the first task's input.
+
+    Registered ids are ASCII, so ``str.lower`` is the correct key and is
+    deliberately no laxer than the platform's comparison.
+    """
+    return instance_id.lower()
+
+
+def find_case_collisions(ids: Iterable[str]) -> dict[str, list[str]]:
+    """Return ``{case key: [exact ids]}`` for keys claimed by more than one id.
+
+    Purely diagnostic: it reports every group that would collide.  Callers must
+    NOT use it to pick a survivor -- choosing which variant of a colliding pair
+    is admitted is a registration policy decision, not an engineering one.
+    """
+    groups: dict[str, list[str]] = {}
+    for iid in ids:
+        groups.setdefault(case_key(str(iid)), []).append(str(iid))
+    return {key: members for key, members in groups.items() if len(members) > 1}
 
 
 def _sha256_text(text: str) -> str:
@@ -111,6 +147,26 @@ def materialise_batch(
     excluded_set = set(excluded)
     parked_set = set(parked)
 
+    # --- case-insensitive collision pre-flight (BEFORE any write) -------------
+    # An id whose case-key matches an ALREADY-ATTEMPTED id would build into that
+    # task's existing workspace directory and reuse its patch paths.  Refuse
+    # here, before the first byte is written, rather than discover it later.
+    # No variant is chosen and nothing is removed.
+    attempted_keys = {case_key(existing): existing for existing in attempted_set}
+    for entry in order:
+        iid = str(entry.get("instance_id") or "")
+        if not iid or iid in attempted_set or iid in excluded_set or iid in parked_set:
+            continue
+        prior = attempted_keys.get(case_key(iid))
+        if prior is not None and prior != iid:
+            raise MaterialiseError(
+                "case-insensitive collision with an already-attempted task: "
+                f"{iid!r} and {prior!r} share the key {case_key(iid)!r}. On a "
+                "case-insensitive volume their input, patch and workspace paths "
+                "are the same file/directory. No variant was chosen; the "
+                "registration collision policy must be decided first."
+            )
+
     inputs_dir = Path(out_dir) / "inputs"
     patches_dir = Path(out_dir) / "patches"
     inputs_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +174,7 @@ def materialise_batch(
 
     reasons: dict[str, int] = {}
     selected: list[dict[str, Any]] = []
+    selected_keys: dict[str, str] = {}
 
     for position, entry in enumerate(order):
         iid = str(entry.get("instance_id") or "")
@@ -183,6 +240,18 @@ def materialise_batch(
             "test_patch": test_patch,
             "source": source,
         }
+        # --- collision guard, immediately before the first write for this task --
+        key = case_key(iid)
+        clash = selected_keys.get(key)
+        if clash is not None:
+            raise MaterialiseError(
+                "case-insensitive collision inside one batch: "
+                f"{clash!r} and {iid!r} share the key {key!r}. The second task's "
+                "input and patch files would overwrite the first's on a "
+                "case-insensitive volume. No variant was chosen."
+            )
+        selected_keys[key] = iid
+
         text = json.dumps(record, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
         (inputs_dir / f"{iid}.json").write_text(text, encoding="utf-8", newline="\n")
         (patches_dir / f"{iid}.gold_patch").write_text(gold, encoding="utf-8", newline="\n")

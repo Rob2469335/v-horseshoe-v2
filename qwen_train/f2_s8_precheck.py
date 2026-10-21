@@ -84,7 +84,22 @@ DEFAULT_POLICY: dict[str, Any] = {
     "max_grants_per_session": 5,
     "infra_stop_fraction": 0.10,
     # Code-pinned exclusions; a policy file may repeat but never remove them.
-    "excluded_tasks": ["networkx__networkx-8207"],
+    #   The three lowercase swe-rebench-v2 ids are CROSS-SOURCE duplicates of a
+    #   swe-bench-live task. Each pair shares repo, pull_number, base_commit and
+    #   created_at exactly and differs ONLY in instance_id letter case, so on a
+    #   case-insensitive volume both members address the same input, patch and
+    #   workspace paths and only one can be selectable.
+    #   Owner authorization (2026-10-19, F-9) applies the established
+    #   `conflicting_cross_source_priority_selected` rule -- swe-bench-live is
+    #   kept (POPULATION_SOURCES order) and the rebench copy is excluded. The
+    #   authority-chain case-only pairs are already refused by
+    #   `f2_s8_materialise`'s fail-closed collision guard.
+    "excluded_tasks": [
+        "networkx__networkx-8207",
+        "kozea__weasyprint-2494",
+        "quantecon__quantecon.py-769",
+        "pyomo__pyomo-3588",
+    ],
     # Parked = not a candidate until its blocking condition is resolved.
     #   stanfordnlp__dspy-8739 : withheld workspace (P1); not a candidate until
     #                            its workspace is preserved.
