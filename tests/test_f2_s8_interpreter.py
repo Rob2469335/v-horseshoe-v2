@@ -20,6 +20,7 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
+from qwen_train import f2_s8_acquisition as acquisition  # noqa: E402
 from qwen_train.f2_s8_acquisition import (  # noqa: E402
     AcquisitionError,
     requires_python,
@@ -79,6 +80,134 @@ class TestRequiresPythonParsing:
 
     def test_no_declaration_means_unconstrained(self, tmp_path):
         assert requires_python(_project(tmp_path, None)) is None
+
+
+class TestSetupPyDeclaration:
+    """``setup.py``-only projects must not look unconstrained.
+
+    Measured motivation: ``django-json-api`` declares ``python_requires=">=3.9"``
+    in ``setup.py`` and nowhere else, and the parser returned ``None`` -- the same
+    "declared but invisible" defect that cost the SDV tasks, one source lower.
+    """
+
+    @staticmethod
+    def _setup(tmp_path: pathlib.Path, body: str, *, name: str = "proj") -> pathlib.Path:
+        proj = tmp_path / name
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "setup.py").write_text(body, encoding="utf-8")
+        return proj
+
+    def test_a_literal_declaration_is_read(self, tmp_path):
+        proj = self._setup(tmp_path, "setup(name='x', python_requires='>=3.9')\n")
+        assert requires_python(proj) == ((3, 9), (99, 0))
+
+    def test_a_double_quoted_declaration_is_read(self, tmp_path):
+        proj = self._setup(tmp_path, 'setup(name="x", python_requires=">=3.11")\n')
+        assert requires_python(proj) == ((3, 11), (99, 0))
+
+    def test_a_module_constant_formatted_into_the_specifier_is_resolved(self, tmp_path):
+        """The electrum shape: python_requires='>={}'.format(CONSTANT)."""
+        proj = self._setup(
+            tmp_path,
+            'MIN_PYTHON_VERSION = "3.10.0"\n'
+            "setup(name='x', python_requires='>={}'.format(MIN_PYTHON_VERSION))\n",
+        )
+        assert requires_python(proj) == ((3, 10), (99, 0))
+
+    def test_an_f_string_declaration_is_resolved(self, tmp_path):
+        proj = self._setup(
+            tmp_path,
+            'MIN = "3.9"\nsetup(name="x", python_requires=f">={MIN}")\n',
+        )
+        assert requires_python(proj) == ((3, 9), (99, 0))
+
+    def test_setup_py_code_is_never_executed(self, tmp_path):
+        """A declaration that would kill the process if imported is still read."""
+        proj = self._setup(
+            tmp_path,
+            "raise SystemExit('must not run')\n"
+            "setup(name='x', python_requires='>=3.12')\n",
+        )
+        assert requires_python(proj) == ((3, 12), (99, 0))
+
+    def test_a_requirement_newer_than_every_candidate_excludes_them_all(self, tmp_path):
+        proj = self._setup(tmp_path, "setup(name='x', python_requires='>=3.13')\n")
+        py310 = _exe(tmp_path, "py310")
+        versions = {py310: (3, 10)}
+        with pytest.raises(AcquisitionError, match="no available interpreter"):
+            _choose(proj, [py310], versions)
+
+    def test_no_python_requires_keyword_means_unconstrained(self, tmp_path):
+        proj = self._setup(tmp_path, "setup(name='x', version='1')\n")
+        assert requires_python(proj) is None
+
+    def test_an_unparseable_setup_py_is_not_a_declaration(self, tmp_path):
+        proj = self._setup(tmp_path, "def broken(:\n")
+        assert requires_python(proj) is None
+
+    def test_a_non_static_declaration_fails_closed(self, tmp_path):
+        """The file says there is a constraint we cannot read: refuse, do not guess."""
+        proj = self._setup(
+            tmp_path,
+            "import os\nsetup(name='x', python_requires=os.environ['NOPE'])\n",
+        )
+        with pytest.raises(AcquisitionError, match="cannot be resolved statically"):
+            requires_python(proj)
+
+    def test_the_parser_never_executes_or_imports_project_code(self):
+        """Static proof that the setup.py path is AST-only, not import-based."""
+        source = pathlib.Path(acquisition.__file__).read_text(
+            encoding="utf-8", errors="replace")
+        start = source.index("def _setup_py_python_requires")
+        end = source.index("def _bounds_from_specifier")
+        body = source[start:end]
+        for forbidden in ("exec(", "eval(", "importlib", "runpy", "subprocess",
+                          "compile("):
+            assert forbidden not in body, (
+                f"_setup_py_python_requires must not use {forbidden!r}")
+
+    def test_a_malformed_declaration_is_refused_not_ignored(self, tmp_path):
+        proj = self._setup(tmp_path, "setup(name='x', python_requires='not-a-version')\n")
+        with pytest.raises(AcquisitionError, match="cannot be interpreted"):
+            requires_python(proj)
+
+    def test_conflicting_declarations_are_refused(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\nrequires-python = '>=3.9'\n", encoding="utf-8")
+        (proj / "setup.py").write_text(
+            "setup(name='x', python_requires='>=3.11')\n", encoding="utf-8")
+        with pytest.raises(AcquisitionError, match="conflicting requires-python"):
+            requires_python(proj)
+
+    def test_agreeing_declarations_collapse_to_one_bound(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "pyproject.toml").write_text(
+            "[project]\nname = 'x'\nrequires-python = '>=3.10'\n", encoding="utf-8")
+        (proj / "setup.py").write_text(
+            "setup(name='x', python_requires='>=3.10')\n", encoding="utf-8")
+        assert requires_python(proj) == ((3, 10), (99, 0))
+
+    def test_setup_cfg_and_setup_py_conflict_is_refused(self, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "setup.cfg").write_text(
+            "[options]\npython_requires = >=3.9\n", encoding="utf-8")
+        (proj / "setup.py").write_text(
+            "setup(name='x', python_requires='>=3.12')\n", encoding="utf-8")
+        with pytest.raises(AcquisitionError, match="conflicting requires-python"):
+            requires_python(proj)
+
+    def test_two_conflicting_setup_calls_are_refused(self, tmp_path):
+        proj = self._setup(
+            tmp_path,
+            "setup(name='a', python_requires='>=3.9')\n"
+            "setup(name='b', python_requires='>=3.11')\n",
+        )
+        with pytest.raises(AcquisitionError, match="conflicting python_requires"):
+            requires_python(proj)
 
 
 class TestSelection:

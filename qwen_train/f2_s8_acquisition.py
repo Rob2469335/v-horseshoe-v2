@@ -37,10 +37,12 @@ Sources consulted (accessed 2026-10-15)
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
 import re
+import subprocess
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -909,14 +911,148 @@ def discover_interpreters(
     )
 
 
-def requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | None:
-    """Declared ``requires-python`` bounds, read statically (or ``None``).
+def _static_str(node: ast.AST, consts: Mapping[str, str]) -> str | None:
+    """Resolve a string expression statically, WITHOUT executing project code.
 
-    ONE parser for the whole pipeline. The builder previously had its own regex
-    that matched only DOUBLE-quoted assignments, so a project declaring
-    ``requires-python = '>=3.8,<3.14'`` (single quotes -- valid TOML) looked
-    unconstrained and was built on the newest interpreter, which pip then
-    rejected. Reading through ``tomllib`` removes the quote-style dependency.
+    Only forms that cannot have side effects are resolved: string literals,
+    module-level string constants, ``+`` concatenation, f-strings whose holes are
+    themselves static, and ``<static template>.format(<static args>)``.  Anything
+    else returns ``None`` so callers treat the declaration as *unreadable* rather
+    than inventing a bound for it.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return consts.get(node.id)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_str(node.left, consts)
+        right = _static_str(node.right, consts)
+        if left is not None and right is not None:
+            return left + right
+        return None
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                resolved = _static_str(value.value, consts)
+                if resolved is None:
+                    return None
+                parts.append(resolved)
+            else:
+                return None
+        return "".join(parts)
+    if isinstance(node, ast.Call):
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "format"):
+            return None
+        template = _static_str(func.value, consts)
+        if template is None:
+            return None
+        args: list[str] = []
+        for arg in node.args:
+            resolved = _static_str(arg, consts)
+            if resolved is None:
+                return None
+            args.append(resolved)
+        kwargs: dict[str, str] = {}
+        for keyword in node.keywords:
+            if keyword.arg is None:          # ``**mapping`` is not static
+                return None
+            resolved = _static_str(keyword.value, consts)
+            if resolved is None:
+                return None
+            kwargs[keyword.arg] = resolved
+        try:
+            return template.format(*args, **kwargs)
+        except (IndexError, KeyError, ValueError):
+            return None
+    return None
+
+
+def _module_string_constants(tree: ast.AST) -> dict[str, str]:
+    """Module-level ``NAME = <static string>`` bindings, in source order.
+
+    Later assignments can read earlier ones, so ``B = ">=" + A`` resolves when
+    ``A`` was assigned above it.  Rebinding is not modelled: the LAST static
+    assignment wins, which is the conservative reading of a mutable module.
+    """
+    consts: dict[str, str] = {}
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                value = _static_str(node.value, consts)
+                if value is not None:
+                    consts[target.id] = value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.value is not None:
+                value = _static_str(node.value, consts)
+                if value is not None:
+                    consts[node.target.id] = value
+    return consts
+
+
+def _setup_py_python_requires(project: Path) -> str | None:
+    """``python_requires=`` from ``setup.py``, read with ``ast`` (never executed).
+
+    ``setup.py`` is arbitrary executable code, so it is parsed, never imported.
+    Returns the declared specifier, or ``None`` when the file is absent or exposes
+    no ``python_requires`` keyword.
+
+    Fail-closed rules:
+
+    * a ``python_requires`` whose value is not statically resolvable **raises** --
+      the file says there is a constraint and we cannot read it, so guessing an
+      interpreter is the wrong direction;
+    * two different resolvable values **raise** (ambiguous);
+    * a file that does not parse under this interpreter is treated as having no
+      readable declaration.  That is not a silent default: an unparseable file is
+      evidence about *this* parser, not about the project's requirement, and
+      treating it as a conflict would refuse projects that build fine.
+    """
+    f = Path(project) / "setup.py"
+    if not f.is_file():
+        return None
+    try:
+        tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, ValueError):
+        # Not valid Python under THIS interpreter: no evidence either way.
+        return None
+    consts = _module_string_constants(tree)
+    found: list[str] = []
+    unresolved: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != "python_requires":
+                continue
+            value = _static_str(keyword.value, consts)
+            if value is None:
+                try:
+                    rendered = ast.unparse(keyword.value)
+                except Exception:  # noqa: BLE001 - rendering is diagnostic only
+                    rendered = "<unresolvable expression>"
+                unresolved.append(rendered)
+            else:
+                found.append(value)
+    if unresolved:
+        raise AcquisitionError(
+            "setup.py declares python_requires with an expression that cannot be "
+            f"resolved statically: {sorted(set(unresolved))!r} - refusing rather "
+            "than guessing an interpreter constraint")
+    distinct = sorted(set(found))
+    if len(distinct) > 1:
+        raise AcquisitionError(
+            "setup.py declares conflicting python_requires values: "
+            f"{distinct}")
+    return distinct[0] if distinct else None
+
+
+def _bounds_from_specifier(spec: str) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Interpret one ``requires-python`` specifier over ``(major, minor)``.
 
     Operators are interpreted over ``(major, minor)``: ``>=``/``>`` raise the
     lower bound, ``<``/``<=`` lower the upper bound, ``==`` pins one minor
@@ -924,18 +1060,6 @@ def requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | 
     major version). A specifier that yields no interpretable constraint is an
     error, never "unconstrained".
     """
-    data = _read_pyproject(Path(project))
-    spec = str((data.get("project") or {}).get("requires-python") or "")
-    if not spec:
-        f = Path(project) / "setup.cfg"
-        if f.is_file():
-            m = re.search(r"python_requires\s*=\s*(.+)",
-                          f.read_text(encoding="utf-8", errors="replace"))
-            if m:
-                spec = m.group(1).strip().strip("'\"")
-    if not spec:
-        return None
-
     lo: tuple[int, int] = (3, 0)
     hi: tuple[int, int] = (99, 0)
     recognised = False
@@ -962,6 +1086,65 @@ def requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | 
     if lo >= hi:
         raise AcquisitionError(f"requires-python is unsatisfiable: {spec!r}")
     return lo, hi
+
+
+def requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Declared ``requires-python`` bounds, read statically (or ``None``).
+
+    ONE parser for the whole pipeline. The builder previously had its own regex
+    that matched only DOUBLE-quoted assignments, so a project declaring
+    ``requires-python = '>=3.8,<3.14'`` (single quotes -- valid TOML) looked
+    unconstrained and was built on the newest interpreter, which pip then
+    rejected. Reading through ``tomllib`` removes the quote-style dependency.
+
+    Three sources are consulted, because projects declare this in exactly one of
+    them and none is privileged by the ecosystem:
+
+    * ``pyproject.toml`` ``[project].requires-python`` (TOML);
+    * ``setup.cfg`` ``[options] python_requires`` (INI);
+    * ``setup.py`` ``python_requires=`` (parsed with :mod:`ast`, never executed).
+
+    The previous revision consulted only the first two and treated ``setup.py``
+    as if it declared nothing, so a ``setup.py``-only project looked
+    unconstrained. That is exactly the SDV failure shape one level down.
+
+    Disagreement between sources is refused rather than resolved: picking a
+    winner silently is how a builder ends up on an interpreter the project never
+    allowed. Sources that agree collapse to one bound set.
+    """
+    project = Path(project)
+    declared: list[tuple[str, str]] = []
+
+    data = _read_pyproject(project)
+    pyproject_spec = str(
+        (data.get("project") or {}).get("requires-python") or "").strip()
+    if pyproject_spec:
+        declared.append(("pyproject.toml [project].requires-python", pyproject_spec))
+
+    cfg = project / "setup.cfg"
+    if cfg.is_file():
+        m = re.search(r"python_requires\s*=\s*(.+)",
+                      cfg.read_text(encoding="utf-8", errors="replace"))
+        if m:
+            cfg_spec = m.group(1).strip().strip("'\"")
+            if cfg_spec:
+                declared.append(("setup.cfg python_requires", cfg_spec))
+
+    setup_spec = _setup_py_python_requires(project)
+    if setup_spec:
+        declared.append(("setup.py python_requires", setup_spec))
+
+    if not declared:
+        return None
+
+    parsed = [(source, _bounds_from_specifier(spec)) for source, spec in declared]
+    distinct = {bounds for _, bounds in parsed}
+    if len(distinct) > 1:
+        detail = "; ".join(
+            f"{source} declares {spec!r}" for source, spec in declared)
+        raise AcquisitionError(
+            f"conflicting requires-python declarations: {detail}")
+    return parsed[0][1]
 
 
 def select_interpreter(
