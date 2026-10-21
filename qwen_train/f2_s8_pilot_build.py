@@ -1,0 +1,1045 @@
+"""F2 S8 pilot: host-side workspace builder (acquisition/build boundary).
+
+The S8 package splits execution into two boundaries. This script is the FIRST
+one: it has network access and resolves each pinned task's repository,
+interpreter environment and dependency set. Nothing here runs a task's tests
+and nothing here produces scientific evidence -- that happens offline in the
+guest, under the governed pipeline.
+
+Workspaces are built under a FIXED absolute root (``C:\\f2_pilot``) that is
+reproduced identically inside the guest, because a virtual environment embeds
+absolute paths in its launcher scripts and console entry points. Building at
+one path and evaluating at another silently breaks every installed console
+script, which would look like a task failure rather than a delivery defect.
+
+Each workspace is: repo at base_commit + test_patch (the base state), plus a
+gold sibling that additionally carries the gold patch. Both are built here so
+the guest never needs git, a compiler or the network.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Mapping
+
+from qwen_train.f2_population_build import source_to_screen_row
+from qwen_train.f2_evaluator import analyze_test_invocation
+from qwen_train.f2_s8_acquisition import (
+    BUILDER_SOURCE,
+    DECLARED_ADJUSTMENTS,
+    builder_install_plan,
+    declared_required_version,
+    declared_test_requirements,
+    discover_interpreters,
+    project_install_context,
+    repo_url_for,
+    require_unprivileged_identity,
+    requires_python,
+    resolve_task_project_root,
+)
+
+#: Git executable for the acquisition host. The builder is a Windows-host tool
+#: and the pilot evidence was produced with the exact binary below, so Windows
+#: keeps that literal path UNCHANGED -- substituting a different git could alter
+#: a governed build. On every other platform the literal does not exist, so it is
+#: resolved from PATH instead. The literal alone made the Linux CI runner fail
+#: every plugin-compatibility test with ``FileNotFoundError`` (11 CI failures);
+#: git is on PATH there, so the resolution succeeds.
+GIT = (
+    r"C:\Program Files\Git\cmd\git.exe"
+    if os.name == "nt"
+    else (shutil.which("git") or "git")
+)
+INPUTS = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_inputs\full")
+PATCHES = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_build\patches")
+HOST_PYTHON = r"C:\Users\rober\Projects\v-horseshoe-v2\.venv\Scripts\python.exe"
+ROOT = Path(r"C:\f2_pilot")
+
+#: Interpreters available on the acquisition host, in PREFERENCE order.
+#:
+#: Order is a deliberate policy, not an accident of installation. Newer is not
+#: better: a task is built on the first interpreter that satisfies its declared
+#: ``requires-python``, and wheel coverage collapses at the newest releases. The
+#: measured case is ``sissbruecker__linkding-1175`` (``>=3.13``), where uv picked
+#: the newly-installed CPython 3.15 and ``psycopg-binary`` had no wheel for it.
+#:
+#: 3.12 and 3.13 lead because they have the widest prebuilt-wheel coverage for
+#: 2024-2025 dependencies; 3.11 then 3.14 follow; 3.10 is the last resort for
+#: projects that still exclude 3.14. Entries that are not installed are skipped
+#: by ``pick_interpreter``, so listing a future version is harmless.
+#:
+#: CPython 3.15 is deliberately ABSENT: it is present on this host and is the
+#: py-launcher default, so leaving it out is what stops it being selected.
+INTERPRETERS = (
+    r"C:\Users\rober\AppData\Local\Programs\Python\Python312\python.exe",  # 3.12
+    r"C:\Users\rober\AppData\Local\Programs\Python\Python313\python.exe",  # 3.13
+    r"C:\Users\rober\AppData\Local\Programs\Python\Python311\python.exe",  # 3.11
+    r"C:\Python314\python.exe",                      # 3.14.8
+    r"C:\Users\rober\AppData\Local\Programs\Python\Python310\python.exe",  # 3.10.11
+    HOST_PYTHON,                                     # 3.14.8, repo venv
+)
+
+REPOS = {
+    "HypothesisWorks__hypothesis-4532": "https://github.com/HypothesisWorks/hypothesis.git",
+    "python__mypy-19767": "https://github.com/python/mypy.git",
+    "stanfordnlp__dspy-8739": "https://github.com/stanfordnlp/dspy.git",
+    "openai__openai-agents-python-1633": "https://github.com/openai/openai-agents-python.git",
+    "openai__openai-agents-python-1636": "https://github.com/openai/openai-agents-python.git",
+}
+
+
+def declared_test_cmd(rec: Mapping[str, Any]) -> str:
+    """The canonical declared command for a task record -- never a raw field.
+
+    A SWE-bench-Live row declares ``test_cmds`` as a LIST and the frozen
+    registration binds the canonical chain the source adapter derives from it
+    (see ``f2_s8_pilot_live.build_specs``); reading the raw list here would
+    describe a different command than the one the registration bound.
+    """
+    return str(source_to_screen_row("swe-bench-live", rec).get("test_cmd") or "")
+
+
+def uses_uv_environment(test_cmd: str) -> bool:
+    """True when the DECLARED command is driven by ``uv``.
+
+    Such a task's environment is owned by uv, which creates ``repo/.venv``
+    itself; building a second, unused pip venv for it only doubles the delivered
+    payload (see the ``uses_uv`` comment in :func:`build`).  Derived from the
+    command rather than a hand-maintained list, so a task added later is handled
+    by the same rule as the pilot's two uv tasks (their declared commands are
+    ``uv run pytest -rA``).
+
+    The shared analyser is used so the builder, the pre-check and the live runner
+    can never disagree about whether a command is uv-driven.
+    """
+    invocation = analyze_test_invocation(str(test_cmd or ""))
+    if invocation.ok:
+        return invocation.uses_uv
+    return test_cmd.strip().startswith("uv ")
+
+
+def resolve_repo_url(task_id: str, inputs: Path) -> str:
+    """The clone URL for a task: the explicit pilot mapping, else its own record.
+
+    Returns ``""`` when neither exists, which is the caller's signal to skip the
+    task -- exactly the behaviour of the hand-maintained mapping.  A record whose
+    ``repo`` is not ``owner/name`` raises (:func:`repo_url_for`), so a malformed
+    record can never be silently turned into a plausible URL.
+    """
+    explicit = REPOS.get(task_id)
+    if explicit:
+        return explicit
+    rec_path = Path(inputs) / f"{task_id}.json"
+    if not rec_path.is_file():
+        return ""
+    rec = json.loads(rec_path.read_text(encoding="utf-8"))
+    return repo_url_for(str(rec.get("repo") or ""))
+
+#: pytest pins. hypothesis at this commit reads ``Argument._long_opts``, which
+#: pytest 9 removed, so its own conftest cannot even load under 9. Pinning to a
+#: version whose private API it understands is an environment decision, not a
+#: change to the declared test command.
+PYTEST_PIN = "pytest==8.3.5"
+
+#: POSIX ``tee`` must be resolvable on PATH. ``tests/mcp/helpers.py`` does
+#: ``assert shutil.which("tee")`` at import time, and the assertion runs during
+#: COLLECTION, so a missing ``tee`` aborts the entire pytest session before a
+#: single declared node can run -- turning an environment gap into what would
+#: look like a task failure. Git for Windows ships it; only the directory is
+#: missing from PATH.
+POSIX_BIN = r"C:\Program Files\Git\usr\bin"
+
+#: Optional dependency groups the openai-agents test suite imports unguarded.
+#: Without them collection aborts on ``ModuleNotFoundError`` for ``litellm`` and
+#: ``numpy``. Resolving them is acquisition work; the declared command is
+#: unchanged.
+UV_ALL_EXTRAS = ("openai__openai-agents-python-1633",
+                 "openai__openai-agents-python-1636")
+
+#: Extra packages a task's OWN suite demands at collection time. Each was found
+#: by running the declared command on the acquisition host, which is the phase
+#: whose job is exactly this: resolve the environment, so a dependency gap can
+#: never be misread later as a task outcome.
+#:
+#: * mypy's ``pyproject.toml`` sets ``addopts = -nauto``, and pytest rejects an
+#:   unknown ``-n`` outright (exit 4, no JUnit at all) without xdist.
+#: * dspy imports ``datamodel_code_generator`` and ``PIL`` unguarded in two
+#:   test modules, and a collection error aborts the whole session.
+EXTRA_DEPS = {
+    "python__mypy-19767": ["pytest-xdist"],
+    "stanfordnlp__dspy-8739": ["datamodel-code-generator", "pillow"],
+}
+
+#: ``addopts`` tokens that imply a pytest PLUGIN distribution must be installed
+#: before the declared command can even configure.  A project declares these in
+#: its own pytest configuration, not in its dependency list, so
+#: ``project_install_context`` cannot see them -- and pytest aborts with exit 4
+#: ("unrecognized arguments") or crashes in ``pytest_configure``, producing NO
+#: JUnit at all, which is then indistinguishable from a task outcome unless the
+#: environment is resolved first (the whole job of this build phase).
+#:
+#: Keyed by the option's leading token (``-n`` matches ``-n``, ``-n4``,
+#: ``-nauto``); ``--cov`` matches every ``--cov*`` flag.  Only options with an
+#: unambiguous owning distribution are listed -- nothing is guessed.
+_PLUGIN_BY_OPTION: tuple[tuple[str, str], ...] = (
+    ("-n", "pytest-xdist"),
+    ("--numprocesses", "pytest-xdist"),
+    ("--dist", "pytest-xdist"),
+    ("--cov", "pytest-cov"),
+    ("--benchmark", "pytest-benchmark"),
+    ("--timeout", "pytest-timeout"),
+    ("--forked", "pytest-forked"),
+    ("--randomly", "pytest-randomly"),
+    ("--asyncio-mode", "pytest-asyncio"),
+    ("--reruns", "pytest-rerunfailures"),
+    ("--instafail", "pytest-instafail"),
+    ("--html", "pytest-html"),
+    ("--xdoctest", "pytest-xdoctest"),
+)
+
+_PYTEST_CONFIG_FILES = ("pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini")
+
+
+def pytest_config_plugins(project: Path) -> list[str]:
+    """Distributions a project's OWN pytest ``addopts`` require. Deterministic.
+
+    Reads the same configuration pytest reads, extracts every ``addopts`` value,
+    and maps each option token to its owning distribution via
+    :data:`_PLUGIN_BY_OPTION`.  Returns a sorted, de-duplicated list; an
+    unreadable or absent configuration yields ``[]`` (never an invented
+    requirement).
+    """
+    import re
+
+    tokens: list[str] = []
+    for name in _PYTEST_CONFIG_FILES:
+        f = project / name
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        values: list[str] = []
+        # pyproject `addopts` may be a SINGLE-LINE array, a MULTI-LINE array
+        # (each element on its own line -- the form `vacanza__holidays-2859`
+        # uses), or a plain quoted/ini string.  All three must parse, or the
+        # plugin is silently missed and the declared command aborts with exit 4.
+        for m in re.finditer(r"^\s*addopts\s*=\s*(\[.*?\])", text,
+                             re.MULTILINE | re.DOTALL):
+            values.append(m.group(1))
+        for m in re.finditer(r"^\s*addopts\s*=\s*([^\[]\S.*)$", text, re.MULTILINE):
+            values.append(m.group(1))
+        for value in values:
+            for q in re.findall(r"[\"']([^\"']+)[\"']", value):
+                tokens.extend(q.split())
+            if not re.search(r"[\"']", value):        # bare ini form
+                tokens.extend(value.strip("\"'").split())
+    def _matches(tok: str, opt: str) -> bool:
+        """A token implies ``opt``'s plugin.
+
+        Long options match by PREFIX so the flag's own arguments are covered:
+        ``--cov`` must match ``--cov``, ``--cov=src`` and
+        ``--cov-fail-under=100`` (the form `vacanza__holidays-2859` uses), and
+        ``--randomly`` must match ``--randomly-seed=1``.  The short ``-n`` needs
+        its own rule because ``-n``, ``-n4`` and ``-nauto`` share a prefix while
+        ``--numprocesses`` is handled by its own long entry.
+        """
+        if opt == "-n":
+            return tok == "-n" or (tok.startswith("-n") and not tok.startswith("--"))
+        return tok == opt or tok.startswith(opt)
+
+    found = {
+        dist for tok in tokens for opt, dist in _PLUGIN_BY_OPTION
+        if _matches(tok, opt)
+    }
+    return sorted(found)
+
+
+def command_plugins(test_cmd: str) -> list[str]:
+    """Distributions the DECLARED test command itself requires.
+
+    ``pytest_config_plugins`` reads the project's ``addopts``; this reads the
+    other place a project declares a pytest option -- its registered command.
+    ``BerriAI__litellm-13675`` declares ``poetry run pytest -vv -n 4 -rA
+    tests/test_litellm`` and its ``dev`` group contains no xdist, so pytest
+    aborted with ``error: unrecognized arguments: -n`` (exit 4, no JUnit). Its
+    own CI declares the plugin explicitly -- ``.github/workflows/test-litellm.yml``
+    installs ``pytest-xdist``, and so do the ``Makefile`` and CircleCI config --
+    so installing it honours the project's declared test environment rather than
+    inventing a dependency. A flag with no unambiguous owner yields nothing.
+    """
+    tokens = str(test_cmd or "").split()
+
+    def _matches(tok: str, opt: str) -> bool:
+        if opt == "-n":
+            return tok == "-n" or (tok.startswith("-n") and not tok.startswith("--"))
+        return tok == opt or tok.startswith(opt)
+
+    return sorted({
+        dist for tok in tokens for opt, dist in _PLUGIN_BY_OPTION
+        if _matches(tok, opt)
+    })
+
+
+def effective_pytest_pin(adjustment: Mapping[str, Any]) -> str:
+    """The pytest requirement the installer will use for one task.
+
+    ``DECLARED_ADJUSTMENTS[...]["pytest_pin"]`` was recorded in ``build_identity``
+    but never read, so the global pin always won. ``BerriAI__litellm-13675``
+    declares ``pytest>=7.4.3,<8.0.0`` in its Poetry dev group, and installing that
+    group against the global ``pytest==8.3.5`` made the install plan refuse the
+    build outright. A declared pin is the project's own statement of which pytest
+    its suite runs on, so it takes precedence.
+    """
+    return str(adjustment.get("pytest_pin") or PYTEST_PIN)
+
+
+def run(cmd, *, cwd=None, timeout=3600, check=True):
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    if check and proc.returncode != 0:
+        raise RuntimeError(
+            f"command failed rc={proc.returncode}: {' '.join(map(str, cmd))}\n"
+            f"stdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
+        )
+    return proc
+
+
+def _version_of(python: str) -> tuple[int, int]:
+    out = run([python, "-c", "import sys;print(sys.version_info[0],sys.version_info[1])"]).stdout
+    major, minor = out.split()
+    return int(major), int(minor)
+
+
+def _requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Declared bounds, delegated to the ONE parser in ``f2_s8_acquisition``.
+
+    This used to be a second, weaker regex that matched only double-quoted
+    assignments. ``requires-python = '>=3.8,<3.14'`` (single quotes) therefore
+    looked unconstrained, the newest interpreter was chosen, and pip rejected the
+    package mid-install -- which is exactly how the SDV tasks failed.
+    """
+    return requires_python(Path(project))
+
+
+_DISCOVERED_INTERPRETERS: dict[tuple[tuple[int, int], ...] | None, list[str]] = {}
+
+#: OWNER-RATIFIED environment sidecar (owner decision 2026-10-20).  Read-only
+#: input; the builder never writes it.  Only records with status ``ratified``
+#: are usable.  ``proposed`` is explicitly NOT accepted: correct hashes are an
+#: integrity property, not an authorization.
+DECLARED_ENVIRONMENTS_SIDECAR = Path(
+    os.environ.get("F2_S8_DECLARED_ENVIRONMENTS_SIDECAR")
+    or r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_20261020.json"
+)
+DECLARED_ENVIRONMENTS_PROVENANCE = Path(
+    os.environ.get("F2_S8_DECLARED_ENVIRONMENTS_PROVENANCE")
+    or r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_provenance_20261020.json"
+)
+_SIDECAR_SCHEMA = "f2-s8-declared-environments/v2"
+_PROVENANCE_SCHEMA = "f2-s8-declared-environments-provenance/v2"
+_EVIDENCE_SCHEMA = "f2-s8-live-image-map/v1"
+_OLD_SIDECAR_SCHEMA = "f2-s8-declared-environments/v1"
+_SIDECAR_RATIFIED_STATUS = "ratified"
+_SIDECAR_BLOCKED_STATUS = "blocked_conflict"
+_SIDECAR_REJECTED_STATUSES = ("proposed",)
+
+
+class DeclaredInterpreterError(RuntimeError):
+    """A task's DECLARED Python minor is missing, ambiguous or unsatisfiable."""
+
+
+class DeclaredEnvironmentError(RuntimeError):
+    """The declared-environment sidecar is untrustworthy or inconsistent."""
+
+
+def declared_minor_tuple(declared: str | int | None) -> tuple[int, int] | None:
+    """(major, minor) from the evidence forms used by the task records.
+
+    Accepts ``python_base_310``, ``3.10``, ``3.10.18`` and ``310``.  Returns
+    ``None`` when nothing parseable is present -- callers MUST fail closed.
+    """
+    if declared is None:
+        return None
+    text = str(declared).strip()
+    if not text:
+        return None
+    m = re.search(r"python_base_3(\d+)", text)
+    if m:
+        return (3, int(m.group(1)))
+    nums = re.findall(r"\d+", text)
+    if len(nums) >= 2:
+        return (int(nums[0]), int(nums[1]))
+    if len(nums) == 1 and len(nums[0]) == 3 and nums[0].startswith("3"):
+        return (3, int(nums[0][1:]))
+    return None
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _strict_json(text: str, what: str):
+    """json.loads that refuses duplicate keys (no silent last-wins)."""
+
+    def _hook(pairs):
+        seen = set()
+        for k, _ in pairs:
+            if k in seen:
+                raise DeclaredEnvironmentError(f"{what}: duplicate key {k!r}")
+            seen.add(k)
+        return dict(pairs)
+
+    try:
+        return json.loads(text, object_pairs_hook=_hook)
+    except DeclaredEnvironmentError:
+        raise
+    except ValueError as exc:
+        raise DeclaredEnvironmentError(f"{what}: malformed JSON: {exc}") from exc
+
+
+def _check_bound(defn: dict, key: str, expected_schema: str, what: str) -> Path:
+    """Validate one {path, sha256, schema} binding and return the path."""
+    rec = defn.get(key)
+    if not isinstance(rec, dict):
+        raise DeclaredEnvironmentError(f"provenance.{key} is not an object")
+    p = Path(str(rec.get("path", "")))
+    if not p.is_file():
+        raise DeclaredEnvironmentError(f"{what} missing: {p}")
+    if _sha256_file(p) != rec.get("sha256"):
+        raise DeclaredEnvironmentError(f"{what} digest mismatch: {p}")
+    if rec.get("schema") != expected_schema:
+        raise DeclaredEnvironmentError(
+            f"{what} schema {rec.get('schema')!r} != {expected_schema!r}")
+    return p
+
+
+def load_declared_environments(
+    sidecar: Path | str | None = None,
+    provenance: Path | str | None = None,
+) -> dict[str, str]:
+    """Validated {task_id: minor} from the RATIFIED sidecar, or raise.
+
+    Integrity is bound to the ACTUAL bytes of the sidecar, of the old (proposed)
+    sidecar it was derived from, and of the policy evidence, all via the
+    provenance record.  Authorization is separate: only ``ratified`` records are
+    usable, whatever their hashes say.
+    """
+    sp = Path(sidecar or DECLARED_ENVIRONMENTS_SIDECAR)
+    pv = Path(provenance or DECLARED_ENVIRONMENTS_PROVENANCE)
+    if not sp.is_file():
+        raise DeclaredEnvironmentError(f"sidecar missing: {sp}")
+    if not pv.is_file():
+        raise DeclaredEnvironmentError(f"provenance missing: {pv}")
+
+    prov = _strict_json(pv.read_text(encoding="utf-8"), "provenance")
+    if prov.get("schema") != _PROVENANCE_SCHEMA:
+        raise DeclaredEnvironmentError(
+            f"provenance schema {prov.get('schema')!r} != {_PROVENANCE_SCHEMA!r}")
+    if prov.get("ratified_by") != "Rob":
+        raise DeclaredEnvironmentError(
+            f"provenance ratifying authority {prov.get('ratified_by')!r} is not authorised")
+
+    side_rec = prov.get("sidecar")
+    if not isinstance(side_rec, dict):
+        raise DeclaredEnvironmentError("provenance.sidecar is not an object")
+    if Path(str(side_rec.get("path", ""))).resolve() != sp.resolve():
+        raise DeclaredEnvironmentError(
+            f"provenance names a different sidecar: {side_rec.get('path')!r}")
+    if _sha256_file(sp) != side_rec.get("sha256"):
+        raise DeclaredEnvironmentError("sidecar digest mismatch")
+
+    _check_bound(prov, "source_old_sidecar", _OLD_SIDECAR_SCHEMA, "source old sidecar")
+    _check_bound(prov, "policy_evidence", _EVIDENCE_SCHEMA, "policy evidence")
+
+    body = _strict_json(sp.read_text(encoding="utf-8"), "sidecar")
+    if body.get("schema") != _SIDECAR_SCHEMA:
+        raise DeclaredEnvironmentError(
+            f"sidecar schema {body.get('schema')!r} != {_SIDECAR_SCHEMA!r}")
+    if body.get("ratified_by") != "Rob":
+        raise DeclaredEnvironmentError("sidecar ratifying authority is not Rob")
+    decls = body.get("declarations")
+    if not isinstance(decls, dict) or not decls:
+        raise DeclaredEnvironmentError("sidecar.declarations must be a non-empty object")
+
+    out: dict[str, str] = {}
+    for task, rec in decls.items():
+        if not isinstance(task, str) or not task:
+            raise DeclaredEnvironmentError(f"invalid task id in sidecar: {task!r}")
+        if not isinstance(rec, dict):
+            raise DeclaredEnvironmentError(f"{task}: record is not an object")
+        status = rec.get("status")
+        if status == _SIDECAR_BLOCKED_STATUS:
+            continue                      # explicitly blocked: no usable declaration
+        if status in _SIDECAR_REJECTED_STATUSES:
+            raise DeclaredEnvironmentError(
+                f"{task}: status {status!r} is not ratified and cannot be used")
+        if status != _SIDECAR_RATIFIED_STATUS:
+            raise DeclaredEnvironmentError(f"{task}: unknown sidecar status {status!r}")
+        if rec.get("ratified_by") != "Rob":
+            raise DeclaredEnvironmentError(f"{task}: record is not ratified by the authorised owner")
+        minor = rec.get("declared_python_minor")
+        if not isinstance(minor, str) or declared_minor_tuple(minor) is None:
+            raise DeclaredEnvironmentError(f"{task}: malformed declared_python_minor {minor!r}")
+        if rec.get("requires_python_compatibility") != "OK":
+            raise DeclaredEnvironmentError(
+                f"{task}: compatibility {rec.get('requires_python_compatibility')!r} is not OK")
+        out[task] = minor
+    return out
+
+
+def _declare_from_input(task_id: str, inputs: Path) -> str | None:
+    """The task's OWN declaration from its input record, or None."""
+    try:
+        rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    install = rec.get("install_config") or {}
+    for value in (rec.get("declared_python_minor"), install.get("base_image_name"),
+                  rec.get("base_image_name")):
+        if value:
+            return str(value)
+    return None
+
+
+def _declared_minor_for(
+    task_id: str,
+    inputs: Path,
+    *,
+    sidecar: Path | str | None = None,
+    provenance: Path | str | None = None,
+) -> str | None:
+    """The task's declared Python minor: input record first, else the RATIFIED sidecar.
+
+    Conflicts, unratified records, and an untrustworthy sidecar when it is the
+    only source all raise -- nothing is silently defaulted.
+    """
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise DeclaredInterpreterError(f"invalid task id: {task_id!r}")
+    from_input = _declare_from_input(task_id, inputs)
+    try:
+        side = load_declared_environments(sidecar, provenance)
+    except DeclaredEnvironmentError:
+        if from_input:
+            return from_input          # the input record is its own authority
+        raise
+    from_side = side.get(task_id)
+    if from_input and from_side:
+        a = declared_minor_tuple(from_input)
+        b = declared_minor_tuple(from_side)
+        if a != b:
+            raise DeclaredEnvironmentError(
+                f"{task_id}: input declares {from_input!r} but sidecar declares {from_side!r}")
+        return from_input
+    return from_input or from_side
+
+
+def available_interpreters(
+    prefer: tuple[tuple[int, int], ...] | None = None,
+) -> list[str]:
+    """Verified installed interpreters, discovered once per process.
+
+    ``prefer`` narrows the candidate set to an explicit minor list.  When it is
+    supplied, an empty discovery result is returned AS EMPTY: the static
+    ``INTERPRETERS`` fallback contains the preference default and must never be
+    substituted for a declared minor.
+    """
+    key = tuple(prefer) if prefer is not None else None
+    if key not in _DISCOVERED_INTERPRETERS:
+        try:
+            if prefer is None:
+                found = discover_interpreters(version_of=_version_of)
+                _DISCOVERED_INTERPRETERS[key] = found or list(INTERPRETERS)
+            else:
+                _DISCOVERED_INTERPRETERS[key] = discover_interpreters(
+                    version_of=_version_of, prefer=prefer
+                )
+        except Exception:  # noqa: BLE001 - never let discovery break a build
+            _DISCOVERED_INTERPRETERS[key] = (
+                list(INTERPRETERS) if prefer is None else []
+            )
+    return _DISCOVERED_INTERPRETERS[key]
+
+
+def pick_interpreter(
+    project: Path,
+    *,
+    prefer: tuple[tuple[int, int], ...] | None = None,
+) -> str:
+    """Choose the first available interpreter the project's metadata accepts.
+
+    ``prefer`` restricts the search to the given minors.  With ``prefer=None``
+    the documented preference order applies (legacy behaviour, retained only for
+    callers that have no declared environment).
+    """
+    bounds = _requires_python(project)
+    candidates = available_interpreters(prefer)
+    for candidate in candidates:
+        if not Path(candidate).is_file():
+            continue
+        if bounds is None:
+            return candidate
+        lo, hi = bounds
+        ver = _version_of(candidate)
+        if lo <= ver < hi:
+            return str(candidate)
+    raise RuntimeError(
+        f"no available interpreter satisfies requires-python={bounds!r} "
+        f"from {candidates}"
+    )
+
+
+def resolve_declared_interpreter(project: Path, declared_minor: str | int | None) -> str:
+    """Interpreter for a task's DECLARED minor, or fail closed."""
+    minor = declared_minor_tuple(declared_minor)
+    if minor is None:
+        raise DeclaredInterpreterError(
+            f"declared Python minor is missing or unparseable: {declared_minor!r}; "
+            "refusing to fall back to the preference default"
+        )
+    bounds = _requires_python(project)
+    if bounds is not None and not (bounds[0] <= minor < bounds[1]):
+        raise DeclaredInterpreterError(
+            f"declared Python minor {minor[0]}.{minor[1]} violates the project's "
+            f"requires-python={bounds!r}"
+        )
+    return pick_interpreter(project, prefer=(minor,))
+
+
+def _rmtree(path: Path) -> None:
+    """Remove a tree that may contain read-only git objects.
+
+    ``--filter=blob:none`` clones leave pack files read-only, and
+    ``shutil.rmtree`` then raises ``PermissionError`` on Windows, which left a
+    half-built workspace behind and made the next clone fail on a
+    non-empty destination. Clear the read-only bit before removal.
+    """
+    if not path.exists():
+        return
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            try:
+                os.chmod(os.path.join(root, name), stat.S_IWRITE)
+            except OSError:
+                pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def build(task_id: str, url: str, *, inputs: Path = INPUTS,
+          patches: Path = PATCHES,
+          declared_python_minor: str | int | None = None) -> dict:
+    rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
+    base_commit = rec["base_commit"]
+    ws = ROOT / task_id
+    repo = ws / "repo"
+    gold_repo = ws / "repo_gold"
+
+    _rmtree(repo)
+    _rmtree(gold_repo)
+    ws.mkdir(parents=True, exist_ok=True)
+
+    t0 = time.time()
+    run([GIT, "clone", "--filter=blob:none", "--quiet", url, str(repo)])
+    run([GIT, "checkout", "--quiet", base_commit], cwd=repo)
+    run([GIT, "apply", str(Path(patches) / f"{task_id}.test_patch")], cwd=repo)
+
+    # Python layout differs per repository. A monorepo's installable project is
+    # often NOT the repo root (awslabs/mcp keeps 58 subprojects under src/,
+    # cirq keeps the real package in cirq-core), so the root is RESOLVED from
+    # declared metadata rather than assumed. `discover_project_root` existed but
+    # was never called here, and the only special case was hardcoded.
+    project_root = resolve_task_project_root(
+        repo,
+        test_cmd=declared_test_cmd(rec),
+        patch_text=str(rec.get("patch") or ""),
+        fail_to_pass=rec.get("FAIL_TO_PASS") or (),
+        override="hypothesis-python" if task_id.startswith("HypothesisWorks") else "",
+    ).resolve()
+    sub = project_root.relative_to(repo.resolve()).as_posix()
+    sub = "" if sub == "." else sub
+    project = repo / sub if sub else repo
+    gold_project = gold_repo / sub if sub else gold_repo
+
+    # Gold tree is cut BEFORE either venv exists, so the copy cannot inherit a
+    # base virtualenv (which would waste gigabytes and, worse, shadow the gold
+    # environment that is about to be built for it).
+    shutil.copytree(repo, gold_repo, symlinks=True,
+                    ignore=shutil.ignore_patterns(".venv", ".venvuv", "__pycache__"))
+    run([GIT, "apply", str(Path(patches) / f"{task_id}.gold_patch")], cwd=gold_repo)
+
+    # Fail closed at the UNTRUSTED boundary itself, not only in main(): a direct
+    # call to build() must not be able to pip-install a task (and so run its
+    # build backend) with an administrator identity.
+    require_unprivileged_identity("qwen_train.f2_s8_pilot_build.build")
+    base_python = resolve_declared_interpreter(project, declared_python_minor)
+    extra = EXTRA_DEPS.get(task_id, [])
+    # The declared (never invented) per-task build adjustments.  ``groups`` /
+    # ``extras`` name the project's OWN dependency groups and extras; they were
+    # recorded in ``build_identity`` before but never acted on by the installer,
+    # so an adjustment naming ``test`` installed nothing beyond the pytest
+    # plugins that happen to live there.
+    adjustment: dict[str, Any] = dict(DECLARED_ADJUSTMENTS.get(task_id, {}))
+    # ``pytest_pin`` was declared per task and recorded in ``build_identity`` but
+    # never READ, so the installer always used the global pin.  That is not
+    # cosmetic once a task's own group constrains pytest: ``BerriAI__litellm-13675``
+    # declares ``pytest>=7.4.3,<8.0.0`` in its Poetry dev group, and the install
+    # plan refused the build outright -- "conflicting declarations for pytest: no
+    # version satisfies lower 8.3.5 and upper 8.0.0".  Honouring the declared pin
+    # is the faithful resolution: the project states which pytest its suite runs
+    # on, and the conflict detector cannot be satisfied by silently dropping one
+    # side of it.
+    pin = effective_pytest_pin(adjustment)
+    # UNION the plugins the project's OWN pytest configuration demands.  The
+    # hard-coded table above is keyed by instance id and goes stale the moment a
+    # DIFFERENT instance of the same project is built (the phase-2 set contains
+    # ``python__mypy-19718``, not the ``-19767`` the table names, so xdist was
+    # never installed and the declared ``-nauto`` aborted pytest with exit 4 --
+    # recorded as an infrastructure failure with no JUnit).  Derived from the
+    # checked-out project, so it cannot drift.
+    derived = [p for p in pytest_config_plugins(project) if p not in extra]
+    # ...and the plugins the DECLARED COMMAND requires, which is the other place
+    # a project states a pytest option. ``addopts`` was the only source read, so
+    # a task whose command carries ``-n 4`` and whose dependency groups omit
+    # xdist aborted with exit 4 and produced no JUnit at all.
+    for dist in command_plugins(declared_test_cmd(rec)):
+        if dist not in extra and dist not in derived:
+            derived.append(dist)
+    if derived:
+        extra = [*extra, *derived]
+    # uv-owned tasks are identified by their DECLARED command; the pilot's
+    # explicit table stays as an override so its behaviour cannot drift.
+    uses_uv = task_id in UV_ALL_EXTRAS or uses_uv_environment(declared_test_cmd(rec))
+
+    # Base and gold each get their OWN environment, editable-installed onto
+    # their OWN tree. Sharing one venv would make the gold run import BASE
+    # source through the editable .pth, so the gold patch could never take
+    # effect and a correct fix would be scored as a failure. This is why
+    # ``SWARM_S8_BASE_STATE_DIGEST`` and ``SWARM_S8_GOLD_STATE_DIGEST`` differ.
+    #
+    # Tasks whose DECLARED command is ``uv run pytest`` are excluded: uv owns
+    # their environments (``repo/.venv`` and ``repo_gold/.venv``) and creates
+    # them itself. Building a second, unused pip venv per tree only doubled the
+    # delivered payload to no effect.
+    envs: dict[str, str | None] = {"base": None, "gold": None}
+    install_plan: dict[str, Any] = {}
+    if not uses_uv:
+        for label, proj in (("base", project), ("gold", gold_project)):
+            venv = ws / (".venv" if label == "base" else ".venv_gold")
+            _rmtree(venv)
+            run([base_python, "-m", "venv", str(venv)])
+            vpy = venv / "Scripts" / "python.exe"
+            run([str(vpy), "-m", "pip", "install", "--quiet",
+                 "--disable-pip-version-check", "--upgrade", "pip"], timeout=1800)
+            run([str(vpy), "-m", "pip", "install", "--quiet",
+                 "--disable-pip-version-check", pin, *extra], timeout=1800)
+            # The project's OWN declared pytest plugins (e.g. pytest-django).
+            # Without them pytest ignores DJANGO_SETTINGS_MODULE and every
+            # module that imports the framework fails COLLECTION, so the declared
+            # FAIL_TO_PASS node is absent from the JUnit and can never pass.
+            # Statically derived from the project's metadata -- never invented --
+            # and taken from the SAME function the offline classifier reads, so
+            # "what the builder installs" cannot drift from "what the classifier
+            # checks".  Full declarations (specifier and marker included) are
+            # passed through, so the project's own constraint is honoured.
+            # Extras are NOT in scope: ``pip install -e .`` installs
+            # ``[project].dependencies`` (recorded as runtime deps) but no
+            # ``[project.optional-dependencies]`` extra -- "uv does not sync
+            # extras by default" is the same rule for the uv path.
+            context = project_install_context(proj)
+            # The project's OWN declared test dependencies (PEP 621 test extra /
+            # PEP 735 test group / a test-named requirements file).  ``pip
+            # install -e .`` installs ``[project].dependencies`` and NO extra, so
+            # a project that declares a test-only import under
+            # ``[project.optional-dependencies]`` -- QuantEcon declares ``pandas``
+            # only in its ``testing`` extra -- previously built an environment
+            # whose collection aborted with ``ModuleNotFoundError`` and was
+            # classified as an environment collection error.  Selection is
+            # name-gated in :func:`declared_test_requirements`; a named source
+            # that does not exist is BLOCKING here rather than a silent no-op.
+            declared = declared_test_requirements(
+                context["dependency_inputs"],
+                groups=[str(g) for g in (adjustment.get("groups") or ())],
+                extras=[str(e) for e in (adjustment.get("extras") or ())],
+                project=proj,
+            )
+            blocking = [p for p in declared["problems"] if p.get("scope") == "blocking"]
+            if blocking:
+                detail = "; ".join(
+                    f"{p.get('code')}:{p.get('detail')}" for p in blocking)
+                raise RuntimeError(
+                    f"declared test dependencies cannot be resolved: {detail}")
+            plan = builder_install_plan(
+                context["dependency_inputs"],
+                pinned=[pin],
+                extra_deps=extra,
+                runtime_dependencies=context["runtime_dependencies"],
+                test_requirements=declared["requirements"],
+            )
+            plan["declared_test_sources"] = declared["sources"]
+            plan["declared_test_problems"] = declared["problems"]
+            install_plan[label] = plan
+            if plan["plugin_requirements"]:
+                run([str(vpy), "-m", "pip", "install", "--quiet",
+                     "--disable-pip-version-check", *plan["plugin_requirements"]],
+                    timeout=3600)
+            # Declared test dependencies go in beside the plugins, BEFORE the
+            # editable install, which is the pairing the PyPA dependency-groups
+            # specification requires (a ``test`` group only works when the
+            # toolchain also installs ``.``).
+            if plan["test_requirements"]:
+                # Constraints the project declares (-c) are handed to pip so its
+                # own bounds apply; they are never installed as requirements.
+                constraint_args: list[str] = []
+                for constraint_file in declared.get("constraints") or ():
+                    constraint_args.extend(["-c", str(constraint_file)])
+                run([str(vpy), "-m", "pip", "install", "--quiet",
+                     "--disable-pip-version-check", *constraint_args,
+                     *plan["test_requirements"]],
+                    timeout=3600)
+            run([str(vpy), "-m", "pip", "install", "--quiet",
+                 "--disable-pip-version-check", "-e", str(proj)], timeout=3600)
+            # The plan above records what was ASKED for; this records what pip
+            # actually RESOLVED (name + version of every installed distribution).
+            # Without it a manifest digest cannot be checked against a later
+            # environment, so "offline recreation verified" would be a claim
+            # rather than a comparison.  A failed listing is recorded as a
+            # problem rather than an empty dict, because an empty dict is
+            # indistinguishable from an empty environment.
+            try:
+                listed = run(
+                    [str(vpy), "-m", "pip", "list", "--format=json",
+                     "--disable-pip-version-check"], timeout=300).stdout
+                plan["resolved_distributions"] = {
+                    str(d.get("name")): str(d.get("version"))
+                    for d in (json.loads(listed) or [])
+                }
+            except Exception as exc:  # noqa: BLE001 - observational, must not mask a real build error
+                plan["resolved_distributions"] = {}
+                plan["resolved_distributions_error"] = str(exc)[:500]
+            envs[label] = str(vpy)
+
+    # Syncing here -- on the acquisition host, with the network -- populates the
+    # project venvs so the guest can run the same command with UV_OFFLINE=1 and
+    # never reach for the network. uv's wheel cache is NOT required for that:
+    # a complete venv plus an intact lockfile resolves with an empty cache.
+    if uses_uv:
+        # uv's `required-version` is a HARD gate. Checking it explicitly turns an
+        # opaque "Failed to parse uv.lock / missing field version" into a named
+        # toolchain incompatibility, which is a different class of failure from a
+        # task defect and must not be recorded as one.
+        required = declared_required_version(project)
+        if required:
+            installed = _uv_version()
+            if installed and not _satisfies_version(installed, required):
+                raise RuntimeError(
+                    f"uv required-version: the project requires {required!r} but "
+                    f"the installed uv is {installed!r}; UV_TOOLCHAIN_INCOMPATIBLE")
+        # Sync in the RESOLVED project root, not blindly at the repo root: a
+        # monorepo's lockfile belongs to the subproject.
+        for tree in (project, gold_project):
+            # Pin uv to the SAME interpreter this builder selected. Without
+            # --python, uv discovers its own (newest) interpreter and chose
+            # CPython 3.15 for a >=3.13 task, where psycopg-binary has no wheel.
+            run(["uv", "sync", "--frozen", "--all-extras",
+                 "--python", base_python], cwd=tree, timeout=3600)
+
+    return {
+        "task_id": task_id, "base_commit": base_commit, "workspace": str(ws),
+        "repo": str(repo), "gold_repo": str(gold_repo),
+        "uses_uv": uses_uv,
+        "venv": str(ws / ".venv"), "gold_venv": str(ws / ".venv_gold"),
+        "python": envs["base"], "gold_python": envs["gold"],
+        "project": str(project), "gold_project": str(gold_project),
+        # The resolved install/test root relative to the repo. Recorded so the
+        # pre-check and the guest run in the SAME tree the build installed.
+        "project_subdir": sub,
+        "base_interpreter": base_python if not uses_uv else "",
+        "extra_deps": extra,
+        # Provenance: exactly which packages this build installed on each side,
+        # derived from the same source of truth the offline classifier checks.
+        "install_plan": install_plan,
+        # Which BUILDER produced this environment. Recorded so a workspace built
+        # under an older contract cannot be pre-checked as if the current one had
+        # produced it -- previously the builder version lived only in the
+        # acquisition identity, which this manifest never carried and the
+        # pre-check never recomputes, so a stale workspace passed silently.
+        "builder": BUILDER_SOURCE,
+        "requires_python": list(_requires_python(project)) if _requires_python(project) else None,
+        "elapsed_s": int(time.time() - t0),
+    }
+
+
+def _uv_version() -> str:
+    """The installed uv's version string, or ``""`` when uv cannot be run."""
+    try:
+        out = run(["uv", "--version"], timeout=120).stdout
+    except Exception:  # noqa: BLE001 - absence is handled by the caller
+        return ""
+    match = re.search(r"uv\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?)", out)
+    return match.group(1) if match else ""
+
+
+def _satisfies_version(installed: str, spec: str) -> bool:
+    """True when ``installed`` satisfies uv's ``required-version`` specifier."""
+    try:
+        from packaging.specifiers import InvalidSpecifier, SpecifierSet
+        from packaging.version import InvalidVersion, Version
+
+        return Version(installed) in SpecifierSet(str(spec))
+    except (InvalidSpecifier, InvalidVersion, ValueError):
+        # An unparseable spec is NOT permission to proceed: fail closed by
+        # reporting incompatibility, which the caller turns into a named reason.
+        return False
+
+
+def classify_build_failure(exc: BaseException) -> str:
+    """Map a build exception to an explicit reason code (never to "infrastructure").
+
+    The classification is a deterministic text-signature match over the message
+    the builder itself produced -- :func:`run` embeds the subprocess's exit code,
+    stdout tail and stderr tail, so a pip resolver complaint, a wheel build
+    failure and a git clone failure each arrive here verbatim rather than as an
+    opaque ``RuntimeError``.
+
+    Design rule: **no default that flatters the yield.**  A failure whose message
+    carries no recognised signature returns ``BUILD_FAILURE_UNCLASSIFIED``, so a
+    genuine repository or dependency defect is never relabelled an infrastructure
+    failure to keep the pass rate up (D1 cause-classification).  Ordering matters:
+    the declared-test-source message is checked before the generic pip signatures
+    because it IS the "declared dependency could not be resolved" case.
+    """
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return "BUILD_TIMEOUT"
+    msg = str(exc)
+    if "declared test dependencies cannot be resolved:" in msg:
+        return "DECLARED_TEST_SOURCE_UNRESOLVABLE"
+    if "UV_TOOLCHAIN_INCOMPATIBLE" in msg or "uv required-version:" in msg:
+        return "UV_TOOLCHAIN_INCOMPATIBLE"
+    # A newer uv.lock schema that this uv cannot parse (measured: revision 2 may
+    # omit `version` on the editable root package, which uv 0.5.9's typed parser
+    # rejects).  This is a TOOLCHAIN limit, not a task defect.
+    if "Failed to parse `uv.lock`" in msg or "missing field `version`" in msg:
+        return "UV_TOOLCHAIN_INCOMPATIBLE"
+    # A POSIX-only dependency cannot be built on Windows at any interpreter
+    # version. Measured: `uwsgi`'s sdist calls `os.uname()`, which does not exist
+    # on Windows, so `sissbruecker__linkding-1175` failed AFTER the interpreter
+    # was corrected -- the interpreter was never the real blocker.
+    if ("os.uname" in msg or "has no attribute 'uname'" in msg
+            or "No module named 'fcntl'" in msg):
+        return "PLATFORM_INCOMPATIBLE"
+    if "no interpreter satisfies requires-python" in msg:
+        return "INTERPRETER_UNAVAILABLE"
+    pip_resolution = (
+        "Could not find a version that satisfies the requirement",
+        "No matching distribution found",
+        "ResolutionImpossible",
+        "pip's dependency resolver did not find a match",
+        "conflicting dependencies",
+        "has requirement ",
+    )
+    if any(sig in msg for sig in pip_resolution):
+        return "DEPENDENCY_RESOLUTION_FAILURE"
+    pip_install = (
+        "Failed building wheel",
+        "error: subprocess-exited-with-error",
+        "Could not install packages",
+        "ERROR: Could not install",
+        "No space left on device",
+        "ERROR: These packages are missing",
+    )
+    if any(sig in msg for sig in pip_install):
+        return "DEPENDENCY_INSTALLATION_FAILURE"
+    if re.search(r"git(?:\.exe)?\s+(?:clone|checkout|apply|fetch|submodule|worktree)",
+                 msg, re.IGNORECASE):
+        return "SOURCE_ACQUISITION_FAILURE"
+    return "BUILD_FAILURE_UNCLASSIFIED"
+
+
+def main(argv=None) -> int:
+    # Fail closed BEFORE anything repository-controlled can run: this stage
+    # pip-installs the task, which executes its build backend.
+    require_unprivileged_identity("qwen_train.f2_s8_pilot_build")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("task_ids", nargs="*")
+    ap.add_argument("--manifest", default=str(ROOT / "build_manifest.json"))
+    ap.add_argument("--inputs", default=str(INPUTS),
+                    help="task record directory (one <task_id>.json per task)")
+    ap.add_argument("--patches", default=str(PATCHES),
+                    help="directory holding <task_id>.test_patch / .gold_patch")
+    args = ap.parse_args(argv)
+
+    ids = args.task_ids or list(REPOS)
+    manifest_path = Path(args.manifest)
+    inputs = Path(args.inputs)
+    patches = Path(args.patches)
+
+    # The manifest this run writes describes EXACTLY the tasks this run was asked
+    # to build. Merging into whatever manifest was already on disk let a subset
+    # build carry every earlier ``status="built"`` entry forward -- and the runner
+    # selects every ``status="built"`` entry, so a stale or unauthorized workspace
+    # entered the runnable set that the single-use S8-001 grant is bound to
+    # (docs/EXPERIMENT_J_F2_S8_EXECUTION_REVISION_AND_CHECKOUT_PLAN.md §3.4). A
+    # manifest is the Stage-1 deliverable the grant binds; it must not accumulate
+    # entries this authorization did not name.
+    carried_forward: list[str] = []
+    if manifest_path.is_file():
+        try:
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - unreadable is not a licence to merge
+            previous = {}
+        if isinstance(previous, dict):
+            requested = set(ids)
+            carried_forward = sorted(str(k) for k in previous if k not in requested)
+    if carried_forward:
+        print(
+            "NOT CARRIED FORWARD (not part of this run, so not part of the manifest "
+            "the grant binds): " + ", ".join(carried_forward),
+            flush=True,
+        )
+    manifest: dict[str, Any] = {}
+
+    for task_id in ids:
+        url = resolve_repo_url(task_id, inputs)
+        if not url:
+            print(f"SKIP {task_id}: no repository mapping", flush=True)
+            continue
+        print(f"BUILD {task_id} ...", flush=True)
+        try:
+            entry = build(
+                task_id, url, inputs=inputs, patches=patches,
+                declared_python_minor=_declared_minor_for(task_id, inputs),
+            )
+        except Exception as exc:  # noqa: BLE001 - recorded, not fatal to the batch
+            reason = classify_build_failure(exc)
+            print(f"  FAILED [{reason}]: {type(exc).__name__}: {exc}", flush=True)
+            manifest[task_id] = {
+                "status": "build_failure",
+                "reason_code": reason,
+                "detail": str(exc)[:2000],
+            }
+        else:
+            entry["status"] = "built"
+            manifest[task_id] = entry
+            print(f"  ok in {entry['elapsed_s']}s -> {entry['workspace']}", flush=True)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True),
+                                 encoding="utf-8")
+
+    print(json.dumps({k: v.get("status") for k, v in manifest.items()}, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
