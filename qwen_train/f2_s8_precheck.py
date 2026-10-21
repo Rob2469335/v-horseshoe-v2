@@ -58,7 +58,11 @@ from qwen_train.f2_evaluator import (
 )
 from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_population_acquire import DATASET_ROOTS
-from qwen_train.f2_s8_acquisition import AcquisitionError, resolve_project_subdir
+from qwen_train.f2_s8_acquisition import (
+    AcquisitionError,
+    require_unprivileged_identity,
+    resolve_project_subdir,
+)
 
 __all__ = [
     "PRECHECK_SCHEMA",
@@ -881,6 +885,9 @@ def run_precheck(
                 }
                 side_statuses.append(SIDE_INCONCLUSIVE)
                 continue
+            # Fail closed at the UNTRUSTED boundary: the next statement launches
+            # pytest --collect-only, which imports conftest.py and test modules.
+            require_unprivileged_identity("qwen_train.f2_s8_precheck.run_precheck")
             python = _venv_python(workspace, side, cwd)
             if python is None:
                 task_result["sides"][side] = {
@@ -1058,6 +1065,9 @@ def _find_input_record(inputs_dir: Path, task_id: str) -> Path | None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Fail closed BEFORE anything repository-controlled can run: collection
+    # imports conftest.py and every test module.
+    require_unprivileged_identity("qwen_train.f2_s8_precheck")
     import argparse
 
     parser = argparse.ArgumentParser(prog="python -m qwen_train.f2_s8_precheck")

@@ -354,3 +354,15 @@ class TestDeclaredPytestPin:
         assert common, (
             f"no pytest version satisfies both the dev group {group_spec} and the "
             f"declared pin {pin_spec}; the install plan would refuse the build")
+
+@pytest.fixture(autouse=True)
+def _non_privileged_identity(monkeypatch):
+    """Run these builder tests with a NON-privileged effective identity.
+
+    These tests exercise ``main()`` against synthetic fixture projects on whatever
+    host runs the suite; the privilege guard is covered by its own tests in
+    tests/test_f2_s8_acquisition.py. This keeps the manifest-scoping assertions
+    independent of whether the CI host happens to be an administrator.
+    """
+    from qwen_train import f2_s8_acquisition as A
+    monkeypatch.setattr(A, "effective_identity_is_admin", lambda: False)

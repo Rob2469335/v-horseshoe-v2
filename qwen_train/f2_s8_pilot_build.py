@@ -40,6 +40,7 @@ from qwen_train.f2_s8_acquisition import (
     discover_interpreters,
     project_install_context,
     repo_url_for,
+    require_unprivileged_identity,
     requires_python,
     resolve_task_project_root,
 )
@@ -438,6 +439,10 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
                     ignore=shutil.ignore_patterns(".venv", ".venvuv", "__pycache__"))
     run([GIT, "apply", str(Path(patches) / f"{task_id}.gold_patch")], cwd=gold_repo)
 
+    # Fail closed at the UNTRUSTED boundary itself, not only in main(): a direct
+    # call to build() must not be able to pip-install a task (and so run its
+    # build backend) with an administrator identity.
+    require_unprivileged_identity("qwen_train.f2_s8_pilot_build.build")
     base_python = pick_interpreter(project)
     extra = EXTRA_DEPS.get(task_id, [])
     # The declared (never invented) per-task build adjustments.  ``groups`` /
@@ -723,6 +728,9 @@ def classify_build_failure(exc: BaseException) -> str:
 
 
 def main(argv=None) -> int:
+    # Fail closed BEFORE anything repository-controlled can run: this stage
+    # pip-installs the task, which executes its build backend.
+    require_unprivileged_identity("qwen_train.f2_s8_pilot_build")
     ap = argparse.ArgumentParser()
     ap.add_argument("task_ids", nargs="*")
     ap.add_argument("--manifest", default=str(ROOT / "build_manifest.json"))

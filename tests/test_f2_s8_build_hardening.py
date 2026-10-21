@@ -68,6 +68,25 @@ def _allow_real_git(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
 
 
+@pytest.fixture(autouse=True)
+def _non_privileged_identity(monkeypatch):
+    """Run these build/pre-check tests with a NON-privileged effective identity.
+
+    The guard belongs to the privilege boundary and is covered by its own tests in
+    tests/test_f2_s8_acquisition.py; the tests here exercise selection, binding and
+    classification with an INJECTED collection runner, so they must not depend on
+    whether the host (or the CI runner) happens to be an administrator.  This seam
+    patches the identity CHECK in-process only -- it is not a production override.
+
+    Same seam as tests/test_f2_s8_precheck.py and tests/test_f2_s8_pilot_build.py:
+    without it every ``run_precheck`` call here refuses on Windows-admin and on
+    POSIX (where ``effective_identity_is_admin`` fails closed), so the module only
+    passed on a non-privileged Windows host.
+    """
+    from qwen_train import f2_s8_acquisition as A
+    monkeypatch.setattr(A, "effective_identity_is_admin", lambda: False)
+
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------

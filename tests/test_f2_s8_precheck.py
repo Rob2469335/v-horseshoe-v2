@@ -547,3 +547,16 @@ class TestMatcherIsLinear:
         # 200 targets -> at most 200 canonicalisations (one per target).
         assert calls["n"] <= len(targets), calls["n"]
         assert calls["n"] < 400, "per-target canonicalisation regressed"
+
+@pytest.fixture(autouse=True)
+def _non_privileged_identity(monkeypatch):
+    """Run these pre-check tests with a NON-privileged effective identity.
+
+    The guard belongs to the privilege boundary and is covered by its own tests in
+    tests/test_f2_s8_acquisition.py; the tests here exercise collection
+    classification with an INJECTED runner, so they must not depend on whether the
+    host running the suite happens to be an administrator. This seam patches the
+    identity CHECK in-process only -- it is not a production override.
+    """
+    from qwen_train import f2_s8_acquisition as A
+    monkeypatch.setattr(A, "effective_identity_is_admin", lambda: False)

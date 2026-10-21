@@ -19,6 +19,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from qwen_train.f2_s8_acquisition import require_unprivileged_identity
 from qwen_train.f2_s8_pilot_build import declared_test_cmd, uses_uv_environment
 
 ROOT = Path(r"C:\f2_pilot")
@@ -53,6 +54,9 @@ def run_test(*, python: str, repo: Path, test_cmd: str, junit: Path,
 
     if "--junitxml" in test_cmd:
         raise ValueError("declared test_cmd already carries --junitxml")
+    # Fail closed at the UNTRUSTED boundary: this runs the task's own test
+    # command, which imports and executes repository code.
+    require_unprivileged_identity("qwen_train.f2_s8_pilot_dryrun.run_test")
     cmd = f"{test_cmd} --junitxml={junit}"
     env = dict(os.environ)
     # ``python`` is None for uv-owned tasks: there is no workspace Scripts
@@ -80,6 +84,7 @@ def run_test(*, python: str, repo: Path, test_cmd: str, junit: Path,
 
 
 def main(argv=None) -> int:
+    require_unprivileged_identity("qwen_train.f2_s8_pilot_dryrun")
     ap = argparse.ArgumentParser()
     ap.add_argument("task_ids", nargs="*")
     ap.add_argument("--timeout", type=int, default=1500)

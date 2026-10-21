@@ -191,6 +191,75 @@ class AcquisitionError(Exception):
     """The acquisition contract was violated."""
 
 
+class PrivilegedIdentityError(RuntimeError):
+    """A stage that runs untrusted repository code was launched privileged.
+
+    Repository build backends, install hooks and pytest collection execute code
+    the project does not control. That code must not run with an identity that can
+    read F2 evidence, ledgers, the trust root or manage Hyper-V -- so the guard
+    REFUSES rather than warning. There is deliberately no environment override:
+    an override would be the same silent hole this guard closes.
+    """
+
+
+#: BUILTIN\Administrators, present in every Windows locale.
+_ADMIN_SID = "S-1-5-32-544"
+
+
+def effective_identity_is_admin() -> bool:
+    """Is the CURRENT PROCESS token a member of BUILTIN\\Administrators?
+
+    Reads the effective token, not a parent's: ``whoami /groups`` is a child that
+    INHERITS this process's token, so its output describes this process. A member
+    present but "Group used for deny only" describes a filtered (non-elevated)
+    token and is not treated as administrator.
+
+    Fails CLOSED: if the identity cannot be determined, the caller is told it is
+    privileged, so the guarded stage refuses instead of running unsafely.
+    """
+    if os.name != "nt":
+        # FAIL CLOSED on an unsupported platform. Returning False here would
+        # silently declare every non-Windows host safe, which is the same defect
+        # class as an override: the guard would pass where it cannot verify.
+        # A POSIX identity check would have to be implemented deliberately.
+        return True
+    try:
+        proc = subprocess.run(
+            ["whoami", "/groups"], capture_output=True, text=True, timeout=30,
+        )
+    except Exception:  # noqa: BLE001 - undeterminable identity must fail closed
+        return True
+    if proc.returncode != 0:
+        return True
+    for line in (proc.stdout or "").splitlines():
+        if _ADMIN_SID not in line:
+            continue
+        lowered = line.lower()
+        if "deny only" in lowered:
+            return False
+        if "enabled" in lowered:
+            return True
+        return True          # SID present, attributes unreadable -> fail closed
+    return False
+
+
+def require_unprivileged_identity(entry: str) -> None:
+    """Refuse to run ``entry`` under an administrator identity. Fail-closed.
+
+    Call this BEFORE any repository-controlled code can run -- before a build
+    backend, an install hook, ``pytest --collect-only`` or any task import.
+    """
+    if effective_identity_is_admin():
+        raise PrivilegedIdentityError(
+            f"{entry} refuses to run under a Windows administrator identity: it "
+            "executes untrusted repository code (build backends, install hooks, "
+            "test collection), which must not hold access to F2 evidence, the "
+            "ledgers, the trust root or Hyper-V. Provision and use the "
+            "unprivileged build identity described in "
+            "docs/F2_S8_HOST_EXECUTION_BOUNDARY.md."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Corpus + registration
 # ---------------------------------------------------------------------------

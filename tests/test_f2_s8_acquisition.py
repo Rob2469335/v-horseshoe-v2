@@ -773,3 +773,107 @@ extra-dependencies = ["python-dotenv"]
         result = declared_test_requirements({"groups": {}, "extras": {}},
                                             groups=["functional"], project=root)
         assert result["requirements"] == ["python-dotenv"]
+
+class TestPrivilegeGuard:
+    """Repository build backends, install hooks and test collection execute code
+    the project does not control. That code must not run with an identity that can
+    read F2 evidence, ledgers, the trust root or manage Hyper-V, so the guard
+    REFUSES rather than warns -- and has no environment override, because an
+    override would reinstate the hole it closes.
+    """
+
+    def _fake(self, monkeypatch, returncode=0, stdout=""):
+        from qwen_train import f2_s8_acquisition as A
+
+        class P:
+            pass
+
+        p = P(); p.returncode = returncode; p.stdout = stdout
+        monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: p)
+
+    def test_enabled_administrators_group_is_detected(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+        self._fake(monkeypatch, stdout=(
+            "GROUP INFORMATION\n"
+            "BUILTIN\\Administrators  Alias  S-1-5-32-544  Mandatory group, Enabled by default, Enabled group, Group owner\n"))
+        assert A.effective_identity_is_admin() is True
+
+    def test_a_deny_only_group_is_not_privileged(self, monkeypatch):
+        """A filtered token lists Administrators as 'Group used for deny only'."""
+        from qwen_train import f2_s8_acquisition as A
+        self._fake(monkeypatch, stdout=(
+            "BUILTIN\\Administrators  Alias  S-1-5-32-544  Mandatory group, Enabled by default, Enabled group, Group used for deny only\n"))
+        assert A.effective_identity_is_admin() is False
+
+    def test_absence_of_the_sid_is_not_privileged(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+        self._fake(monkeypatch, stdout="BUILTIN\\Users  Alias  S-1-5-32-545  Mandatory group, Enabled group\n")
+        assert A.effective_identity_is_admin() is False
+
+    def test_an_undeterminable_identity_fails_closed(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+
+        def boom(*a, **k):
+            raise OSError("whoami unavailable")
+
+        monkeypatch.setattr(A.subprocess, "run", boom)
+        assert A.effective_identity_is_admin() is True
+
+    def test_the_guard_raises_and_has_no_override(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+        monkeypatch.setattr(A, "effective_identity_is_admin", lambda: True)
+        monkeypatch.setenv("F2_S8_ALLOW_ADMIN", "1")
+        monkeypatch.setenv("F2_ALLOW_PRIVILEGED", "1")
+        with pytest.raises(A.PrivilegedIdentityError):
+            A.require_unprivileged_identity("test.entry")
+
+    def test_a_non_privileged_identity_passes(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+        monkeypatch.setattr(A, "effective_identity_is_admin", lambda: False)
+        assert A.require_unprivileged_identity("test.entry") is None
+
+    def test_precheck_refuses_admin_before_parsing_arguments(self, monkeypatch):
+        """The guard must fire before argparse and before any task import."""
+        from qwen_train import f2_s8_acquisition as A
+        from qwen_train import f2_s8_precheck as P
+        monkeypatch.setattr(A, "effective_identity_is_admin", lambda: True)
+        with pytest.raises(A.PrivilegedIdentityError):
+            P.main([])
+
+    def test_build_refuses_admin_before_parsing_arguments(self, monkeypatch):
+        from qwen_train import f2_s8_acquisition as A
+        from qwen_train import f2_s8_pilot_build as B
+        monkeypatch.setattr(A, "effective_identity_is_admin", lambda: True)
+        with pytest.raises(A.PrivilegedIdentityError):
+            B.main([])
+
+    def test_an_unsupported_platform_fails_closed(self, monkeypatch):
+        """Returning False off-Windows would silently declare every non-Windows
+        host safe -- the same defect class as an override. The guard must refuse
+        where it cannot verify the identity."""
+        from qwen_train import f2_s8_acquisition as A
+        monkeypatch.setattr(A.os, "name", "posix")
+        assert A.effective_identity_is_admin() is True
+
+    def test_the_boundary_document_referenced_by_the_error_exists(self):
+        """The refusal message points an operator at a document; a dangling
+        reference leaves them with no remediation path."""
+        import pathlib
+        from qwen_train.f2_s8_acquisition import PrivilegedIdentityError, require_unprivileged_identity
+        from qwen_train import f2_s8_acquisition as A
+
+        doc = pathlib.Path(__file__).resolve().parents[1] / "docs" / "F2_S8_HOST_EXECUTION_BOUNDARY.md"
+        assert doc.is_file(), "the guard's remediation document is missing"
+
+        class _Admin:
+            pass
+
+        original = A.effective_identity_is_admin
+        try:
+            A.effective_identity_is_admin = lambda: True
+            try:
+                require_unprivileged_identity("test.entry")
+            except PrivilegedIdentityError as exc:
+                assert "F2_S8_HOST_EXECUTION_BOUNDARY.md" in str(exc)
+        finally:
+            A.effective_identity_is_admin = original
