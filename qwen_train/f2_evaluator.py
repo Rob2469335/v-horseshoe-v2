@@ -398,6 +398,17 @@ def parse_junit_xml(
             # twice with the same outcome and was refused as JUNIT_MALFORMED,
             # which failed the whole batch's D4 audit.
             if statuses[ident] != status:
+                _FAIL_STATUSES = {STATUS_FAILED, STATUS_ERROR}
+                if statuses[ident] in _FAIL_STATUSES and status in _FAIL_STATUSES:
+                    # Both occurrences establish failure (e.g. pytest emitted one
+                    # record for a call failure and another for a teardown error).
+                    # Order-independently retain STATUS_FAILED if either occurrence failed call.
+                    statuses[ident] = (
+                        STATUS_FAILED
+                        if (statuses[ident] == STATUS_FAILED or status == STATUS_FAILED)
+                        else STATUS_ERROR
+                    )
+                    continue
                 raise EvaluatorError(
                     f"junit evidence emits duplicate test identity "
                     f"{ident.as_text()!r} with DISAGREEING statuses "

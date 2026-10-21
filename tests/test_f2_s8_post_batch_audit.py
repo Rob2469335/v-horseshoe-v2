@@ -496,6 +496,26 @@ class TestInfrastructureRows:
         result = _audit(fx)
         assert "INFRA_UNCLASSIFIED" in _codes(result)
 
+    def test_an_infrastructure_row_with_retained_junit_but_no_declared_verdict_passes(self, tmp_path):
+        # When an infrastructure failure happens during/before evaluator completion
+        # (e.g. evaluator_rejected), the JUnit file may be present and hashed on host,
+        # but no scientific verdict was declared by the runner. The audit verifies the
+        # file integrity and does not require a declared verdict for an infrastructure row.
+        fx = _fixture(
+            tmp_path, write_base=True, write_gold=False,
+            row_overrides={
+                "outcome_class": "infrastructure",
+                "outcome": "infrastructure_failure",
+                "reason_code": "evaluator_rejected",
+                "admitted": False,
+                "base_verdict": "",
+                "base_collection_errors": None,
+                "base_collection_error_cause": "",
+            },
+        )
+        result = _audit(fx)
+        assert result["verdict"] == "PASS", result["discrepancies"]
+
     def test_a_scientific_row_with_no_evidence_fails(self, tmp_path):
         fx = _fixture(
             tmp_path, write_base=False, write_gold=False,

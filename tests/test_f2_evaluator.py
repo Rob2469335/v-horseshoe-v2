@@ -672,6 +672,24 @@ class TestDuplicateJUnitIdentity:
         b = parse_junit_xml(self._xml(["", ""]))
         assert a == b
 
+    def test_duplicate_failure_and_teardown_error_both_mean_failed(self):
+        from qwen_train.f2_evaluator import (
+            JUnitIdentity, parse_junit_xml, STATUS_FAILED, STATUS_ERROR,
+        )
+        # When call fails and teardown errors, both mean not-passed; resolves order-independently.
+        case_fail_err = self._xml(["<failure/>", '<error message="failed on teardown"/>'])
+        case_err_fail = self._xml(['<error message="failed on teardown"/>', "<failure/>"])
+        res1 = parse_junit_xml(case_fail_err)
+        res2 = parse_junit_xml(case_err_fail)
+        ident = JUnitIdentity(classname="t", name="n")
+        assert res1[ident] == STATUS_FAILED
+        assert res2[ident] == STATUS_FAILED
+        assert res1 == res2
+
+        # Two teardown errors resolve to STATUS_ERROR
+        case_err_err = self._xml(["<error/>", '<error message="failed on teardown"/>'])
+        assert parse_junit_xml(case_err_err)[ident] == STATUS_ERROR
+
 class TestWindowsParamSeparators:
     """A parametrised id embeds a filesystem path. The corpus was recorded on
     Linux (``[dir/subdir]``); Windows pytest emits ``[dir\\subdir]`` -- and pytest

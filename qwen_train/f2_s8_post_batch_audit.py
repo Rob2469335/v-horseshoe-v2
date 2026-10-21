@@ -941,13 +941,14 @@ def audit_batch(
 
                     declared_errors = row.get(f"{side}_collection_errors", _MISSING)
                     if declared_errors is _MISSING or declared_errors is None:
-                        task_discrepancies.append(
-                            _discrepancy(
-                                task_id, side,
-                                REASON_DECLARED_COLLECTION_ERRORS_MISSING,
-                                "the report declares no collection-error count",
+                        if outcome_class != "infrastructure":
+                            task_discrepancies.append(
+                                _discrepancy(
+                                    task_id, side,
+                                    REASON_DECLARED_COLLECTION_ERRORS_MISSING,
+                                    "the report declares no collection-error count",
+                                )
                             )
-                        )
                     elif (
                         isinstance(declared_errors, bool)
                         or not isinstance(declared_errors, int)
@@ -973,12 +974,13 @@ def audit_batch(
                     if declared_cause is _MISSING or declared_cause is None or str(
                         declared_cause
                     ) == "":
-                        task_discrepancies.append(
-                            _discrepancy(
-                                task_id, side, REASON_DECLARED_CAUSE_MISSING,
-                                "the report declares no collection-error cause",
+                        if outcome_class != "infrastructure":
+                            task_discrepancies.append(
+                                _discrepancy(
+                                    task_id, side, REASON_DECLARED_CAUSE_MISSING,
+                                    "the report declares no collection-error cause",
+                                )
                             )
-                        )
                     elif str(declared_cause) not in VALID_CAUSES:
                         task_discrepancies.append(
                             _discrepancy(
@@ -999,12 +1001,13 @@ def audit_batch(
                     if declared_verdict is _MISSING or declared_verdict is None or str(
                         declared_verdict
                     ) == "":
-                        task_discrepancies.append(
-                            _discrepancy(
-                                task_id, side, REASON_DECLARED_VERDICT_MISSING,
-                                "the report declares no verdict",
+                        if outcome_class != "infrastructure":
+                            task_discrepancies.append(
+                                _discrepancy(
+                                    task_id, side, REASON_DECLARED_VERDICT_MISSING,
+                                    "the report declares no verdict",
+                                )
                             )
-                        )
                     elif str(declared_verdict) not in VALID_VERDICTS:
                         task_discrepancies.append(
                             _discrepancy(
