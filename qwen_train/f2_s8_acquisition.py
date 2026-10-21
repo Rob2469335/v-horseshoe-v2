@@ -45,7 +45,7 @@ import re
 import subprocess
 import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable, Mapping, Sequence
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -793,6 +793,30 @@ def resolve_task_project_root(
         if current is None:
             break
 
+    # Fallback BEFORE the ambiguity-refusing discovery, using the PATCH TARGETS
+    # ALONE. When the gold patch and the declared test nodes live in different
+    # trees, their combined prefix collapses to the repo root and the walk above
+    # finds nothing -- so ``discover_project_root`` is then asked to choose
+    # between sibling projects and refuses. The patch names the tree that
+    # actually changed, which is the one to install.
+    #
+    # Measured case: ``MDAnalysis__mdanalysis-5086`` patches ``package/...``
+    # while its FAIL_TO_PASS nodes live under ``testsuite/...``; both carry build
+    # metadata, so discovery refused the ambiguity even though ``package`` is
+    # unambiguously the installable project.
+    #
+    # This is strictly additive: it only runs where the earlier rules resolved
+    # nothing, so no task that already resolved can change its root.
+    diff_prefix = _shared_dir_prefix(list(_DIFF_TARGET_RE.findall(str(patch_text or ""))))
+    if diff_prefix:
+        current = _contained(repo / diff_prefix)
+        while current is not None and current != repo.resolve():
+            if _has_build_markers(current):
+                return current
+            current = _contained(current.parent)
+            if current is None:
+                break
+
     return discover_project_root(repo)
 
 
@@ -813,9 +837,11 @@ def resolve_project_subdir(subdir: Any, base: Path, *, require_exists: bool = Tr
     raw = str(subdir or "").strip()
     if raw in ("", ".", "./"):
         return Path(base)
-    candidate = Path(raw)
-    if candidate.is_absolute() or candidate.drive:
+    win_cand = PureWindowsPath(raw)
+    posix_cand = PurePosixPath(raw)
+    if win_cand.is_absolute() or win_cand.drive or win_cand.root or posix_cand.is_absolute():
         raise AcquisitionError(f"project_subdir must be relative: {raw!r}")
+    candidate = Path(raw)
     if any(part == ".." for part in candidate.parts):
         raise AcquisitionError(f"project_subdir may not traverse: {raw!r}")
     base_resolved = Path(base).resolve()

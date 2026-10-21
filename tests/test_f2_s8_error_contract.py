@@ -504,8 +504,10 @@ class TestProjectSubdir:
     def test_an_absolute_path_is_refused(self):
         from qwen_train.f2_s8_acquisition import resolve_project_subdir
         with tempfile.TemporaryDirectory() as td:
-            with pytest.raises(AcquisitionError, match="relative"):
-                resolve_project_subdir("C:/Windows", pathlib.Path(td))
+            base = pathlib.Path(td)
+            for abs_path in ("C:/Windows", "C:\\Windows", "/etc/passwd", "\\windows\\system32"):
+                with pytest.raises(AcquisitionError, match="relative"):
+                    resolve_project_subdir(abs_path, base)
 
     def test_traversal_is_refused(self):
         from qwen_train.f2_s8_acquisition import resolve_project_subdir

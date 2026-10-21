@@ -22,6 +22,7 @@ from qwen_train.f2_s8_acquisition import (
     repo_url_for,
     requires_python,
     resolve_task,
+    resolve_task_project_root,
     select_interpreter,
     select_tasks,
     static_dependency_inputs,
@@ -312,6 +313,76 @@ class TestProjectDiscovery:
     def test_no_metadata_is_refused(self, tmp_path):
         with pytest.raises(AcquisitionError, match="no project metadata"):
             discover_project_root(tmp_path)
+
+
+class TestPatchPrefixResolution:
+    """The gold patch names the tree that changed (MDAnalysis-5086 shape).
+
+    When the patch and the declared test nodes live in different trees their
+    combined prefix collapses to the repo root, discovery is then asked to choose
+    between sibling projects and refuses. The patch-only retry runs BEFORE that
+    refusal and is strictly additive: it can only fire where nothing resolved.
+    """
+
+    @staticmethod
+    def _proj(base: Path, name: str) -> Path:
+        d = base / name
+        d.mkdir(parents=True)
+        (d / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+        return d
+
+    def test_patch_prefix_wins_when_test_nodes_disagree(self, tmp_path):
+        self._proj(tmp_path, "package")
+        self._proj(tmp_path, "testsuite")
+        patch = (
+            "--- a/package/CHANGELOG\n+++ b/package/CHANGELOG\n"
+            "--- a/package/MDAnalysis/lib/formats/libdcd.pyx\n"
+            "+++ b/package/MDAnalysis/lib/formats/libdcd.pyx\n"
+        )
+        got = resolve_task_project_root(
+            tmp_path,
+            test_cmd="pytest testsuite/MDAnalysisTests",
+            patch_text=patch,
+            fail_to_pass=["testsuite/MDAnalysisTests/analysis/test_contacts.py::t"],
+        )
+        assert got.name == "package"
+
+    def test_patch_prefix_walks_up_to_the_markers(self, tmp_path):
+        self._proj(tmp_path, "pkg")
+        patch = "--- a/pkg/src/deep/mod.py\n+++ b/pkg/src/deep/mod.py\n"
+        got = resolve_task_project_root(tmp_path, patch_text=patch, test_cmd="")
+        assert got.name == "pkg"
+
+    def test_an_already_resolving_task_is_not_redirected(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='root'\n", encoding="utf-8")
+        self._proj(tmp_path, "other")
+        patch = "--- a/other/mod.py\n+++ b/other/mod.py\n"
+        # The declared test command pins the root.
+        got = resolve_task_project_root(tmp_path, test_cmd="cd other && pytest", patch_text=patch)
+        assert got.name == "other"
+        # NOTE: rule 3 (combined prefix) ALREADY consults the patch targets, so a
+        # patch inside a nested project resolves there even when the repo root is
+        # itself a project. That is pre-existing behaviour, not introduced by the
+        # patch-only fallback -- asserted here so the distinction stays visible.
+        got2 = resolve_task_project_root(tmp_path, test_cmd="pytest t.py", patch_text=patch)
+        assert got2.name == "other"
+
+    def test_root_project_still_wins_when_the_patch_is_at_the_root(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='root'\n", encoding="utf-8")
+        patch = "--- a/rootmod.py\n+++ b/rootmod.py\n"
+        got = resolve_task_project_root(tmp_path, test_cmd="pytest t.py", patch_text=patch)
+        assert got == tmp_path
+
+    def test_repo_without_build_metadata_is_still_refused(self, tmp_path):
+        (tmp_path / "requirements.txt").write_text("requests\n", encoding="utf-8")
+        (tmp_path / "issue_metrics.py").write_text("x = 1\n", encoding="utf-8")
+        with pytest.raises(AcquisitionError):
+            resolve_task_project_root(
+                tmp_path,
+                test_cmd="pytest test_config.py",
+                patch_text="--- a/issue_metrics.py\n+++ b/issue_metrics.py\n",
+                fail_to_pass=["test_config.py::t"],
+            )
 
 
 class TestInterpreterSelection:
