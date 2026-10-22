@@ -352,3 +352,54 @@ class TestInterpreterDiscovery:
         from qwen_train.f2_s8_acquisition import discover_interpreters
         assert discover_interpreters(version_of=lambda p: (3, 12),
                                      roots=[tmp_path / "nope"]) == []
+
+
+class TestDeclaredMinorReachability:
+    """A declared minor the search roots cannot see is a WIRING defect.
+
+    The F2 isolated runtimes are installed with ``TargetDir`` and are on no PATH,
+    so before the S8 root was a search root, minors 3.7 / 3.8 / 3.9 discovered
+    NOTHING and ten Phase-1 candidates failed closed at interpreter selection.
+    """
+
+    def test_the_isolated_s8_root_is_searched(self):
+        assert (acquisition.F2_SCRATCH_INTERPRETER_ROOT
+                in acquisition.INTERPRETER_SEARCH_ROOTS)
+
+    def test_the_legacy_minors_are_selectable(self):
+        for minor in ((3, 7), (3, 8), (3, 9)):
+            assert minor in acquisition.PREFERRED_PYTHON_MINORS, minor
+
+    def test_appending_the_legacy_minors_does_not_reorder_the_leaders(self):
+        """Order only affects the legacy ``prefer=None`` path, so the modern
+        minors must keep their leading positions unchanged."""
+        leaders = acquisition.PREFERRED_PYTHON_MINORS[:5]
+        assert leaders == ((3, 12), (3, 13), (3, 11), (3, 14), (3, 10))
+
+    def test_an_absent_minor_names_itself_and_the_roots(self, tmp_path, monkeypatch):
+        import qwen_train.f2_s8_pilot_build as pb
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname='x'\nrequires-python='>=3.8'\n", encoding="utf-8")
+        monkeypatch.setattr(pb, "available_interpreters", lambda prefer=None: [])
+        with pytest.raises(pb.DeclaredInterpreterError) as exc:
+            pb.pick_interpreter(tmp_path, prefer=((3, 8),))
+        message = str(exc.value)
+        assert "3.8" in message
+        assert "no available interpreter" in message
+        assert "INTERPRETER_SEARCH_ROOTS" in message
+
+    def test_a_discovered_minor_the_bound_rejects_is_reported_differently(
+            self, tmp_path, monkeypatch):
+        import qwen_train.f2_s8_pilot_build as pb
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\nname='x'\nrequires-python='>=3.8'\n", encoding="utf-8")
+        exe = tmp_path / "python.exe"
+        exe.write_bytes(b"")
+        monkeypatch.setattr(pb, "available_interpreters",
+                            lambda prefer=None: [str(exe)])
+        monkeypatch.setattr(pb, "_version_of", lambda p: (3, 7))
+        with pytest.raises(pb.DeclaredInterpreterError) as exc:
+            pb.pick_interpreter(tmp_path, prefer=((3, 7),))
+        message = str(exc.value)
+        assert "requires-python" in message
+        assert "INTERPRETER_SEARCH_ROOTS" not in message

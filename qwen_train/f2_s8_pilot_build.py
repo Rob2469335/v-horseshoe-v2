@@ -35,6 +35,8 @@ from qwen_train.f2_evaluator import analyze_test_invocation
 from qwen_train.f2_s8_acquisition import (
     BUILDER_SOURCE,
     DECLARED_ADJUSTMENTS,
+    INTERPRETER_SEARCH_ROOTS,
+    PREFERRED_PYTHON_MINORS,
     builder_install_plan,
     declared_required_version,
     declared_test_requirements,
@@ -595,9 +597,21 @@ def pick_interpreter(
         ver = _version_of(candidate)
         if lo <= ver < hi:
             return str(candidate)
-    raise RuntimeError(
-        f"no available interpreter satisfies requires-python={bounds!r} "
-        f"from {candidates}"
+    # Two distinct failures, reported differently: nothing was discovered for the
+    # requested minor(s), or something was discovered and the project's own bound
+    # rejected it.  Collapsing them into one message made an ABSENT runtime look
+    # like a rejected one, which is the wrong repair (install vs relax the bound).
+    wanted = prefer if prefer is not None else PREFERRED_PYTHON_MINORS
+    if not candidates:
+        raise DeclaredInterpreterError(
+            "no available interpreter for declared minor(s) "
+            + ", ".join(f"{major}.{minor}" for major, minor in wanted)
+            + f": searched {list(INTERPRETER_SEARCH_ROOTS)}"
+            + "; install that runtime or add its root to INTERPRETER_SEARCH_ROOTS"
+        )
+    raise DeclaredInterpreterError(
+        f"no available interpreter satisfies requires-python={bounds!r}: "
+        f"discovered {candidates}"
     )
 
 

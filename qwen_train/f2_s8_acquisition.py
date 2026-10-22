@@ -866,6 +866,15 @@ def declared_required_version(project: Path) -> str:
     return str(uv_table.get("required-version") or "").strip()
 
 
+#: Isolated CPython runtimes acquired for the S8 pilot, each extracted by the
+#: python.org installer with ``TargetDir=<here>\<dir>``.  They are deliberately
+#: not registered with the launcher and are on no PATH, so no default search root
+#: can see them: without this entry a task whose declared minor is 3.7, 3.8 or
+#: 3.9 discovers NOTHING and the build fails closed at interpreter selection.
+#: Absolute by design, like ``C:\\`` above -- an environment-selectable search
+#: root would let the caller change which interpreter a protected build uses.
+F2_SCRATCH_INTERPRETER_ROOT = r"C:\Users\rober\F2_SCRATCH\s8_resolve_out\interp"
+
 #: Directories searched for installed CPython executables.  A glob over these is
 #: used rather than hard-coded version-directory names, because the layout
 #: differs per installer (uv uses ``cpython-3.13.1-windows-x86_64-none``,
@@ -874,6 +883,7 @@ INTERPRETER_SEARCH_ROOTS = (
     r"%APPDATA%\uv\python",             # uv-managed (python-build-standalone)
     r"%LOCALAPPDATA%\Programs\Python",  # python.org, per-user
     r"C:\\",                            # python.org, system-wide (C:\Python3XX)
+    F2_SCRATCH_INTERPRETER_ROOT,        # F2 isolated runtimes (3.7 / 3.8 / 3.9 / 3.11)
 )
 
 #: Preference order over (major, minor).  Newest is NOT best: wheel coverage
@@ -882,8 +892,14 @@ INTERPRETER_SEARCH_ROOTS = (
 #: ``psycopg-binary`` had no wheel.  A version absent from this tuple is
 #: EXCLUDED from selection -- which is how CPython 3.15 stays out even though it
 #: is installed and is the py-launcher default.
+#:
+#: 3.7 / 3.8 / 3.9 are APPENDED, not merged into the leading order.  Order only
+#: affects the legacy ``prefer=None`` path (a declared minor selects exactly that
+#: minor), so appending keeps every existing project resolving to the same
+#: interpreter it chose before: an older minor is reached only when the project's
+#: own ``requires-python`` excludes all of the newer ones.
 PREFERRED_PYTHON_MINORS: tuple[tuple[int, int], ...] = (
-    (3, 12), (3, 13), (3, 11), (3, 14), (3, 10),
+    (3, 12), (3, 13), (3, 11), (3, 14), (3, 10), (3, 9), (3, 8), (3, 7),
 )
 
 
