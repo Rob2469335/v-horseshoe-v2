@@ -187,20 +187,23 @@ def resolve_and_verify_uv(
         p = DEFAULT_UV_PATH
 
     # Profile isolation guard: ensure f2builder does not depend on owner profile ACLs
-    resolved = p.resolve() if p.exists() else p
-    forbidden_prefixes = [Path(r"C:\Users\rober").resolve()]
+    p_posix = p.as_posix().lower()
+    forbidden_prefixes = [
+        Path(r"C:\Users\rober"),
+        Path.home(),
+    ]
     if "USERPROFILE" in os.environ:
-        forbidden_prefixes.append(Path(os.environ["USERPROFILE"]).resolve())
+        forbidden_prefixes.append(Path(os.environ["USERPROFILE"]))
+
     for forbidden in forbidden_prefixes:
-        is_inside = False
-        try:
-            is_fixture = any(part in ("F2_EVIDENCE", "F2_SCRATCH", "pytest_tmp") for part in resolved.parts)
-            if not is_fixture and (resolved == forbidden or forbidden in resolved.parents):
-                is_inside = True
-        except Exception:
-            if not any(part in ("F2_EVIDENCE", "F2_SCRATCH", "pytest_tmp") for part in str(resolved).split(os.sep)):
-                is_inside = str(resolved).lower().startswith(str(forbidden).lower())
-        if is_inside:
+        f_posix = forbidden.as_posix().lower()
+        is_owner_profile = (
+            p_posix == f_posix
+            or p_posix.startswith(f_posix + "/")
+            or "c:/users/rober" in p_posix
+        )
+        is_fixture = any(part in ("f2_evidence", "f2_scratch", "pytest_tmp") for part in p_posix.split("/"))
+        if is_owner_profile and not is_fixture:
             raise RuntimeError(
                 f"PROFILE_ISOLATION_VIOLATION: uv path {p} is located within user profile {forbidden}; "
                 f"f2builder must use dedicated tools directory"
