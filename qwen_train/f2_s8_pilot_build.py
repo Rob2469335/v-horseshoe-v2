@@ -35,6 +35,7 @@ from qwen_train.f2_evaluator import analyze_test_invocation
 from qwen_train.f2_s8_acquisition import (
     BUILDER_SOURCE,
     DECLARED_ADJUSTMENTS,
+    DEFAULT_PYTEST_PIN,
     INTERPRETER_SEARCH_ROOTS,
     PREFERRED_PYTHON_MINORS,
     builder_install_plan,
@@ -46,6 +47,7 @@ from qwen_train.f2_s8_acquisition import (
     require_unprivileged_identity,
     requires_python,
     resolve_task_project_root,
+    select_pytest_version,
 )
 
 #: Git executable for the acquisition host. The builder is a Windows-host tool
@@ -149,7 +151,73 @@ def resolve_repo_url(task_id: str, inputs: Path) -> str:
 #: pytest 9 removed, so its own conftest cannot even load under 9. Pinning to a
 #: version whose private API it understands is an environment decision, not a
 #: change to the declared test command.
-PYTEST_PIN = "pytest==8.3.5"
+#:
+#: Deterministic precedence: Rule A (project/adjustment pin) -> Rule B (default 8.3.5)
+#: -> Rule C (compatibility fallback from fixed metadata table).
+PYTEST_PIN = DEFAULT_PYTEST_PIN
+
+#: Dedicated builder-owned tools directory and approved cryptographic digests.
+#: The builder account (f2builder) must use this directory rather than depending
+#: on unauthorized ACL grants in the owner's personal profile (C:\Users\rober\.local\bin).
+DEFAULT_UV_PATH = Path(r"C:\f2_pilot\tools\uv.exe")
+UV_APPROVED_SHA256 = "92fcafc6f7512ec3a0fb42bf6bf84730737252c6d3d7cae4f6f97678d746da3a"
+
+
+def resolve_and_verify_uv(
+    custom_path: Path | str | None = None,
+    expected_sha256: str | None = None,
+) -> Path:
+    r"""Resolve and verify the dedicated, builder-owned uv executable. Deterministic.
+
+    Enforces:
+    1. Dedicated builder-owned tools directory (default C:\f2_pilot\tools\uv.exe,
+       or configured via F2_BUILDER_UV_PATH / custom_path).
+    2. Profile isolation guard: fail-closed if the resolved path points into the
+       owner profile directory (e.g. C:\Users\rober), preventing dependence on
+       unauthorized profile ACLs.
+    3. File existence: raises FileNotFoundError ("BUILDER_TOOL_UNAVAILABLE") if absent.
+    4. Cryptographic integrity: verifies SHA-256 against UV_APPROVED_SHA256
+       before execution; raises RuntimeError ("BUILDER_TOOL_CORRUPT") on mismatch.
+    """
+    if custom_path is not None:
+        p = Path(custom_path)
+    elif os.environ.get("F2_BUILDER_UV_PATH"):
+        p = Path(os.environ["F2_BUILDER_UV_PATH"])
+    else:
+        p = DEFAULT_UV_PATH
+
+    # Profile isolation guard: ensure f2builder does not depend on owner profile ACLs
+    resolved = p.resolve() if p.exists() else p
+    forbidden_prefixes = [Path(r"C:\Users\rober").resolve()]
+    if "USERPROFILE" in os.environ:
+        forbidden_prefixes.append(Path(os.environ["USERPROFILE"]).resolve())
+    for forbidden in forbidden_prefixes:
+        is_inside = False
+        try:
+            is_fixture = any(part in ("F2_EVIDENCE", "F2_SCRATCH", "pytest_tmp") for part in resolved.parts)
+            if not is_fixture and (resolved == forbidden or forbidden in resolved.parents):
+                is_inside = True
+        except Exception:
+            if not any(part in ("F2_EVIDENCE", "F2_SCRATCH", "pytest_tmp") for part in str(resolved).split(os.sep)):
+                is_inside = str(resolved).lower().startswith(str(forbidden).lower())
+        if is_inside:
+            raise RuntimeError(
+                f"PROFILE_ISOLATION_VIOLATION: uv path {p} is located within user profile {forbidden}; "
+                f"f2builder must use dedicated tools directory"
+            )
+
+    if not p.is_file():
+        raise FileNotFoundError(
+            f"BUILDER_TOOL_UNAVAILABLE: uv executable not found at {p}"
+        )
+
+    digest = _sha256_file(p)
+    expected = (expected_sha256 or UV_APPROVED_SHA256).lower()
+    if digest.lower() != expected:
+        raise RuntimeError(
+            f"BUILDER_TOOL_CORRUPT: uv executable at {p} has digest {digest}, expected {expected}"
+        )
+    return p
 
 #: POSIX ``tee`` must be resolvable on PATH. ``tests/mcp/helpers.py`` does
 #: ``assert shutil.which("tee")`` at import time, and the assertion runs during
@@ -292,17 +360,25 @@ def command_plugins(test_cmd: str) -> list[str]:
     })
 
 
-def effective_pytest_pin(adjustment: Mapping[str, Any]) -> str:
+def effective_pytest_pin(
+    adjustment: Mapping[str, Any],
+    project: Path | None = None,
+    declared_python_minor: tuple[int, int] | int = (3, 10),
+) -> str:
     """The pytest requirement the installer will use for one task.
 
-    ``DECLARED_ADJUSTMENTS[...]["pytest_pin"]`` was recorded in ``build_identity``
-    but never read, so the global pin always won. ``BerriAI__litellm-13675``
-    declares ``pytest>=7.4.3,<8.0.0`` in its Poetry dev group, and installing that
-    group against the global ``pytest==8.3.5`` made the install plan refuse the
-    build outright. A declared pin is the project's own statement of which pytest
-    its suite runs on, so it takes precedence.
+    Delegates to :func:`select_pytest_version` in ``f2_s8_acquisition`` to implement
+    the deterministic precedence: Rule A (project/adjustment pin) -> Rule B (default 8.3.5)
+    -> Rule C (compatibility fallback).
     """
-    return str(adjustment.get("pytest_pin") or PYTEST_PIN)
+    sel = select_pytest_version(
+        project=project,
+        declared_python_minor=declared_python_minor,
+        adjustment=adjustment,
+    )
+    if sel.get("status") == "CONFLICT":
+        raise RuntimeError(f"PROJECT_PIN_CONFLICT: {sel.get('detail')}")
+    return str(sel["pin"])
 
 
 def run(cmd, *, cwd=None, timeout=3600, check=True):
@@ -705,16 +781,22 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # so an adjustment naming ``test`` installed nothing beyond the pytest
     # plugins that happen to live there.
     adjustment: dict[str, Any] = dict(DECLARED_ADJUSTMENTS.get(task_id, {}))
-    # ``pytest_pin`` was declared per task and recorded in ``build_identity`` but
-    # never READ, so the installer always used the global pin.  That is not
-    # cosmetic once a task's own group constrains pytest: ``BerriAI__litellm-13675``
-    # declares ``pytest>=7.4.3,<8.0.0`` in its Poetry dev group, and the install
-    # plan refused the build outright -- "conflicting declarations for pytest: no
-    # version satisfies lower 8.3.5 and upper 8.0.0".  Honouring the declared pin
-    # is the faithful resolution: the project states which pytest its suite runs
-    # on, and the conflict detector cannot be satisfied by silently dropping one
-    # side of it.
-    pin = effective_pytest_pin(adjustment)
+    py_minor = (
+        declared_python_minor
+        if isinstance(declared_python_minor, tuple)
+        else (3, declared_python_minor)
+    )
+    ctx = project_install_context(project)
+    # Deterministic pytest version selection according to Rule A / B / C.
+    pytest_sel = select_pytest_version(
+        project=project,
+        declared_python_minor=py_minor,
+        dependency_inputs=ctx["dependency_inputs"],
+        adjustment=adjustment,
+    )
+    if pytest_sel.get("status") == "CONFLICT":
+        raise RuntimeError(f"PROJECT_PIN_CONFLICT: {pytest_sel.get('detail')}")
+    pin = pytest_sel["pin"]
     # UNION the plugins the project's OWN pytest configuration demands.  The
     # hard-coded table above is keyed by instance id and goes stale the moment a
     # DIFFERENT instance of the same project is built (the phase-2 set contains
@@ -848,14 +930,22 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # project venvs so the guest can run the same command with UV_OFFLINE=1 and
     # never reach for the network. uv's wheel cache is NOT required for that:
     # a complete venv plus an intact lockfile resolves with an empty cache.
+    uv_exe: Path | None = None
+    uv_evidence: dict[str, Any] | None = None
     if uses_uv:
+        uv_exe = resolve_and_verify_uv()
+        uv_evidence = {
+            "path": str(uv_exe),
+            "sha256": _sha256_file(uv_exe),
+            "version": _uv_version(uv_exe),
+        }
         # uv's `required-version` is a HARD gate. Checking it explicitly turns an
         # opaque "Failed to parse uv.lock / missing field version" into a named
         # toolchain incompatibility, which is a different class of failure from a
         # task defect and must not be recorded as one.
         required = declared_required_version(project)
         if required:
-            installed = _uv_version()
+            installed = uv_evidence["version"]
             if installed and not _satisfies_version(installed, required):
                 raise RuntimeError(
                     f"uv required-version: the project requires {required!r} but "
@@ -866,7 +956,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
             # Pin uv to the SAME interpreter this builder selected. Without
             # --python, uv discovers its own (newest) interpreter and chose
             # CPython 3.15 for a >=3.13 task, where psycopg-binary has no wheel.
-            run(["uv", "sync", "--frozen", "--all-extras",
+            run([str(uv_exe), "sync", "--frozen", "--all-extras",
                  "--python", base_python], cwd=tree, timeout=3600)
 
     return {
@@ -890,15 +980,18 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
         # acquisition identity, which this manifest never carried and the
         # pre-check never recomputes, so a stale workspace passed silently.
         "builder": BUILDER_SOURCE,
+        "pytest_selection": pytest_sel,
+        "uv_evidence": uv_evidence,
         "requires_python": list(_requires_python(project)) if _requires_python(project) else None,
         "elapsed_s": int(time.time() - t0),
     }
 
 
-def _uv_version() -> str:
+def _uv_version(uv_path: Path | str | None = None) -> str:
     """The installed uv's version string, or ``""`` when uv cannot be run."""
     try:
-        out = run(["uv", "--version"], timeout=120).stdout
+        resolved = resolve_and_verify_uv(uv_path)
+        out = run([str(resolved), "--version"], timeout=120).stdout
     except Exception:  # noqa: BLE001 - absence is handled by the caller
         return ""
     match = re.search(r"uv\s+(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?)", out)
@@ -937,6 +1030,16 @@ def classify_build_failure(exc: BaseException) -> str:
     if isinstance(exc, subprocess.TimeoutExpired):
         return "BUILD_TIMEOUT"
     msg = str(exc)
+    if "BUILDER_TOOL_UNAVAILABLE" in msg or "uv executable not found" in msg:
+        return "BUILDER_TOOL_UNAVAILABLE"
+    if "BUILDER_TOOL_CORRUPT" in msg or "SHA-256 mismatch" in msg:
+        return "BUILDER_TOOL_CORRUPT"
+    if "PROFILE_ISOLATION_VIOLATION" in msg:
+        return "PROFILE_ISOLATION_VIOLATION"
+    if "PROJECT_PIN_CONFLICT" in msg or "conflicting declarations for pytest" in msg:
+        return "PROJECT_PIN_CONFLICT"
+    if "PYTHON_FLOOR_INCOMPATIBLE" in msg:
+        return "PYTHON_FLOOR_INCOMPATIBLE"
     if "declared test dependencies cannot be resolved:" in msg:
         return "DECLARED_TEST_SOURCE_UNRESOLVABLE"
     if "UV_TOOLCHAIN_INCOMPATIBLE" in msg or "uv required-version:" in msg:
