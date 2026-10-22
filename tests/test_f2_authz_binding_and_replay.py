@@ -863,13 +863,25 @@ def test_worker_manifest_disagreeing_with_parent_binding_denied(
 # Meta-tests: test fixtures cannot become production defaults
 # ===========================================================================
 
-def test_default_ledger_root_is_gitignored_runtime_state():
-    assert DEFAULT_LEDGER_ROOT.parent.name == "data"
-    gitignore = (_REPO_ROOT / ".gitignore").read_text("utf-8")
-    assert "data/" in gitignore
-    assert not DEFAULT_LEDGER_ROOT.exists(), (
-        "the production ledger must not exist in a checkout (no test may have "
-        "written it)")
+def test_default_ledger_root_is_shared_and_outside_every_worktree():
+    """Owner decision G1 (2026-10-18): the consumption store is ONE shared
+    absolute path OUTSIDE every Git worktree.
+
+    It was previously ``<repo>/data/f2_authz_ledger``, derived from the executing
+    file and therefore per worktree -- so a consumed grant looked UNCONSUMED from
+    any other checkout and could be consumed twice.  The invariant asserted here
+    is the one that makes "single-use" true; the old assertion
+    (``DEFAULT_LEDGER_ROOT.parent.name == "data"``) encoded the per-worktree
+    behaviour that G1 replaced, so it is superseded rather than weakened.
+    """
+    root = Path(DEFAULT_LEDGER_ROOT)
+    assert root.is_absolute(), root
+    # outside every worktree: not under any checkout's data/ directory
+    assert root.parent.name != "data", root
+    assert "f2_exec" not in str(root), root
+    assert root.parent.name == "F2_AUTHZ", root
+    # a test must still never have consumed anything into it
+    assert not (root / ("0" * 64 + ".json")).exists()
 
 
 def test_no_production_trust_root_is_provisioned_by_tests():
