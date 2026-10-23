@@ -297,12 +297,52 @@ def per_task_env(task_id: str, manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _gated_task_ids(manifest: dict[str, Any]) -> list[str]:
+    """The tasks this run could execute, in manifest order.
+
+    Mirrors ``build_specs``: ``_``-prefixed keys and the digest-policy key are
+    manifest METADATA, not tasks, and only ``status="built"`` entries are
+    runnable. The v2 gate must validate exactly the set the run could execute
+    against the signed pool -- validating the raw key set would refuse a real
+    manifest for carrying its own policy declaration.
+    """
+    from qwen_train.f2_evidence import DIGEST_POLICY_FIELD
+
+    return [
+        str(task_id)
+        for task_id, entry in manifest.items()
+        if not str(task_id).startswith("_")
+        and str(task_id) != DIGEST_POLICY_FIELD
+        and isinstance(entry, dict)
+        and entry.get("status") == "built"
+    ]
+
+
+def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
+         channel: Any = None, governance_loader: Any = None) -> int:
+    """Operator entry point.
+
+    ``task_runner`` / ``channel`` / ``governance_loader`` are a FUNCTION-ARGUMENT
+    ONLY seam for the real-``main`` tests. They default to the production
+    implementations, are not reachable from the environment, from a CLI flag or
+    from a config file, and cannot skip grant verification, the v2 gate,
+    consumption ordering or revocation. Nothing in production passes them.
+    """
     ap = argparse.ArgumentParser(description="Run the five-task S8 feasibility pilot")
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--inputs", required=True)
     ap.add_argument("--registration-id", required=True)
     ap.add_argument("--registration-sha256", required=True)
+    ap.add_argument(
+        "--registration-file",
+        default="",
+        help="the registration artifact itself, for the v2 gate",
+    )
+    ap.add_argument(
+        "--candidate-pool-file",
+        default="",
+        help="the owner-signed S8 candidate pool, for the v2 gate",
+    )
     ap.add_argument("--ledger", required=True)
     ap.add_argument("--staging", required=True, help="host-side staging directory")
     ap.add_argument("--out", required=True, help="directory for the run's results")
@@ -328,7 +368,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # the run is refused.  Single-use, scope-bound, revocable and fail-closed is
     # enforced by ``f2_authorization`` (no trust root => every stage denied).
     from qwen_train.f2_authorization import (
+        SCHEMA as V1_SCHEMA,
         AuthorizationError,
+        require_authorized,
         verify_and_consume,
     )
 
@@ -350,6 +392,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # before any guest work), and no binding, signature, scope or replay check is
     # relaxed.
     manifest = json.loads(manifest_bytes.decode("utf-8"))
+
     specs = build_specs(manifest, Path(args.inputs), args.registration_sha256,
                         args.registration_id)
     if args.only:
@@ -403,19 +446,98 @@ def main(argv: Sequence[str] | None = None) -> int:
             "rebuild those tasks. No grant was consumed."
         )
 
+    # --- AUTHORITATIVE GRANT RESOLUTION + VERSION DISPATCH -------------------
+    # The record is resolved and FULLY verified here, without consuming it, so
+    # the version that selects the validation path is the SIGNED version. The
+    # single-use consumption still happens later (unchanged, still atomic, still
+    # before any guest work); this call only decides HOW the run must be
+    # validated. There is deliberately no second grant loader.
+    #
+    # v2 -> the side-effect-free preflight MUST pass before consumption, run-ID
+    #       generation, budget claims or any task preparation. A v2 grant can
+    #       never fall through to v1: the dispatch is on the VERIFIED schema and
+    #       an unknown schema refuses.
+    # v1 -> the legacy path below, unchanged (existing authority).
+    from qwen_train.f2_s8_v2_gate import V2_SCHEMA, V2GateError, v2_preflight
+
+    try:
+        grant_record = require_authorized(
+            stage="S8-001",
+            operation="base_gold_production",
+            binding={
+                "candidate_manifest_digest": manifest_digest,
+                "registration_sha256": args.registration_sha256,
+            },
+        )
+    except AuthorizationError as exc:
+        raise SystemExit(
+            "REFUSING: code=AUTHORIZATION_REFUSED no valid "
+            "S8-001/base_gold_production signed authorization "
+            f"for this manifest and registration ({exc}). No grant was consumed."
+        ) from exc
+    except ValueError as exc:
+        # ``_parse_ts`` raises a plain ValueError for an unparseable timestamp;
+        # a malformed signed record is a refusal, never an uncaught crash.
+        raise SystemExit(
+            "REFUSING: code=AUTHORIZATION_REFUSED no valid "
+            "S8-001/base_gold_production signed authorization: the record "
+            f"carries a malformed field ({exc}). No grant was consumed."
+        ) from exc
+
+    grant_schema = str(grant_record.get("schema") or "")
+    v2_evidence = None
+    if grant_schema == V2_SCHEMA:
+        if not args.candidate_pool_file:
+            raise SystemExit(
+                "REFUSING: code=V2_MISSING_POOL_ARG the signed grant is "
+                f"{V2_SCHEMA!r}, so its candidate pool is mandatory and "
+                "--candidate-pool-file was not supplied. A v2 grant cannot reach "
+                "consumption without the artifact the owner ratified. No grant "
+                "was consumed."
+            )
+        if not args.registration_file:
+            raise SystemExit(
+                "REFUSING: code=V2_MISSING_REGISTRATION_ARG the signed grant is "
+                f"{V2_SCHEMA!r}, so the registration artifact is mandatory and "
+                "--registration-file was not supplied; --registration-sha256 is "
+                "a declared label, not proof of the bytes. No grant was consumed."
+            )
+        try:
+            v2_evidence = v2_preflight(
+                record=grant_record,
+                registration_file=Path(args.registration_file),
+                candidate_pool_file=Path(args.candidate_pool_file),
+                manifest_task_ids=_gated_task_ids(manifest),
+                ledger_paths=[Path(args.ledger)],
+                manifest_digest=manifest_digest,
+            )
+        except V2GateError as exc:
+            # Fail-closed and side-effect-free: nothing was consumed, reserved,
+            # written or executed. The code is the stable machine-readable reason.
+            raise SystemExit(f"REFUSING: code={exc.code} {exc}") from exc
+    elif grant_schema == V1_SCHEMA:
+        v2_evidence = None
+    else:
+        raise SystemExit(
+            f"REFUSING: code=UNKNOWN_SCHEMA the verified grant declares schema "
+            f"{grant_schema!r}, which no validation path supports. No grant was "
+            "consumed."
+        )
+
     # Fail closed before touching the guest: the governed path needs a real
     # trusted store and a real authorized evaluator, none of which this module
     # invents. This is a readiness precondition, so it must also run BEFORE
     # consumption -- otherwise an unprovisioned environment burns the grant.
-    inputs = load_governance_from_env()
+    inputs = (governance_loader or load_governance_from_env)()
 
     # --- SINGLE-USE CONSUMPTION (unchanged) ----------------------------------
     try:
         # SINGLE-USE, durable consumption (Decision 2): `verify_and_consume`
         # verifies the grant AND durably consumes it BEFORE any guest work, so a
         # second attempt -- concurrent or later, in this or any other process --
-        # is denied. `require_authorized` is the NON-consuming stateless check and
-        # must not be used here.
+        # is denied. The earlier ``require_authorized`` call only DISPATCHED the
+        # schema and (for v2) ran the side-effect-free gate; THIS call is the
+        # consumer, and it is still the only thing that spends the grant.
         verified, _consumption = verify_and_consume(
             stage="S8-001",
             operation="base_gold_production",
@@ -426,7 +548,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except AuthorizationError as exc:
         raise SystemExit(
-            "REFUSING: no valid S8-001/base_gold_production signed authorization "
+            "REFUSING: code=AUTHORIZATION_REFUSED no valid "
+            "S8-001/base_gold_production signed authorization "
             f"for this manifest and registration ({exc})"
         ) from exc
     # The revision the OWNER-signed grant bound; written into every admitted
@@ -439,7 +562,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     ledger = AppendOnlyLedger(args.ledger)
-    channel = PsDirectChannel(vm_name=args.vm, credential_path=args.credential)
+    if channel is None:
+        channel = PsDirectChannel(vm_name=args.vm, credential_path=args.credential)
 
     print(f"pilot: {len(specs)} tasks, ledger={args.ledger}", flush=True)
     results: list[PilotTaskResult] = []
@@ -453,7 +577,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Resolved INSIDE the try: an invalid/missing project_subdir is a
             # per-task fault, not a reason to abort the rest of the batch.
             env = per_task_env(spec.task_id, manifest)
-            result = run_pilot_task(
+            result = (task_runner or run_pilot_task)(
                 spec=spec, channel=channel, inputs=inputs, ledger=ledger,
                 gates=gates, guest_dir=GUEST_DIR, host_dir=str(staging),
                 registration_sha256=args.registration_sha256,
@@ -512,6 +636,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "gates": gates,
         "registration_id": args.registration_id,
         "registration_sha256": args.registration_sha256,
+        # The gate's frozen evidence, not a re-read of the artifacts: these are
+        # the digests the run was actually validated against.
+        "v2_preflight": v2_evidence.as_evidence() if v2_evidence is not None else None,
         "ledger": str(args.ledger),
         "environment_identity": inputs.environment_identity,
         "evaluator": {

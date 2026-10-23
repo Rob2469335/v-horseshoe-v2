@@ -289,16 +289,23 @@ def _git_revision(repo_root: Path) -> str:
     return revision
 
 
-def _registered_task_ids(path: Path) -> list[str]:
+def _registered_task_ids(path: Path, *, raw: bytes | None = None) -> list[str]:
+    """The authoritative registration ID list.
+
+    ``raw`` is the ALREADY-READ content of ``path``. Supplying it guarantees the
+    parsed ids correspond to the exact bytes the caller hashed, so the
+    read-once gate never reopens the file between hashing and parsing.
+    """
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        text = raw.decode("utf-8") if raw is not None else path.read_text(encoding="utf-8")
+        payload = json.loads(text)
     except Exception as exc:  # noqa: BLE001
         raise PrecheckError(f"registration is unreadable: {exc}") from exc
-    if isinstance(raw, Mapping):
-        raw = raw.get("task_ids") or raw.get("tasks") or list(raw)
-    if not isinstance(raw, list):
+    if isinstance(payload, Mapping):
+        payload = payload.get("task_ids") or payload.get("tasks") or list(payload)
+    if not isinstance(payload, list):
         raise PrecheckError("registration must be a list of task ids")
-    out = [str(t) for t in raw]
+    out = [str(t) for t in payload]
     if len(set(out)) != len(out):
         raise PrecheckError("registration contains duplicate task ids")
     return out

@@ -67,7 +67,7 @@ class TestValidationPrecedesConsumption:
     def test_source_orders_validation_before_consumption(self):
         assert BODY.index("build_specs(") < BODY.index("verify_and_consume("), (
             "build_specs must run before the grant is consumed")
-        assert BODY.index("load_governance_from_env()") < BODY.index(
+        assert BODY.index("load_governance_from_env") < BODY.index(
             "verify_and_consume("), (
             "readiness (governed env) must run before the grant is consumed")
         assert BODY.index("zero runnable tasks") < BODY.index(
@@ -76,8 +76,14 @@ class TestValidationPrecedesConsumption:
 
     def test_consumption_is_still_single_use_and_unchanged(self):
         assert "verify_and_consume(" in BODY, "consumption must still happen"
-        assert "require_authorized(" not in BODY, (
-            "the non-consuming check must not replace consumption")
+        # AUTHORIZED CHANGE (S8 v2 gate, Slice A): the runner now resolves the
+        # signed record with the NON-CONSUMING ``require_authorized`` in order to
+        # dispatch v1 vs v2 (a v2 grant must pass ``v2_preflight`` before
+        # consumption; see docs/EXPERIMENT_J_F2_S8_* and the mission brief). The
+        # original blanket ban was a proxy for "never REPLACE consumption with
+        # the non-consuming check", which is the invariant asserted here.
+        assert BODY.index("require_authorized(") < BODY.index("verify_and_consume("), (
+            "the non-consuming check must only PRECEDE consumption, never replace it")
         # the binding is unchanged: it must NOT be narrowed by --only
         start = BODY.index("verify_and_consume(")
         call = BODY[start:start + 400]
