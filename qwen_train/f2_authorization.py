@@ -463,7 +463,7 @@ def verify_authorization(
     for field in _REQUIRED:
         if field not in record:
             raise AuthorizationError(f"missing required field: {field}")
-    if record["schema"] != SCHEMA:
+    if record["schema"] not in (SCHEMA, "f2-authorization/v2"):
         raise AuthorizationError(f"unsupported schema: {record['schema']!r}")
     if record["stage"] != stage:
         raise AuthorizationError(
