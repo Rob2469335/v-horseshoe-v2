@@ -113,23 +113,26 @@ def test_task_count_is_validated(tmp_path):
 
 def test_retry_cap_is_grant_wide(tmp_path):
     rec = v2_record(retries=2)
-    B.claim_retry(record=rec, execution_id="e0", task_id="t1", ledger_root=tmp_path)
-    B.claim_retry(record=rec, execution_id="e0", task_id="t2", ledger_root=tmp_path)
+    _reserve(rec, tmp_path, "e0", task_count=3)
+    B.claim_retry(record=rec, execution_id="e0", task_id="task-0", ledger_root=tmp_path)
+    B.claim_retry(record=rec, execution_id="e0", task_id="task-1", ledger_root=tmp_path)
     with pytest.raises(B.BudgetError, match="retry capacity exhausted"):
-        B.claim_retry(record=rec, execution_id="e0", task_id="t3", ledger_root=tmp_path)
+        B.claim_retry(record=rec, execution_id="e0", task_id="task-2", ledger_root=tmp_path)
 
 
 def test_retry_for_same_execution_and_task_is_refused(tmp_path):
     rec = v2_record(retries=5)
-    B.claim_retry(record=rec, execution_id="e0", task_id="t1", ledger_root=tmp_path)
+    _reserve(rec, tmp_path, "e0", task_count=1)
+    B.claim_retry(record=rec, execution_id="e0", task_id="task-0", ledger_root=tmp_path)
     with pytest.raises(B.BudgetError, match="already claimed"):
-        B.claim_retry(record=rec, execution_id="e0", task_id="t1", ledger_root=tmp_path)
+        B.claim_retry(record=rec, execution_id="e0", task_id="task-0", ledger_root=tmp_path)
 
 
 def test_retry_zero_means_none(tmp_path):
     rec = v2_record(retries=0)
+    _reserve(rec, tmp_path, "e0", task_count=1)
     with pytest.raises(B.BudgetError, match="retry capacity exhausted"):
-        B.claim_retry(record=rec, execution_id="e0", task_id="t1", ledger_root=tmp_path)
+        B.claim_retry(record=rec, execution_id="e0", task_id="task-0", ledger_root=tmp_path)
 
 
 # --- allowlist --------------------------------------------------------------
@@ -202,19 +205,32 @@ def test_task_overspend_across_processes(tmp_path):
 
 
 def test_crash_between_id_and_slot_does_not_refund(tmp_path):
+    import json
     rec = v2_record(executions=2)
     d = tmp_path / record_digest(rec)
     (d / "exec").mkdir(parents=True)
-    (d / "exec" / (__import__("hashlib").sha256(b"crashed").hexdigest() + ".lock")).write_text("{}", encoding="utf-8")
-    with pytest.raises(B.BudgetError, match="duplicate execution_id"):
+    payload = {
+        "schema": B.RESERVATION_SCHEMA,
+        "kind": "execution-claim",
+        "execution_id": "crashed",
+        "task_count": 1,
+        "claimed_at_utc": "2026-10-23T00:00:00Z",
+        "pid": 1234,
+    }
+    (d / "exec" / (__import__("hashlib").sha256(b"crashed").hexdigest() + ".lock")).write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    with pytest.raises(B.BudgetError, match="incomplete reservation"):
         _reserve(rec, tmp_path, "crashed")
-    assert B.usage(record_digest(rec), tmp_path) == 0
-    _reserve(rec, tmp_path, "fresh")
-    assert B.usage(record_digest(rec), tmp_path) == 1
+    # Incomplete reservation is detected; subsequent reservations fail closed
+    with pytest.raises(B.BudgetError, match="incomplete reservation"):
+        _reserve(rec, tmp_path, "fresh")
+    # Capacity is not refunded automatically
+    assert len(list(d.glob("*.json"))) == 0
 
 
 def test_remaining_reports_all_three(tmp_path):
     rec = v2_record(executions=3, tasks=10, retries=2)
     _reserve(rec, tmp_path, "e0", task_count=4)
-    B.claim_retry(record=rec, execution_id="e0", task_id="t1", ledger_root=tmp_path)
+    B.claim_retry(record=rec, execution_id="e0", task_id="task-0", ledger_root=tmp_path)
     assert B.remaining(rec, tmp_path) == {"executions": 2, "tasks": 6, "retries": 1}

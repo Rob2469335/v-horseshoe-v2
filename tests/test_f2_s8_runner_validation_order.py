@@ -64,31 +64,49 @@ def _run(tmp_path, *, manifest_text, inputs_dir=None, only=None):
 
 # --------------------------------------------------------------- structural order
 class TestValidationPrecedesConsumption:
-    def test_source_orders_validation_before_consumption(self):
-        assert BODY.index("build_specs(") < BODY.index("verify_and_consume("), (
-            "build_specs must run before the grant is consumed")
-        assert BODY.index("load_governance_from_env") < BODY.index(
-            "verify_and_consume("), (
-            "readiness (governed env) must run before the grant is consumed")
-        assert BODY.index("zero runnable tasks") < BODY.index(
-            "verify_and_consume("), (
-            "the zero-runnable refusal must run before the grant is consumed")
+    """Ordering of the live runner (v2 flow): validation -> readiness -> RESERVE.
 
-    def test_consumption_is_still_single_use_and_unchanged(self):
-        assert "verify_and_consume(" in BODY, "consumption must still happen"
-        # AUTHORIZED CHANGE (S8 v2 gate, Slice A): the runner now resolves the
-        # signed record with the NON-CONSUMING ``require_authorized`` in order to
-        # dispatch v1 vs v2 (a v2 grant must pass ``v2_preflight`` before
-        # consumption; see docs/EXPERIMENT_J_F2_S8_* and the mission brief). The
-        # original blanket ban was a proxy for "never REPLACE consumption with
-        # the non-consuming check", which is the invariant asserted here.
-        assert BODY.index("require_authorized(") < BODY.index("verify_and_consume("), (
-            "the non-consuming check must only PRECEDE consumption, never replace it")
-        # the binding is unchanged: it must NOT be narrowed by --only
-        start = BODY.index("verify_and_consume(")
-        call = BODY[start:start + 400]
+    The legacy single-use consumer (``verify_and_consume``) is no longer part of
+    the live path at all (v2 grants consume budget via ``verify_and_reserve``;
+    v1 is refused). These checks inspect real call sites, not comments.
+    """
+
+    @staticmethod
+    def _code_only(src: str) -> str:
+        import io
+        import tokenize
+
+        out = []
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type in (tokenize.COMMENT, tokenize.STRING):
+                continue
+            out.append(tok.string)
+        return " ".join(out)
+
+    def test_source_orders_validation_before_reservation(self):
+        code = self._code_only(BODY)
+        reserve = code.index("verify_and_reserve (")
+        assert code.index("build_specs (") < reserve, (
+            "build_specs must run before the grant budget is reserved")
+        assert code.index("load_governance_from_env") < reserve, (
+            "readiness (governed env) must run before the grant budget is reserved")
+        assert BODY.index("zero runnable tasks") < BODY.index("verify_and_reserve("), (
+            "the zero-runnable refusal must run before the budget is reserved")
+
+    def test_legacy_consumer_is_not_called_by_the_live_runner(self):
+        code = self._code_only(BODY)
+        assert "verify_and_consume" not in code, (
+            "the live runner must not call the legacy consumer (a v2 grant would be "
+            "refused there and a v1 grant must never run live)")
+        assert "verify_and_reserve (" in code, "reservation must still happen"
+        # the non-consuming check may only PRECEDE reservation, never replace it
+        assert code.index("require_authorized (") < code.index("verify_and_reserve (")
+        # --only must not narrow the signed binding: inspect the reserve call
+        start = BODY.index("verify_and_reserve(\n")
+        call = BODY[start:start + 1500]
         assert "candidate_manifest_digest" in call and "registration_sha256" in call
-        assert "only" not in call, "--only must not narrow the consumed grant scope"
+        assert "candidate_pool_digest" in call
+        assert "args.only" not in call, "--only must not narrow the reserved grant scope"
 
 
 # --------------------------------------------------------- non-consuming refusals

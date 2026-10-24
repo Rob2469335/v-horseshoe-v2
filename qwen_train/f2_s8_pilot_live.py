@@ -319,14 +319,16 @@ def _gated_task_ids(manifest: dict[str, Any]) -> list[str]:
 
 
 def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
-         channel: Any = None, governance_loader: Any = None) -> int:
+         channel: Any = None, governance_loader: Any = None,
+         budget_ledger_root: Any = None) -> int:
     """Operator entry point.
 
-    ``task_runner`` / ``channel`` / ``governance_loader`` are a FUNCTION-ARGUMENT
-    ONLY seam for the real-``main`` tests. They default to the production
-    implementations, are not reachable from the environment, from a CLI flag or
-    from a config file, and cannot skip grant verification, the v2 gate,
-    consumption ordering or revocation. Nothing in production passes them.
+    ``task_runner`` / ``channel`` / ``governance_loader`` / ``budget_ledger_root``
+    are a FUNCTION-ARGUMENT ONLY seam for the real-``main`` tests. They default
+    to the production implementations, are not reachable from the environment,
+    from a CLI flag or from a config file, and cannot skip grant verification,
+    the v2 gate, budget reservation, consumption ordering or revocation.
+    Nothing in production passes them.
     """
     ap = argparse.ArgumentParser(description="Run the five-task S8 feasibility pilot")
     ap.add_argument("--manifest", required=True)
@@ -371,7 +373,6 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
         SCHEMA as V1_SCHEMA,
         AuthorizationError,
         require_authorized,
-        verify_and_consume,
     )
 
     # Read the manifest ONCE: the digest bound into the authorization and the
@@ -516,7 +517,14 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
             # written or executed. The code is the stable machine-readable reason.
             raise SystemExit(f"REFUSING: code={exc.code} {exc}") from exc
     elif grant_schema == V1_SCHEMA:
-        v2_evidence = None
+        # Owner policy OD-2: a v1 grant may be VERIFIED historically but is never
+        # accepted for live execution. Refused at dispatch, before readiness,
+        # reservation or any other side effect.
+        raise SystemExit(
+            "REFUSING: code=V1_LIVE_EXECUTION_PROHIBITED v1 authorization records "
+            "are prohibited from live execution under owner policy OD-2; "
+            "v2 authorization with explicit budget is required. No grant was consumed."
+        )
     else:
         raise SystemExit(
             f"REFUSING: code=UNKNOWN_SCHEMA the verified grant declares schema "
@@ -527,29 +535,38 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
     # Fail closed before touching the guest: the governed path needs a real
     # trusted store and a real authorized evaluator, none of which this module
     # invents. This is a readiness precondition, so it must also run BEFORE
-    # consumption -- otherwise an unprovisioned environment burns the grant.
+    # reservation -- otherwise an unprovisioned environment burns the grant.
     inputs = (governance_loader or load_governance_from_env)()
 
-    # --- SINGLE-USE CONSUMPTION (unchanged) ----------------------------------
+    # --- ATOMIC v2 BUDGET RESERVATION ---------------------------------------
     try:
-        # SINGLE-USE, durable consumption (Decision 2): `verify_and_consume`
-        # verifies the grant AND durably consumes it BEFORE any guest work, so a
-        # second attempt -- concurrent or later, in this or any other process --
-        # is denied. The earlier ``require_authorized`` call only DISPATCHED the
-        # schema and (for v2) ran the side-effect-free gate; THIS call is the
-        # consumer, and it is still the only thing that spends the grant.
-        verified, _consumption = verify_and_consume(
+        from qwen_train.f2_authorization import verify_and_reserve
+
+        verified, _reservation = verify_and_reserve(
             stage="S8-001",
             operation="base_gold_production",
+            task_count=len(specs),
+            task_ids=[spec.task_id for spec in specs],
+            manifest_digest=manifest_digest,
+            execution_id=args.nonce or f"s8-{manifest_digest[:16]}",
             binding={
                 "candidate_manifest_digest": manifest_digest,
                 "registration_sha256": args.registration_sha256,
+                "candidate_pool_digest": v2_evidence.candidate_pool_digest,
+                # Digest of the registration bytes the gate actually read. If the
+                # signed record declares registration_manifest_sha256 it must equal
+                # this value (optional-binding comparison in _check_binding).
+                "registration_manifest_sha256": v2_evidence.registration_file_sha256,
+                # Digest of the registration bytes the gate actually read. If the
+                # signed record declares registration_manifest_sha256 it must equal
+                # this value (optional-binding comparison in _check_binding).
             },
+            budget_ledger_root=budget_ledger_root,
         )
     except AuthorizationError as exc:
         raise SystemExit(
             "REFUSING: code=AUTHORIZATION_REFUSED no valid "
-            "S8-001/base_gold_production signed authorization "
+            "S8-001/base_gold_production signed authorization or budget reservation "
             f"for this manifest and registration ({exc})"
         ) from exc
     # The revision the OWNER-signed grant bound; written into every admitted

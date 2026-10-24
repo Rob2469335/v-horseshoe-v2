@@ -154,41 +154,39 @@ class TestS8LiveAuthorization:
             verify_and_consume(stage="S8-001", operation="base_gold_production",
                                binding=binding)
 
-    def test_a_readiness_failure_does_not_consume_the_grant(self, tmp_path, monkeypatch):
-        """F2-IMPL-AUTH-033: "a readiness failure never burns the grant".
+    def test_a_valid_v1_grant_is_refused_for_live_execution(self, tmp_path, monkeypatch):
+        """OD-2: a correctly signed, correctly bound v1 grant still never runs live.
 
-        With the governed environment absent the run is refused at READINESS,
-        before consumption, so the single-use grant is NOT spent: a second
-        identical invocation fails the same way rather than reporting an
-        already-consumed authorization.
+        Refusal happens at schema dispatch, BEFORE readiness and before any
+        reservation, and nothing is consumed or reserved (no ledger/budget files).
         """
         manifest = _manifest(tmp_path)
         sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
         _provision_s8_grant(tmp_path, monkeypatch, manifest_sha=sha)
+        kit.use_test_ledger(monkeypatch, tmp_path)
+        # governed env deliberately ABSENT: the v1 refusal must come first
         for name in ("SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_ARTIFACT_ROOT"):
             monkeypatch.delenv(name, raising=False)
         argv = _argv(tmp_path, manifest, _gates(tmp_path))
-        with pytest.raises(Exception) as first:
-            live.main(argv)
-        assert "governance inputs are missing" in str(first.value)
-        assert "S8-001" not in str(first.value)
-        with pytest.raises(Exception) as second:
-            live.main(argv)
-        assert "governance inputs are missing" in str(second.value)
-        assert "already" not in str(second.value).lower()
+        for _ in range(2):  # repeatable: refusal never spends anything
+            with pytest.raises(SystemExit) as exc:
+                live.main(argv)
+            assert "code=V1_LIVE_EXECUTION_PROHIBITED" in str(exc.value)
+            assert "No grant was consumed" in str(exc.value)
+        assert not (tmp_path / "ledger").exists()
 
-    def test_a_correctly_bound_grant_passes_authorization(self, tmp_path, monkeypatch):
-        """With a correctly bound grant, the entry point gets PAST the S8-001 check
-        and fails on the (absent) governed environment instead -- proving the gate
-        booleans alone were not what allowed it."""
+    def test_a_valid_v1_grant_cannot_reach_the_legacy_consumer(self, tmp_path, monkeypatch):
+        """Prove the live runner never calls verify_and_consume for a v1 grant."""
+        from qwen_train import f2_authorization as A
+
         manifest = _manifest(tmp_path)
         sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
         _provision_s8_grant(tmp_path, monkeypatch, manifest_sha=sha)
-        for name in (
-            "SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
-            "SWARM_S8_GOLD_STATE_DIGEST", "SWARM_S8_ARTIFACT_ROOT",
-        ):
-            monkeypatch.delenv(name, raising=False)
-        with pytest.raises(Exception) as exc:
+        _provision_governance(monkeypatch, tmp_path)
+
+        def _boom(*a, **k):  # pragma: no cover - must never run
+            raise AssertionError("legacy consumer reached from the live runner")
+
+        monkeypatch.setattr(A, "verify_and_consume", _boom)
+        with pytest.raises(SystemExit, match="V1_LIVE_EXECUTION_PROHIBITED"):
             live.main(_argv(tmp_path, manifest, _gates(tmp_path)))
-        assert "S8-001" not in str(exc.value)      # authorization SATISFIED

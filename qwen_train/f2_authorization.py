@@ -32,6 +32,7 @@ import base64
 import datetime as _dt
 import hashlib
 import json
+import re
 import os
 from pathlib import Path
 from types import MappingProxyType
@@ -84,6 +85,8 @@ BINDING_FIELDS = (
     "run_id",
     "rollout_id",
     "arm",
+    "candidate_pool_digest",
+    "registration_manifest_sha256",
 )
 
 #: A binding document additionally carries the stage/operation it is bound to.
@@ -121,7 +124,12 @@ OPERATION_REQUIRED_BINDINGS: dict[tuple[str, str], frozenset[str]] = {
     # revision the code was taken from -- so a grant authorises ONE manifest at
     # ONE revision, never "a pilot" in the abstract.
     ("S8-001", "base_gold_production"): frozenset(
-        {"repository_revision", "candidate_manifest_digest", "registration_sha256"}
+        {
+            "repository_revision",
+            "candidate_manifest_digest",
+            "registration_sha256",
+            "registration_manifest_sha256",
+        }
     ),
     ("CONF-001", "confirmatory_run"): frozenset(
         {"repository_revision", "experiment_id", "protocol_version", "arm"}
@@ -152,8 +160,15 @@ def validate_execution_stage_operation(stage: str, operation: str) -> None:
 
 def canonical_bytes(record: Mapping[str, Any]) -> bytes:
     """Deterministic serialisation of the signed portion of a record."""
+    def _to_json_compat(obj: Any) -> Any:
+        if isinstance(obj, Mapping):
+            return {k: _to_json_compat(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_to_json_compat(v) for v in obj]
+        return obj
+
     return json.dumps(
-        record, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        _to_json_compat(record), sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
 
 
@@ -463,8 +478,39 @@ def verify_authorization(
     for field in _REQUIRED:
         if field not in record:
             raise AuthorizationError(f"missing required field: {field}")
-    if record["schema"] not in (SCHEMA, "f2-authorization/v2"):
-        raise AuthorizationError(f"unsupported schema: {record['schema']!r}")
+    rec_schema = record.get("schema")
+    if rec_schema not in (SCHEMA, "f2-authorization/v2"):
+        raise AuthorizationError(f"unsupported schema: {rec_schema!r}")
+    if rec_schema == SCHEMA:
+        if "budget" in record:
+            raise AuthorizationError("v1 authorization record cannot declare 'budget'")
+        if "candidate_pool_digest" in record:
+            raise AuthorizationError("v1 authorization record cannot declare 'candidate_pool_digest'")
+        if "registration_manifest_sha256" in record:
+            raise AuthorizationError(
+                "v1 authorization record cannot declare 'registration_manifest_sha256'"
+            )
+    elif rec_schema == "f2-authorization/v2":
+        from qwen_train.f2_authz_budget import budget_of
+
+        budget = budget_of(record)
+        if budget is None:
+            raise AuthorizationError("v2 authorization record must declare valid 'budget'")
+        pool_digest = record.get("candidate_pool_digest")
+        if not isinstance(pool_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", pool_digest):
+            raise AuthorizationError("v2 authorization record is missing a 64-hex candidate_pool_digest")
+        if (stage, operation) == ("S8-001", "base_gold_production"):
+            reg_manifest = record.get("registration_manifest_sha256")
+            if not isinstance(reg_manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", reg_manifest):
+                raise AuthorizationError(
+                    "v2 authorization record is missing a 64-hex registration_manifest_sha256"
+                )
+        elif "registration_manifest_sha256" in record:
+            reg_manifest = record["registration_manifest_sha256"]
+            if not isinstance(reg_manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", reg_manifest):
+                raise AuthorizationError(
+                    "v2 authorization record declares a malformed registration_manifest_sha256"
+                )
     if record["stage"] != stage:
         raise AuthorizationError(
             f"stage mismatch: record {record['stage']!r} != required {stage!r}"
@@ -519,6 +565,8 @@ def verify_authorization(
     if unknown:
         raise AuthorizationError(f"unknown execution-binding fields: {unknown!r}")
     required = set(OPERATION_REQUIRED_BINDINGS.get((stage, operation), frozenset()))
+    if rec_schema == SCHEMA:
+        required.discard("registration_manifest_sha256")
     _check_binding(record, required, supplied, repository_root)
 
     # ---- signature verification against the owner-controlled trust root ----
@@ -610,6 +658,8 @@ def _check_binding(
             )
         expected = supplied.get(name)
         if expected is None:
+            if name == "registration_manifest_sha256":
+                continue
             raise AuthorizationError(
                 f"no independently obtained expected value for required "
                 f"binding {name!r} - fail-closed"
@@ -732,6 +782,11 @@ def verify_and_consume(
     verified = verify_and_bind(
         stage=stage, operation=operation, binding=binding_in, **kwargs
     )
+    if verified.record.get("schema") == "f2-authorization/v2":
+        raise AuthorizationError(
+            "verify_and_consume does not support v2 authorizations; "
+            "use verify_and_reserve to enforce grant budgets"
+        )
     from qwen_train.f2_authz_ledger import AuthorizationLedger
 
     ledger = AuthorizationLedger(ledger_root)
@@ -741,5 +796,80 @@ def verify_and_consume(
         binding_digest=verified.binding_digest,
         stage=stage,
         operation=operation,
+    )
+    return verified, entry
+
+
+def verify_and_reserve(
+    *,
+    stage: str,
+    operation: str,
+    task_count: int = 1,
+    task_ids: list[str] | None = None,
+    manifest_digest: str = "",
+    binding: Mapping[str, Any] | None = None,
+    ledger_root: Path | str | None = None,
+    budget_ledger_root: Path | str | None = None,
+    execution_id: str = "",
+    **kwargs: Any,
+) -> tuple[VerifiedAuthorization, Mapping[str, Any]]:
+    """Verify, then claim ONE budget slot and task units against a v2 grant.
+
+    A v1 grant is rejected fail-closed under owner policy OD-2: live execution
+    requires a v2 grant with explicit budget limits.
+    """
+    binding_in = dict(binding or {})
+    verified = verify_and_bind(
+        stage=stage, operation=operation, binding=binding_in, **kwargs
+    )
+    if verified.record.get("schema") != "f2-authorization/v2":
+        raise AuthorizationError(
+            f"verify_and_reserve requires schema 'f2-authorization/v2', "
+            f"got {verified.record.get('schema')!r}"
+        )
+
+    from qwen_train.f2_authz_budget import reserve
+
+    pool_digest = verified.record.get("candidate_pool_digest")
+    if not isinstance(pool_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", pool_digest):
+        raise AuthorizationError(
+            "v2 authorization is missing a 64-hex candidate_pool_digest"
+        )
+    supplied_pool = verified.binding.get("candidate_pool_digest")
+    if supplied_pool is not None and supplied_pool != pool_digest:
+        raise AuthorizationError(
+            "candidate_pool_digest binding mismatch: caller supplied "
+            f"{supplied_pool}, authorization binds {pool_digest}"
+        )
+
+    if (stage, operation) == ("S8-001", "base_gold_production"):
+        reg_manifest = verified.record.get("registration_manifest_sha256")
+        if not isinstance(reg_manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", reg_manifest):
+            raise AuthorizationError(
+                "v2 authorization is missing a 64-hex registration_manifest_sha256"
+            )
+        supplied_reg = verified.binding.get("registration_manifest_sha256")
+        if not supplied_reg:
+            raise AuthorizationError(
+                "no independently obtained expected value for required "
+                "binding 'registration_manifest_sha256' - fail-closed"
+            )
+        if supplied_reg != reg_manifest:
+            raise AuthorizationError(
+                f"registration_manifest_sha256 mismatch: record binds "
+                f"{reg_manifest!r}, execution requires {supplied_reg!r}"
+            )
+
+    entry = reserve(
+        record=dict(verified.record),
+        binding=dict(verified.binding),
+        binding_digest=verified.binding_digest,
+        stage=stage,
+        operation=operation,
+        execution_id=execution_id or str(verified.record.get("id") or ""),
+        task_count=task_count,
+        task_ids=task_ids,
+        manifest_digest=manifest_digest or str(verified.binding.get("candidate_manifest_digest") or ""),
+        ledger_root=budget_ledger_root,
     )
     return verified, entry

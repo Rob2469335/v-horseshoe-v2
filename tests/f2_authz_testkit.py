@@ -93,6 +93,14 @@ def signed_record(
             rec.setdefault("arm", "X")
         if "population_manifest_digest" in required:
             rec.setdefault("population_manifest_digest", "pop-manifest-sha")
+    if over.get("schema") == "f2-authorization/v2":
+        rec.setdefault(
+            "budget",
+            {"max_executions": 5, "max_total_tasks": 100, "max_retries": 10},
+        )
+        rec.setdefault("candidate_pool_digest", "0" * 64)
+        if stage == "S8-001":
+            rec.setdefault("registration_manifest_sha256", "b" * 64)
     rec.update(over)
     return rec
 
