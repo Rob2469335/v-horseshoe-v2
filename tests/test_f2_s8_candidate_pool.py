@@ -70,6 +70,19 @@ def test_order_of_input_does_not_change_the_digest():
     assert pool_digest(a) == pool_digest(b)
 
 
+def test_canonical_bytes_rejects_nan_and_float_in_provenance():
+    for bad in (float("nan"), 1.5):
+        pool = _pool()
+        pool["provenance"] = {"score": bad}
+        with pytest.raises(PoolError, match="float"):
+            canonical_bytes(pool)
+
+
+def test_canonical_bytes_rejects_non_string_keys():
+    with pytest.raises(PoolError, match="must be a string"):
+        canonical_bytes({1: "value"})
+
+
 def test_exclusion_requires_a_reason():
     with pytest.raises(PoolError, match="no reason"):
         build_pool(task_ids=IDS, registration_sha256=REG,
@@ -80,6 +93,54 @@ def test_excluding_a_non_member_is_surfaced():
     with pytest.raises(PoolError, match="not in the pool"):
         build_pool(task_ids=IDS, registration_sha256=REG,
                    excluded=[{"task_id": "other__x-9", "reason": "terminal"}])
+
+
+def test_member_cannot_also_be_excluded():
+    with pytest.raises(PoolError, match="also a member"):
+        build_pool(
+            task_ids=IDS,
+            registration_sha256=REG,
+            excluded=[{"task_id": IDS[0], "reason": "conflict",
+                       "must_be_absent": True}],
+        )
+
+
+def test_loaded_pool_rejects_member_and_exclusion(tmp_path):
+    raw = {
+        "schema": POOL_SCHEMA,
+        "registration_sha256": REG,
+        "task_ids": sorted(IDS),
+        "excluded": [{"task_id": IDS[0], "reason": "conflict"}],
+        "provenance": {},
+    }
+    p = _write(tmp_path, raw)
+    with pytest.raises(PoolError, match="also a member"):
+        load_pool(p)
+
+
+def test_registration_content_and_file_digests_are_separate(tmp_path):
+    reg_file = tmp_path / "registration.json"
+    reg_file.write_text(json.dumps(["acme__widget-1"]), encoding="utf-8")
+    content_digest = "b" * 64
+    file_sha = file_digest(reg_file)
+    pool = build_pool(
+        task_ids=["acme__widget-1"],
+        registration_sha256=content_digest,
+        provenance={"registration_file_sha256": file_sha},
+    )
+    p = _write(tmp_path, pool)
+    loaded, digest = load_pool(p)
+    assert loaded["registration_sha256"] == content_digest
+    assert loaded["provenance"]["registration_file_sha256"] == file_sha
+    assert file_sha != content_digest
+    assert digest == file_digest(p) == pool_digest(loaded)
+    verify_pool_file(
+        p, expected_digest=digest, expected_registration_sha256=content_digest
+    )
+    with pytest.raises(PoolError, match="different registration digest"):
+        verify_pool_file(
+            p, expected_digest=digest, expected_registration_sha256="c" * 64
+        )
 
 
 # ---------------------------------------------------------------------------

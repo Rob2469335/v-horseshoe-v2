@@ -34,13 +34,14 @@ function argument; no environment variable, CLI flag or config key selects it.
 from __future__ import annotations
 
 import contextlib
+import datetime as _dt
 import hashlib
 import json
 import os
 import pathlib
 import re
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from qwen_train.f2_authorization import AuthorizationError, record_digest
 
@@ -56,8 +57,11 @@ MAX_RETRIES_CEILING = 5000
 _SLOT_RE = re.compile(r"^\d{6}\.json$")
 _ALLOWED_DIRS = {"exec", "tasks", "retries", "audit"}
 _LOCK_FILE_NAME = ".transaction.lock"
+_RESERVATION_LOCK_NAME = ".reservation.lock"
 
-PRODUCTION_BUDGET_ROOT: pathlib.Path | None = None
+PRODUCTION_BUDGET_ROOT: pathlib.Path | None = pathlib.Path(
+    r"C:\Users\rober\F2_AUTHZ\budget_v2"
+)
 
 
 class BudgetError(AuthorizationError):
@@ -77,6 +81,9 @@ def budget_root(explicit: pathlib.Path | str | None = None) -> pathlib.Path:
 def budget_of(record: Mapping[str, Any]) -> dict[str, int] | None:
     if record.get("schema") != SCHEMA_V2:
         return None
+    target = record.get("target_credited")
+    if isinstance(target, bool) or not isinstance(target, int) or target < 300:
+        raise BudgetError("v2 authorization target_credited must be an integer >= 300")
     raw = record.get("budget")
     if not isinstance(raw, Mapping):
         raise BudgetError("v2 authorization declares no budget object")
@@ -98,6 +105,32 @@ def budget_of(record: Mapping[str, Any]) -> dict[str, int] | None:
             raise BudgetError(f"{key} must be 1..{ceiling}, got {val}")
         out[key] = val
     return out
+
+
+def _require_valid_window(
+    record: Mapping[str, Any], *, now: _dt.datetime | None = None
+) -> None:
+    """Refuse an expired or not-yet-valid grant before any store side effect."""
+    from qwen_train.f2_authorization import _parse_ts
+
+    not_before = record.get("not_before")
+    not_after = record.get("not_after")
+    if not isinstance(not_before, str) or not isinstance(not_after, str):
+        raise BudgetError(
+            "authorization record is missing string not_before/not_after timestamps"
+        )
+    try:
+        start = _parse_ts(not_before)
+        end = _parse_ts(not_after)
+    except Exception as exc:  # noqa: BLE001 - malformed timestamp is fail-closed
+        raise BudgetError(f"authorization validity window is malformed: {exc}") from exc
+    current = now or _dt.datetime.now(_dt.timezone.utc)
+    if current < start:
+        raise BudgetError(
+            f"authorization is not yet valid (not_before {not_before})"
+        )
+    if current > end:
+        raise BudgetError(f"authorization is expired (not_after {not_after})")
 
 
 def _grant_dir(root: pathlib.Path, digest: str) -> pathlib.Path:
@@ -188,8 +221,19 @@ def _claim(path: pathlib.Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
-def classify_store(grant_dir: pathlib.Path, record_digest_value: str) -> dict[str, Any]:
-    """Audit the store against the 12 mutually exclusive accounting categories."""
+def classify_store(
+    grant_dir: pathlib.Path,
+    record_digest_value: str,
+    *,
+    ignore_reservation_lock: bool = False,
+) -> dict[str, Any]:
+    """Audit the store against the 12 mutually exclusive accounting categories.
+
+    A present ``.reservation.lock`` is a work-blocking transaction guard. It is
+    skipped only by the reservation transaction that owns it; every other
+    reader treats it as reconciliation-required so a crashed/stuck claim is
+    never silently resumed.
+    """
     empty_result = {
         "status": "HEALTHY",
         "reason": "",
@@ -197,12 +241,24 @@ def classify_store(grant_dir: pathlib.Path, record_digest_value: str) -> dict[st
         "slots": [],
         "tasks": [],
         "retries": [],
+        "terminal": None,
     }
     if not grant_dir.is_dir():
         return empty_result
 
     # 1. Inspect top-level directory entries
     for p in sorted(grant_dir.iterdir()):
+        if p.name == _RESERVATION_LOCK_NAME:
+            if ignore_reservation_lock:
+                continue
+            return {
+                "status": "RECONCILIATION_REQUIRED",
+                "reason": (
+                    "stuck reservation transaction lock present; owner decision "
+                    "required before any further claim"
+                ),
+                "counts": empty_result["counts"],
+            }
         if p.is_dir():
             if p.name not in _ALLOWED_DIRS:
                 return {
@@ -211,7 +267,7 @@ def classify_store(grant_dir: pathlib.Path, record_digest_value: str) -> dict[st
                     "counts": empty_result["counts"],
                 }
         else:
-            if p.name == _LOCK_FILE_NAME:
+            if p.name == _LOCK_FILE_NAME or p.name.startswith("."):
                 continue
             if not _SLOT_RE.match(p.name):
                 return {
@@ -531,6 +587,7 @@ def classify_store(grant_dir: pathlib.Path, record_digest_value: str) -> dict[st
         "slots": committed_slots,
         "tasks": task_records,
         "retries": retry_slots,
+        "terminal": None,
     }
 
 
@@ -545,6 +602,18 @@ def audit(record_digest_value: str, ledger_root: pathlib.Path | str | None = Non
 
 def usage(record_digest_value: str, ledger_root: pathlib.Path | str | None = None) -> int:
     return audit(record_digest_value, ledger_root)["slots"]
+
+
+def _rollback_created(paths: Sequence[pathlib.Path]) -> bool:
+    """Remove files created by a failed reservation. False means a stuck claim."""
+    ok = True
+    for path in reversed(list(paths)):
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            ok = False
+    return ok
 
 
 def _allocate(dirpath: pathlib.Path, limit: int, payload: Mapping[str, Any], label: str) -> int:
@@ -578,6 +647,7 @@ def reserve(
     budget = budget_of(record)
     if budget is None:
         raise BudgetError("not a budgeted (v2) authorization")
+    _require_valid_window(record)
 
     if isinstance(task_count, bool) or not isinstance(task_count, int):
         raise BudgetError(f"task_count is malformed: integer required, got {type(task_count).__name__}")
@@ -609,81 +679,123 @@ def reserve(
     gdir.mkdir(parents=True, exist_ok=True)
 
     with store_transaction_lock(gdir):
-        # 1. Audit store before taking actions (fail closed on malformed/unresolved state)
-        report = classify_store(gdir, digest)
-        if report["status"] != "HEALTHY":
-            raise BudgetError(f"budget store is {report['status']} ({report['reason']}); reconciliation required")
-
-        # 2. Check budget limits
-        current_slots = report["counts"]["slots"]
-        if current_slots + 1 > budget["max_executions"]:
-            raise BudgetError(f"execution capacity exhausted ({budget['max_executions']})")
-        current_tasks = report["counts"]["tasks"]
-        if current_tasks + task_count > budget["max_total_tasks"]:
-            raise BudgetError(f"task capacity exhausted ({budget['max_total_tasks']})")
-
-        for sub in ("exec", "tasks", "retries"):
-            (gdir / sub).mkdir(exist_ok=True)
-
-        # 3. Execution-ID claim (atomic)
-        lock = gdir / "exec" / (hashlib.sha256(execution_id.encode("utf-8")).hexdigest() + ".lock")
+        reservation_lock = gdir / _RESERVATION_LOCK_NAME
         try:
-            _claim(
-                lock,
+            reservation_lock.mkdir()
+        except FileExistsError as exc:
+            raise BudgetError(
+                "stuck reservation transaction lock present; owner decision "
+                f"required before any further claim: {reservation_lock}"
+            ) from exc
+
+        created: list[pathlib.Path] = []
+        committed = False
+        try:
+            # 1. Audit store while holding the reservation guard. Counting and
+            #    writing happen under the same guard, so a refusal consumes zero.
+            report = classify_store(
+                gdir, digest, ignore_reservation_lock=True
+            )
+            if report.get("terminal") == "COMPLETED":
+                raise BudgetError("EXPERIMENT_COMPLETED: authorization is closed; formal experiment completion reached; no further executions permitted")
+            if report.get("terminal") == "REVOKED":
+                raise BudgetError("AUTHORIZATION_REVOKED: grant has been revoked; no further executions permitted")
+            if report["status"] != "HEALTHY":
+                raise BudgetError(f"budget store is {report['status']} ({report['reason']}); reconciliation required")
+
+            # 2. Check budget limits while holding the reservation guard.
+            current_slots = report["counts"]["slots"]
+            if current_slots + 1 > budget["max_executions"]:
+                raise BudgetError(f"execution capacity exhausted ({budget['max_executions']})")
+            current_tasks = report["counts"]["tasks"]
+            if current_tasks + task_count > budget["max_total_tasks"]:
+                raise BudgetError(f"task capacity exhausted ({budget['max_total_tasks']})")
+
+            for sub in ("exec", "tasks", "retries"):
+                (gdir / sub).mkdir(exist_ok=True)
+
+            # 3. Execution-ID claim (atomic)
+            lock = gdir / "exec" / (hashlib.sha256(execution_id.encode("utf-8")).hexdigest() + ".lock")
+            try:
+                _claim(
+                    lock,
+                    {
+                        "schema": RESERVATION_SCHEMA,
+                        "kind": "execution-claim",
+                        "execution_id": execution_id,
+                        "task_count": task_count,
+                        "manifest_digest": manifest_digest,
+                        "claimed_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "pid": os.getpid(),
+                    },
+                )
+            except FileExistsError as exc:
+                raise BudgetError(f"duplicate execution_id {execution_id!r} already reserved") from exc
+            created.append(lock)
+
+            # 4. Task capacity allocation (grant-wide, sequential, attributable)
+            for idx, tid in enumerate(task_ids):
+                task_seq = _allocate(
+                    gdir / "tasks",
+                    budget["max_total_tasks"],
+                    {
+                        "schema": TASK_SCHEMA,
+                        "record_digest": digest,
+                        "execution_id": execution_id,
+                        "manifest_digest": manifest_digest,
+                        "task_id": tid,
+                        "task_index": idx,
+                    },
+                    "task",
+                )
+                created.append(gdir / "tasks" / f"{task_seq:06d}.json")
+
+            # 5. Committed reservation slot (created AFTER tasks are allocated)
+            seq = _allocate(
+                gdir,
+                budget["max_executions"],
                 {
                     "schema": RESERVATION_SCHEMA,
-                    "kind": "execution-claim",
+                    "record_digest": digest,
+                    "stage": stage,
+                    "operation": operation,
                     "execution_id": execution_id,
+                    "binding": dict(binding),
+                    "binding_digest": binding_digest,
                     "task_count": task_count,
                     "manifest_digest": manifest_digest,
-                    "claimed_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "task_ids": task_ids,
+                    "reserved_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "pid": os.getpid(),
                 },
+                "execution",
             )
-        except FileExistsError as exc:
-            raise BudgetError(f"duplicate execution_id {execution_id!r} already reserved") from exc
+            created.append(gdir / f"{seq:06d}.json")
 
-        # 4. Task capacity allocation (grant-wide, sequential, attributable)
-        for idx, tid in enumerate(task_ids):
-            _allocate(
-                gdir / "tasks",
-                budget["max_total_tasks"],
-                {
-                    "schema": TASK_SCHEMA,
-                    "record_digest": digest,
-                    "execution_id": execution_id,
-                    "manifest_digest": manifest_digest,
-                    "task_id": tid,
-                    "task_index": idx,
-                },
-                "task",
-            )
-
-        # 5. Committed reservation slot (created AFTER tasks are allocated)
-        seq = _allocate(
-            gdir,
-            budget["max_executions"],
-            {
-                "schema": RESERVATION_SCHEMA,
-                "record_digest": digest,
-                "stage": stage,
-                "operation": operation,
-                "execution_id": execution_id,
-                "binding": dict(binding),
-                "binding_digest": binding_digest,
-                "task_count": task_count,
-                "manifest_digest": manifest_digest,
-                "task_ids": task_ids,
-                "reserved_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "pid": os.getpid(),
-            },
-            "execution",
-        )
-
-        entry = _read_json(gdir / f"{seq:06d}.json")
-        assert entry is not None
-        entry["seq"] = seq
-        return entry
+            entry = _read_json(gdir / f"{seq:06d}.json")
+            assert entry is not None
+            entry["seq"] = seq
+            committed = True
+            return entry
+        except BaseException as exc:
+            rollback_ok = _rollback_created(created)
+            if rollback_ok:
+                try:
+                    reservation_lock.rmdir()
+                except OSError:
+                    rollback_ok = False
+            if not rollback_ok:
+                raise BudgetError(
+                    "reservation failed and rollback could not complete; "
+                    "stuck claim left for owner decision"
+                ) from exc
+            raise
+        finally:
+            if committed:
+                try:
+                    reservation_lock.rmdir()
+                except OSError:
+                    pass
 
 
 def claim_retry(
@@ -698,6 +810,7 @@ def claim_retry(
     budget = budget_of(record)
     if budget is None:
         raise BudgetError("not a budgeted (v2) authorization")
+    _require_valid_window(record)
     if not execution_id or not task_id:
         raise BudgetError("execution_id and task_id are required for a retry claim")
     if isinstance(retry_attempt, bool) or not isinstance(retry_attempt, int) or retry_attempt < 1:
@@ -710,6 +823,10 @@ def claim_retry(
 
     with store_transaction_lock(gdir):
         report = classify_store(gdir, digest)
+        if report.get("terminal") == "COMPLETED":
+            raise BudgetError("EXPERIMENT_COMPLETED: authorization is closed; formal experiment completion reached; no further retries permitted")
+        if report.get("terminal") == "REVOKED":
+            raise BudgetError("AUTHORIZATION_REVOKED: grant has been revoked; no further retries permitted")
         if report["status"] != "HEALTHY":
             raise BudgetError(f"budget store is {report['status']} ({report['reason']}); reconciliation required")
 
@@ -775,6 +892,8 @@ def remaining(record: Mapping[str, Any], ledger_root: pathlib.Path | str | None 
         raise BudgetError("not a budgeted (v2) authorization")
     d = _grant_dir(budget_root(ledger_root), record_digest(record))
     report = classify_store(d, record_digest(record))
+    if report.get("terminal") in ("COMPLETED", "REVOKED"):
+        return {"executions": 0, "tasks": 0, "retries": 0}
     if report["status"] == "UNRESOLVED":
         # Sentinel for unresolved state: operational remaining capacity is zero
         return {"executions": 0, "tasks": 0, "retries": 0}

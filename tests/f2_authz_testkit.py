@@ -99,6 +99,7 @@ def signed_record(
             {"max_executions": 5, "max_total_tasks": 100, "max_retries": 10},
         )
         rec.setdefault("candidate_pool_digest", "0" * 64)
+        rec.setdefault("target_credited", 300)
         if stage == "S8-001":
             rec.setdefault("registration_manifest_sha256", "b" * 64)
     rec.update(over)

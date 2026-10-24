@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from qwen_train import f2_authz_budget as B
@@ -14,6 +16,9 @@ def v2_record(executions: int = 3, tasks: int = 50, retries: int = 2) -> dict:
     return {
         "id": "v2-grant", "schema": "f2-authorization/v2",
         "stage": "S8-001", "operations": ["base_gold_production"],
+        "not_before": "2000-01-01T00:00:00+00:00",
+        "not_after": "2100-12-31T23:59:59+00:00",
+        "target_credited": 300,
         "budget": {"max_executions": executions, "max_total_tasks": tasks,
                    "max_retries": retries},
     }
@@ -65,11 +70,15 @@ def test_bounds():
         B.budget_of(rec)
 
 
-def test_production_root_fails_closed_with_no_env_seam(monkeypatch, tmp_path):
-    assert B.PRODUCTION_BUDGET_ROOT is None
+def test_production_root_is_fixed_and_env_cannot_select(monkeypatch, tmp_path):
+    from qwen_train.f2_authz_ledger import DEFAULT_LEDGER_ROOT
+
+    expected = pathlib.Path(r"C:\Users\rober\F2_AUTHZ\budget_v2")
+    assert B.PRODUCTION_BUDGET_ROOT == expected
+    assert expected != DEFAULT_LEDGER_ROOT
+    assert DEFAULT_LEDGER_ROOT not in expected.parents
     monkeypatch.setenv("F2_AUTHZ_BUDGET_ROOT", str(tmp_path))
-    with pytest.raises(B.BudgetError, match="unset"):
-        B.budget_root(None)
+    assert B.budget_root(None) == expected
 
 
 # --- executions -------------------------------------------------------------

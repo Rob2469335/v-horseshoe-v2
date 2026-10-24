@@ -50,10 +50,41 @@ class PoolError(ValueError):
     """The pool or the manifest does not satisfy the membership contract."""
 
 
+def _validate_canonical_value(value: Any, path: str = "$") -> None:
+    """Refuse values whose JSON encoding is ambiguous or invalid for a digest."""
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise PoolError(
+                    f"pool object key at {path} must be a string, "
+                    f"got {type(key).__name__}"
+                )
+            _validate_canonical_value(child, f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _validate_canonical_value(child, f"{path}[{index}]")
+        return
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        raise PoolError(
+            f"pool value contains a float at {path}; floats are not permitted"
+        )
+    raise PoolError(
+        f"pool value contains unsupported type {type(value).__name__} at {path}"
+    )
+
+
 def canonical_bytes(pool: Mapping[str, Any]) -> bytes:
     """Deterministic serialization. The digest is taken over exactly these bytes."""
+    _validate_canonical_value(pool)
     return json.dumps(
-        pool, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        pool,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -97,6 +128,11 @@ def build_pool(
         reason = str(item.get("reason", ""))
         if not reason:
             raise PoolError(f"exclusion for {tid!r} carries no reason")
+        if tid in seen:
+            raise PoolError(
+                f"excluded task {tid!r} is also a member of task_ids; "
+                "membership and exclusion are mutually exclusive"
+            )
         if tid and tid not in seen and item.get("must_be_absent") is not True:
             # An exclusion of a task that is not in the pool is harmless only if
             # it is explicitly declared as absent; otherwise it signals a
@@ -132,6 +168,27 @@ def validate_pool_object(pool: Any) -> dict[str, Any]:
     reg = pool.get("registration_sha256")
     if not isinstance(reg, str) or not re.fullmatch(r"[0-9a-f]{64}", reg):
         raise PoolError("pool registration_sha256 is missing or malformed")
+    excluded = pool.get("excluded", [])
+    if not isinstance(excluded, list):
+        raise PoolError("pool excluded must be a list")
+    excluded_ids: set[str] = set()
+    for item in excluded:
+        if not isinstance(item, Mapping):
+            raise PoolError("pool exclusion entry is not an object")
+        tid = item.get("task_id")
+        reason = item.get("reason")
+        if not isinstance(tid, str) or not tid:
+            raise PoolError("pool exclusion entry carries no task_id")
+        if tid in ids:
+            raise PoolError(
+                f"excluded task {tid!r} is also a member of task_ids; "
+                "membership and exclusion are mutually exclusive"
+            )
+        if not isinstance(reason, str) or not reason:
+            raise PoolError(f"exclusion for {tid!r} carries no reason")
+        if tid in excluded_ids:
+            raise PoolError(f"duplicate exclusion entry for {tid!r}")
+        excluded_ids.add(tid)
     return dict(pool)
 
 

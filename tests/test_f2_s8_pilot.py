@@ -944,22 +944,17 @@ class TestLedgerRefusalIsAClassifiedOutcome:
                 "registration_sha256": REG_SHA,
             },
         )
-        rc = live.main([
-            "--manifest", str(manifest), "--inputs", str(inputs),
-            "--registration-id", "rid", "--registration-sha256", REG_SHA,
-            "--ledger", str(tmp_path / "l.jsonl"), "--staging", str(tmp_path / "s"),
-            "--out", str(out), "--gates", str(gates),
-        ])
-        assert rc == 0
-        payload = json.loads((out / "pilot_results.json").read_text(encoding="utf-8"))
-        task = payload["tasks"][0]
-        assert task["outcome"] == "ledger_refused"
-        assert task["outcome_class"] == "infrastructure"
-        assert task["admitted"] is False
-        assert "terminal scientific record" in task["detail"]
-        assert (out / "t1.refused.txt").is_file()
-        assert not list(out.glob("*.fault.txt")), "a refusal is not a driver fault"
-        assert payload["totals"]["infrastructure_invalid"] >= 0
+        # The fixture provisions a v1 grant. Under owner policy OD-2 the live
+        # runner must refuse it before the ledger path; the old v1 ledger-refusal
+        # assertion is therefore unreachable and is replaced by the refusal pin.
+        with pytest.raises(SystemExit) as caught:
+            live.main([
+                "--manifest", str(manifest), "--inputs", str(inputs),
+                "--registration-id", "rid", "--registration-sha256", REG_SHA,
+                "--ledger", str(tmp_path / "l.jsonl"), "--staging", str(tmp_path / "s"),
+                "--out", str(out), "--gates", str(gates),
+            ])
+        assert "code=V1_LIVE_EXECUTION_PROHIBITED" in str(caught.value)
 
 
 class TestGuestOutputReachesTheRunLog:

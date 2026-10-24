@@ -127,6 +127,7 @@ def test_rejection_of_unsigned_b8_record(auth_env):
         "operations": ["base_gold_production"],
         "approver": "owner",
         "budget": {"max_executions": 1, "max_total_tasks": 5, "max_retries": 0},
+        "target_credited": 300,
         "candidate_pool_digest": "0" * 64,
         "not_before": "2026-10-23T00:00:00Z",
         "not_after": "2026-10-24T00:00:00Z",
@@ -300,6 +301,33 @@ def test_verify_and_reserve_requires_matching_registration_manifest(auth_env):
         )
 
 
+def test_verify_and_reserve_rejects_content_hash_in_registration_manifest(auth_env):
+    """Passing derivation content hash in registration_manifest_sha256 is rejected on mismatch."""
+    priv, tmp = auth_env
+    content_hash = "5f3c9f47eb622d7d983cfdcb6ebd3d240f6936087a049781c741ba37e237f042"
+    tasks_file_sha = "f3c2944fb13e72301f89004f43e231fa39617dea24edc191b450d84ac1eb0828"
+    # Case A: grant mistakenly bound the content hash
+    rec = make_v2_record(
+        registration_sha256=content_hash,
+        registration_manifest_sha256=content_hash,
+    )
+    p = write_record(tmp, rec, priv)
+    with pytest.raises(AuthorizationError, match="registration_manifest_sha256 mismatch"):
+        A.verify_and_reserve(
+            record_path=p,
+            stage="S8-001",
+            operation="base_gold_production",
+            binding={
+                "candidate_manifest_digest": "m" * 64,
+                "registration_sha256": content_hash,
+                "candidate_pool_digest": "a" * 64,
+                "registration_manifest_sha256": tasks_file_sha,
+            },
+            budget_ledger_root=tmp / "budget_root",
+        )
+
+
+
 # ===========================================================================
 # 2. Budgets & Execution Identity
 # ===========================================================================
@@ -395,7 +423,11 @@ def test_verify_and_consume_rejects_v2(auth_env):
             record_path=p,
             stage="S8-001",
             operation="base_gold_production",
-            binding={"candidate_manifest_digest": "m" * 64, "registration_sha256": "r" * 64},
+            binding={
+                "candidate_manifest_digest": "m" * 64,
+                "registration_sha256": "r" * 64,
+                "registration_manifest_sha256": rec["registration_manifest_sha256"],
+            },
             ledger_root=tmp / "ledger",
         )
 
@@ -739,10 +771,10 @@ def _reserve_kw(rec, root, eid, **kw):
 
 
 @pytest.mark.parametrize("fail_at", [1, 2, 3], ids=["first_task", "second_task", "slot_commit"])
-def test_interrupted_reservation_is_incomplete_blocks_and_never_refunds(
+def test_handled_reservation_failure_rolls_back_to_zero(
     tmp_path, monkeypatch, fail_at
 ):
-    """task_count=2 => _allocate calls are task0, task1, slot. Fail at each."""
+    """A handled failure must leave zero units and no reservation guard."""
     rec = make_v2_record(executions=3, tasks=10)
     d = tmp_path / record_digest(rec)
     with monkeypatch.context() as m:
@@ -750,24 +782,26 @@ def test_interrupted_reservation_is_incomplete_blocks_and_never_refunds(
         with pytest.raises(_Interrupted):
             B.reserve(**_reserve_kw(rec, tmp_path, "crash", task_count=2, task_ids=["a", "b"]))
 
-    # The real transaction left a real half-state: claim lock present, NO slot.
-    assert (d / "exec").is_dir() and len(list((d / "exec").glob("*.lock"))) == 1
-    assert not [p for p in d.glob("0*.json")], "a committed slot exists after an interrupt"
+    assert (d / "exec").is_dir()
+    assert not list((d / "exec").glob("*.lock"))
+    assert not [p for p in d.glob("0*.json")], "a committed slot exists after a handled failure"
 
     report = B.classify_store(d, record_digest(rec))
-    assert report["status"] == "RECONCILIATION_REQUIRED"
-    assert "incomplete reservation" in report["reason"]
+    assert report["status"] == "HEALTHY"
+    assert report["counts"] == {"slots": 0, "exec": 0, "tasks": 0, "retries": 0}
+    assert not (d / ".reservation.lock").exists()
 
-    # Blocks every further allocation (different execution id, plenty of budget).
-    with pytest.raises(B.BudgetError, match="incomplete reservation"):
-        B.reserve(**_reserve_kw(rec, tmp_path, "fresh", task_count=1))
-    with pytest.raises(B.BudgetError, match="RECONCILIATION_REQUIRED"):
-        B.audit(record_digest(rec), tmp_path)
-    # The lock was released by the failed transaction (no 30s timeout above) and
-    # persists on disk.
+    # The handled failure consumed zero units, so a fresh reservation succeeds.
+    B.reserve(**_reserve_kw(rec, tmp_path, "fresh", task_count=1))
+    assert B.audit(record_digest(rec), tmp_path) == {
+        "slots": 1,
+        "exec": 1,
+        "tasks": 1,
+        "retries": 0,
+    }
+    # The persistent transaction lock remains; the reservation guard does not.
     assert (d / ".transaction.lock").exists()
-    # No automatic refund: the claim and any partial task records are still there.
-    assert len(list((d / "exec").glob("*.lock"))) == 1
+    assert not (d / ".reservation.lock").exists()
 
 
 def test_interrupted_retry_claim_blocks_and_never_refunds(tmp_path, monkeypatch):

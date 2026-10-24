@@ -28,6 +28,9 @@ import argparse
 import base64
 import hashlib
 import json
+import os
+import secrets
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -318,9 +321,23 @@ def _gated_task_ids(manifest: dict[str, Any]) -> list[str]:
     ]
 
 
+def _credited_count(
+    ledger_paths: Sequence[Path | str],
+    registration_task_ids: Sequence[str],
+) -> int:
+    """Read-only credited union via the authoritative reconciliation rule."""
+    from qwen_train.f2_s8_batch import reconcile_admissions_across_chains
+
+    reconciled = reconcile_admissions_across_chains(
+        ledger_paths, registration_task_ids
+    )
+    return int(reconciled["credited_count"])
+
+
 def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
          channel: Any = None, governance_loader: Any = None,
-         budget_ledger_root: Any = None) -> int:
+         budget_ledger_root: Any = None,
+         admission_ledger_paths: Sequence[str] | None = None) -> int:
     """Operator entry point.
 
     ``task_runner`` / ``channel`` / ``governance_loader`` / ``budget_ledger_root``
@@ -372,6 +389,7 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
     from qwen_train.f2_authorization import (
         SCHEMA as V1_SCHEMA,
         AuthorizationError,
+        record_digest,
         require_authorized,
     )
 
@@ -461,6 +479,19 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
     # v1 -> the legacy path below, unchanged (existing authority).
     from qwen_train.f2_s8_v2_gate import V2_SCHEMA, V2GateError, v2_preflight
 
+    registration_binding: dict[str, str] = {}
+    registration_bytes: bytes | None = None
+    if args.registration_file:
+        try:
+            registration_bytes = Path(args.registration_file).read_bytes()
+            registration_binding["registration_manifest_sha256"] = hashlib.sha256(
+                registration_bytes
+            ).hexdigest()
+        except OSError:
+            # Let the v2 gate report the missing-artifact code below; the
+            # grant verifier cannot compare a digest it could not compute.
+            pass
+
     try:
         grant_record = require_authorized(
             stage="S8-001",
@@ -468,9 +499,28 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
             binding={
                 "candidate_manifest_digest": manifest_digest,
                 "registration_sha256": args.registration_sha256,
+                **registration_binding,
             },
         )
     except AuthorizationError as exc:
+        if "registration_manifest_sha256" in str(exc):
+            if not args.candidate_pool_file:
+                raise SystemExit(
+                    "REFUSING: code=V2_MISSING_POOL_ARG the signed grant is "
+                    "v2, so its candidate pool is mandatory and "
+                    "--candidate-pool-file was not supplied. No grant was consumed."
+                ) from exc
+            if not args.registration_file:
+                raise SystemExit(
+                    "REFUSING: code=V2_MISSING_REGISTRATION_ARG the signed grant "
+                    "requires the registration artifact and --registration-file "
+                    "was not supplied. No grant was consumed."
+                ) from exc
+            if not Path(args.registration_file).is_file():
+                raise SystemExit(
+                    "REFUSING: code=MISSING_ARTIFACT the registration file does "
+                    f"not exist: {args.registration_file}. No grant was consumed."
+                ) from exc
         raise SystemExit(
             "REFUSING: code=AUTHORIZATION_REFUSED no valid "
             "S8-001/base_gold_production signed authorization "
@@ -511,6 +561,7 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
                 manifest_task_ids=_gated_task_ids(manifest),
                 ledger_paths=[Path(args.ledger)],
                 manifest_digest=manifest_digest,
+                registration_bytes=registration_bytes,
             )
         except V2GateError as exc:
             # Fail-closed and side-effect-free: nothing was consumed, reserved,
@@ -532,11 +583,96 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
             "consumed."
         )
 
+    if v2_evidence is not None:
+        credited = _credited_count(
+            admission_ledger_paths or [args.ledger],
+            v2_evidence.registration_task_ids,
+        )
+        target = int(grant_record["target_credited"])
+        if credited >= target:
+            raise SystemExit(
+                f"REFUSING: code=TARGET_REACHED credited={credited} "
+                f"target_credited={target}; no reservation or claim was made."
+            )
+
     # Fail closed before touching the guest: the governed path needs a real
     # trusted store and a real authorized evaluator, none of which this module
     # invents. This is a readiness precondition, so it must also run BEFORE
     # reservation -- otherwise an unprovisioned environment burns the grant.
     inputs = (governance_loader or load_governance_from_env)()
+
+    # A production-style call has no test budget seam. It may use only the
+    # code-constant production root, and that root must not be a temp/test path.
+    out_dir = Path(args.out)
+    if budget_ledger_root is None:
+        from qwen_train import f2_authz_budget as _budget
+
+        temp_root = Path(tempfile.gettempdir()).resolve()
+        production_root = _budget.PRODUCTION_BUDGET_ROOT
+        if production_root is not None:
+            resolved = Path(production_root).resolve()
+            if resolved == temp_root or temp_root in resolved.parents:
+                raise SystemExit(
+                    "REFUSING: code=PRODUCTION_ROOT_TEMP the production budget "
+                    f"root is under the system temp directory: {resolved}"
+                )
+        trust_root_env = os.environ.get("F2_AUTHORIZATION_TRUST_ROOT", "").strip()
+        if trust_root_env:
+            trusted = Path(trust_root_env).resolve()
+            if trusted == temp_root or temp_root in trusted.parents:
+                raise SystemExit(
+                    "REFUSING: code=TEST_TRUST_ROOT a production-style invocation "
+                    f"cannot use a temp trust root: {trusted}"
+                )
+
+    # A v2 intent is written before any budget claim. An existing intent means
+    # a previous/stuck claim is never resumed and no new execution ID is made.
+    execution_id = ""
+    intent_path = out_dir / "authorization_intent.json"
+    if v2_evidence is not None:
+        grant_digest = record_digest(grant_record)
+        from qwen_train import f2_authz_budget as _budget
+
+        effective_budget_root = (
+            budget_ledger_root
+            if budget_ledger_root is not None
+            else _budget.PRODUCTION_BUDGET_ROOT
+        )
+        if effective_budget_root is not None:
+            stuck = Path(effective_budget_root) / grant_digest / ".reservation.lock"
+            if stuck.exists():
+                raise SystemExit(
+                    "REFUSING: code=STUCK_CLAIM a reservation transaction lock "
+                    f"exists at {stuck}; the runner does not generate a new "
+                    "execution ID to bypass it. Owner decision required."
+                )
+        nonce = args.nonce or secrets.token_hex(16)
+        execution_id = hashlib.sha256(
+            f"{grant_digest}|{manifest_digest}|{nonce}".encode("utf-8")
+        ).hexdigest()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        if intent_path.exists():
+            raise SystemExit(
+                "REFUSING: code=AUTHORIZATION_REFUSED authorization intent "
+                f"already exists at {intent_path}; a previous/stuck claim is "
+                "never resumed and no new execution ID is generated. Owner "
+                "decision required."
+            )
+        intent = {
+            "schema": "f2-s8-authorization-intent/v1",
+            "grant_schema": grant_record.get("schema"),
+            "grant_digest": grant_digest,
+            "registration_sha256": v2_evidence.registration_sha256,
+            "registration_manifest_sha256": v2_evidence.registration_file_sha256,
+            "candidate_pool_digest": v2_evidence.candidate_pool_digest,
+            "manifest_digest": manifest_digest,
+            "nonce": nonce,
+            "execution_id": execution_id,
+            "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        intent_path.write_text(
+            json.dumps(intent, indent=1, sort_keys=True), encoding="utf-8"
+        )
 
     # --- ATOMIC v2 BUDGET RESERVATION ---------------------------------------
     try:
@@ -548,7 +684,7 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
             task_count=len(specs),
             task_ids=[spec.task_id for spec in specs],
             manifest_digest=manifest_digest,
-            execution_id=args.nonce or f"s8-{manifest_digest[:16]}",
+            execution_id=execution_id,
             binding={
                 "candidate_manifest_digest": manifest_digest,
                 "registration_sha256": args.registration_sha256,
@@ -573,6 +709,51 @@ def main(argv: Sequence[str] | None = None, *, task_runner: Any = None,
     # ledger record (Decision 3) so a record names the code that produced it.
     authorized_revision = str(
         (getattr(verified, "record", {}) or {}).get("repository_revision") or "")
+
+    if v2_evidence is not None:
+        reservation_seq = _reservation.get("seq")
+        audit_payload = {
+            "schema": "f2-s8-authorization-audit/v1",
+            "grant_schema": verified.record.get("schema"),
+            "grant_digest": record_digest(verified.record),
+            "registration_sha256": v2_evidence.registration_sha256,
+            "registration_manifest_sha256": v2_evidence.registration_file_sha256,
+            "candidate_pool_digest": v2_evidence.candidate_pool_digest,
+            "manifest_digest": manifest_digest,
+            "execution_id": execution_id,
+            "reservation_id": (
+                f"{execution_id}:{reservation_seq}"
+                if reservation_seq is not None
+                else None
+            ),
+            "validated_task_ids": list(v2_evidence.task_ids),
+            "executed_task_ids": [spec.task_id for spec in specs],
+            "created_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        (out_dir / "authorization_audit.json").write_text(
+            json.dumps(audit_payload, indent=1, sort_keys=True), encoding="utf-8"
+        )
+
+        # Revocation re-check immediately before the first task. The reservation
+        # stays consumed if this refuses; the owner decides what to do with it.
+        try:
+            require_authorized(
+                stage="S8-001",
+                operation="base_gold_production",
+                binding={
+                    "candidate_manifest_digest": manifest_digest,
+                    "registration_sha256": args.registration_sha256,
+                    "candidate_pool_digest": v2_evidence.candidate_pool_digest,
+                    "registration_manifest_sha256": v2_evidence.registration_file_sha256,
+                },
+            )
+        except AuthorizationError as exc:
+            raise SystemExit(
+                "REFUSING: code=AUTHORIZATION_REVOKED authorization was revoked "
+                f"between reservation and first task ({exc}); no task ran."
+            ) from exc
+
+
 
     staging = Path(args.staging)
     staging.mkdir(parents=True, exist_ok=True)

@@ -230,6 +230,7 @@ class VerifiedV2Preflight:
     candidate_pool_digest: str
     manifest_digest: str
     task_ids: tuple[str, ...]
+    registration_task_ids: tuple[str, ...]
     pool_task_ids: tuple[str, ...]
     excluded_task_ids: tuple[str, ...]
     eligibility: Mapping[str, str]
@@ -247,6 +248,7 @@ class VerifiedV2Preflight:
             "candidate_pool_digest": self.candidate_pool_digest,
             "manifest_digest": self.manifest_digest,
             "task_ids": list(self.task_ids),
+            "registration_task_ids": list(self.registration_task_ids),
             "pool_task_ids": list(self.pool_task_ids),
             "excluded_task_ids": list(self.excluded_task_ids),
             "eligibility": dict(self.eligibility),
@@ -300,19 +302,25 @@ def _check_grant(
 
 
 def _read_registration(
-    record: Mapping[str, Any], registration_file: Path
+    record: Mapping[str, Any],
+    registration_file: Path,
+    *,
+    data: bytes | None = None,
 ) -> _Registration:
-    """Read registration and provenance ONCE each; verify the first two links.
+    """Hash registration and provenance ONCE each; verify the first two links.
 
-    One ``read_bytes`` per file. The digest, the parse and every comparison use
-    those exact bytes -- there is no hash-one-read/parse-another window.
+    When the runner already read the registration bytes for the grant binding,
+    those exact bytes are passed in so the file is not reopened. The digest, the
+    parse and every comparison use those exact bytes -- no hash-one-read/
+    parse-another window.
     """
     _refuse(
         registration_file.is_file(),
         MISSING_ARTIFACT,
         f"registration file missing: {registration_file}",
     )
-    data = registration_file.read_bytes()  # THE single read
+    if data is None:
+        data = registration_file.read_bytes()  # THE single read
     raw = hashlib.sha256(data).hexdigest()
 
     prov_path = registration_file.with_name(
@@ -537,6 +545,7 @@ def v2_preflight(
     manifest_task_ids: Iterable[str],
     ledger_paths: Sequence[Path | str] = (),
     manifest_digest: str = "",
+    registration_bytes: bytes | None = None,
     now: _dt.datetime | None = None,
 ) -> VerifiedV2Preflight:
     """Refuse unless every v2 condition holds. Returns frozen evidence. No side effects.
@@ -547,7 +556,9 @@ def v2_preflight(
     current = now or _dt.datetime.now(_dt.timezone.utc)
     schema, not_before, not_after = _check_grant(record, current)
 
-    reg = _read_registration(record, Path(registration_file))
+    reg = _read_registration(
+        record, Path(registration_file), data=registration_bytes
+    )
     pool = _read_pool(record, Path(candidate_pool_file))
     _check_registration_anchor(reg, pool)
 
@@ -571,6 +582,7 @@ def v2_preflight(
         candidate_pool_digest=str(record["candidate_pool_digest"]),
         manifest_digest=str(manifest_digest or ""),
         task_ids=checked,
+        registration_task_ids=reg.task_ids,
         pool_task_ids=tuple(pool["task_ids"]),
         excluded_task_ids=tuple(sorted(e["task_id"] for e in pool.get("excluded") or [])),
         eligibility=eligibility,

@@ -158,8 +158,44 @@ def validate_execution_stage_operation(stage: str, operation: str) -> None:
         )
 
 
+def _validate_signed_value(value: Any, path: str = "$") -> None:
+    """Reject signed-payload values whose JSON encoding is ambiguous or invalid.
+
+    The record schemas use only strings, integers, booleans, null, arrays, and
+    objects with string keys. Floats (including NaN/Infinity) and non-string
+    object keys are refused rather than being silently coerced by ``json``.
+    """
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise AuthorizationError(
+                    f"signed payload object key at {path} must be a string, "
+                    f"got {type(key).__name__}"
+                )
+            _validate_signed_value(child, f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _validate_signed_value(child, f"{path}[{index}]")
+        return
+    if value is None or isinstance(value, (str, bool, int)):
+        return
+    if isinstance(value, float):
+        raise AuthorizationError(
+            f"signed payload contains a float at {path}; floats are not permitted"
+        )
+    raise AuthorizationError(
+        f"signed payload contains unsupported type {type(value).__name__} at {path}"
+    )
+
+
 def canonical_bytes(record: Mapping[str, Any]) -> bytes:
-    """Deterministic serialisation of the signed portion of a record."""
+    """Deterministic serialisation of the signed portion of a record.
+
+    This is the repo's JCS-compatible subset: ASCII object keys are sorted,
+    whitespace is omitted, and NaN/Infinity/floats/non-string keys are refused.
+    It is not a full RFC 8785 implementation for arbitrary non-ASCII key sets.
+    """
     def _to_json_compat(obj: Any) -> Any:
         if isinstance(obj, Mapping):
             return {k: _to_json_compat(v) for k, v in obj.items()}
@@ -167,8 +203,13 @@ def canonical_bytes(record: Mapping[str, Any]) -> bytes:
             return [_to_json_compat(v) for v in obj]
         return obj
 
+    _validate_signed_value(record)
     return json.dumps(
-        _to_json_compat(record), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        _to_json_compat(record),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -496,6 +537,15 @@ def verify_authorization(
         budget = budget_of(record)
         if budget is None:
             raise AuthorizationError("v2 authorization record must declare valid 'budget'")
+        target_credited = record.get("target_credited")
+        if (
+            isinstance(target_credited, bool)
+            or not isinstance(target_credited, int)
+            or target_credited < 300
+        ):
+            raise AuthorizationError(
+                "v2 authorization target_credited must be an integer >= 300"
+            )
         pool_digest = record.get("candidate_pool_digest")
         if not isinstance(pool_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", pool_digest):
             raise AuthorizationError("v2 authorization record is missing a 64-hex candidate_pool_digest")
@@ -567,6 +617,11 @@ def verify_authorization(
     required = set(OPERATION_REQUIRED_BINDINGS.get((stage, operation), frozenset()))
     if rec_schema == SCHEMA:
         required.discard("registration_manifest_sha256")
+    if "candidate_manifest_digest" not in record:
+        # A pool-scoped grant may omit the per-batch manifest digest entirely;
+        # when the signed record carries one it remains a REQUIRED binding and
+        # cannot be dropped by a caller that omits the expected value.
+        required.discard("candidate_manifest_digest")
     _check_binding(record, required, supplied, repository_root)
 
     # ---- signature verification against the owner-controlled trust root ----
@@ -658,8 +713,6 @@ def _check_binding(
             )
         expected = supplied.get(name)
         if expected is None:
-            if name == "registration_manifest_sha256":
-                continue
             raise AuthorizationError(
                 f"no independently obtained expected value for required "
                 f"binding {name!r} - fail-closed"
@@ -800,6 +853,32 @@ def verify_and_consume(
     return verified, entry
 
 
+def _reject_budget_root_reparse(root: Path | str) -> None:
+    """Refuse a budget root reached through a symlink or Windows junction.
+
+    Both ``is_symlink()`` and ``is_junction()`` are checked because a Windows
+    directory junction is a reparse point but is NOT reported as a symlink.
+    Every existing path component is checked, not just the leaf.
+
+    This is a check-before-use guard. A same-user actor can still replace a
+    path component between this check and the later open (CWE-367); complete
+    closure requires handle-relative APIs or a separate OS security boundary.
+    """
+    path = Path(root)
+    for component in (path, *path.parents):
+        try:
+            if component.is_symlink() or component.is_junction():
+                raise AuthorizationError(
+                    "budget root path component is a symlink or junction: "
+                    f"{component}"
+                )
+        except OSError as exc:
+            raise AuthorizationError(
+                "budget root path component cannot be inspected: "
+                f"{component} ({exc})"
+            ) from exc
+
+
 def verify_and_reserve(
     *,
     stage: str,
@@ -828,7 +907,33 @@ def verify_and_reserve(
             f"got {verified.record.get('schema')!r}"
         )
 
-    from qwen_train.f2_authz_budget import reserve
+    from qwen_train import f2_authz_budget as budget_module
+
+    record_manifest = verified.record.get("candidate_manifest_digest")
+    supplied_manifest = verified.binding.get("candidate_manifest_digest")
+    if record_manifest is not None:
+        if not isinstance(record_manifest, str) or not record_manifest:
+            raise AuthorizationError(
+                "v2 authorization carries a malformed candidate_manifest_digest"
+            )
+        if not supplied_manifest:
+            raise AuthorizationError(
+                "candidate_manifest_digest is required by the signed authorization "
+                "but no independently obtained value was supplied - fail-closed"
+            )
+        if supplied_manifest != record_manifest:
+            raise AuthorizationError(
+                f"candidate_manifest_digest mismatch: record binds "
+                f"{record_manifest!r}, execution requires {supplied_manifest!r}"
+            )
+        if manifest_digest and manifest_digest != supplied_manifest:
+            raise AuthorizationError(
+                "manifest_digest mismatch: caller supplied "
+                f"{manifest_digest!r}, signed candidate_manifest_digest is "
+                f"{supplied_manifest!r}"
+            )
+        if not manifest_digest:
+            manifest_digest = supplied_manifest
 
     pool_digest = verified.record.get("candidate_pool_digest")
     if not isinstance(pool_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", pool_digest):
@@ -860,7 +965,17 @@ def verify_and_reserve(
                 f"{reg_manifest!r}, execution requires {supplied_reg!r}"
             )
 
-    entry = reserve(
+    effective_budget_root = (
+        Path(budget_ledger_root)
+        if budget_ledger_root is not None
+        else budget_module.PRODUCTION_BUDGET_ROOT
+    )
+    if effective_budget_root is not None:
+        _reject_budget_root_reparse(effective_budget_root)
+
+    # manifest_digest is the per-batch digest; candidate_pool_digest remains
+    # separately in the reservation binding. The two are never conflated.
+    entry = budget_module.reserve(
         record=dict(verified.record),
         binding=dict(verified.binding),
         binding_digest=verified.binding_digest,
@@ -869,7 +984,7 @@ def verify_and_reserve(
         execution_id=execution_id or str(verified.record.get("id") or ""),
         task_count=task_count,
         task_ids=task_ids,
-        manifest_digest=manifest_digest or str(verified.binding.get("candidate_manifest_digest") or ""),
+        manifest_digest=manifest_digest,
         ledger_root=budget_ledger_root,
     )
     return verified, entry

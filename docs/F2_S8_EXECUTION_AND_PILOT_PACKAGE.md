@@ -654,6 +654,12 @@ overlap is reported so nothing is subtracted twice, and the resolved ids are
 retained as provenance (`resolved_by_source_priority`). The operative row is the
 highest-priority source's row, so the classifier reads the same row the union kept.
 
+> **OPEN OWNER DECISION — 185 conflict rows (2026-10-24).** Both options remain open:
+> **INCLUDE-185** keeps the 185 SOURCE_PRIORITY-resolved rows in the population
+> (**3,821**); **EXCLUDE-185** removes them (**3,636**). **2026-10-24 owner
+> decision: `EXCLUDE-185`.** The scratch draft pool excludes the 185; no
+> production policy changed. This box does not rewrite the 2026-10-15 history.
+
 **This is candidate selection only.** Inclusion is **NOT** admission, buildability,
 or scientific analyzability — it changes only which registered ids the offline
 plugin classifier considers.
@@ -698,3 +704,18 @@ captures**. Registration SHA-256 `35b704b7…`; corpus digests unchanged
 **Boundaries (unchanged from §16.9).** Read-only offline classification: no
 admission, no pilot, no Q10/Q12/Q13, no network, no package installed, no project
 tree executed; the terminal django-guardian tasks untouched.
+
+### 16.11 (2026-10-24) — 185-conflict policy conflict remains OPEN
+
+A later standing-authorization instruction (2026-10-24) says the 185 conflict rows
+must stay **EXCLUDED by default**. That conflicts with the 2026-10-15 owner decision
+recorded in §16.10, which **INCLUDED** the 185 SOURCE_PRIORITY-resolved rows and
+recomputed the population from 3,636 to 3,821.
+
+No data, pool, classifier, or policy was changed by this review. The conflict is an
+owner decision; until it is resolved, code and tests do not encode a new 185 policy.
+This note is a dated correction record, not a rewrite of §16.10.
+
+> **OWNER DECISION — 185 conflict rows (2026-10-24).** **`EXCLUDE-185`**:
+> 3,636 excluded. The scratch draft pool excludes the 185; production policy and
+> classifier remain unchanged pending a committed authority document.
