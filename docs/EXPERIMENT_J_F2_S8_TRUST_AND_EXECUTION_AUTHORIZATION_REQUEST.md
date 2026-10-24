@@ -619,3 +619,69 @@ workspaces**. With `target_credited=300`, **POOL CANNOT REACH 300**. The driver 
 implemented and tested with a fake runner; a real run stops `NO_ELIGIBLE_BUILT_TASK`.
 No grant is signed. Widening the pool requires an owner decision: resolve UNKNOWN tasks by
 an authorized build probe, or include the 185 conflict rows, which the owner has excluded.
+
+---
+
+## 12. Build-probe grant request (2026-10-24) — REQUIRES AUTHORIZATION
+
+**Status: PROPOSED — UNSIGNED — NOT AUTHORIZED — NO CODE MAY ACTIVATE IT.** This is a
+separate, bounded authorization; it does not modify the execution grant, VM isolation,
+network rules, or evidence capture.
+
+### 12.1 Purpose and scope
+
+Resolve the **3,569 UNKNOWN** draft-pool tasks and build the compatible ones. Nothing else
+is in scope. The probe pool is exactly the 3,569 sorted UNKNOWN task IDs; its canonical
+SHA-256 is `375e6618d8249e279ee0b946fd4797af00e59d48ba7ac2d661e109578c794bf5`.
+
+Proposed bounds (owner must ratify): **1 build attempt per task**, total task cap
+**3,569**, per-task time limit **3,600 s** (the builder's existing `run` timeout at
+`qwen_train/f2_s8_pilot_build.py:491`; pip subprocesses use 1,800–3,600 s), validity
+**30 days from signing**, staged batches of **50**. The first 50-task batch must report
+its COMPATIBLE/INCOMPATIBLE/UNKNOWN fraction before any larger batch is authorized.
+
+### 12.2 Network allowlist (derived from code)
+
+- Git clones: `https://github.com/<owner>/<name>.git` only, from
+  `qwen_train/f2_s8_acquisition.py:473-480` (`repo_url_for`) and the explicit pilot
+  mapping at `qwen_train/f2_s8_pilot_build.py:98-103`; clone at `:942`.
+- Python packages: the build invokes `pip install` and `uv sync` without an explicit
+  index/allowlist (`f2_s8_pilot_build.py:1038-1041`, `:1095-1115`, `:1179-1180`).
+  Those tools default to PyPI (`pypi.org` / `files.pythonhosted.org`) and may fetch
+  arbitrary dependency metadata/artifacts. **The repository does not contain an
+  exhaustive host allowlist.** A probe grant therefore cannot truthfully promise a
+  closed allowlist from existing code; it needs an explicit egress proxy/allowlist or an
+  offline wheelhouse. No wheelhouse exists at `C:\f2_tooling`; the only local tool is
+  `C:\f2_pilot\tools\uv.exe`.
+
+### 12.3 Isolation and execution boundary
+
+Builds run **host-side** (`C:\f2_pilot`, builder venvs, git/pip/uv) exactly as
+`f2_s8_pilot_build.py` does. The Stage-2 guest remains offline with `UV_OFFLINE=1`,
+`UV_FIND_LINKS=WHEELHOUSE`, no default gateway/DNS, and unchanged evidence capture. The
+probe changes no VM isolation, network rule, or evidence semantics.
+
+### 12.4 Outputs
+
+- A classification evidence JSONL/JSON file per task: `task_id`, `classification`
+  (`OBSERVED_COMPATIBLE` / `OBSERVED_INCOMPATIBLE` / `UNKNOWN`), reasons, declared and
+  installed plugins, evidence digests, build attempt outcome, and builder error class.
+- Built workspace paths under `C:\f2_pilot\<task_id>`.
+- Build failures are recorded as **infrastructure**, never as credits or scientific
+  outcomes. No admission/credit ledger rows are written by the probe.
+
+### 12.5 Relation to F2-IMPL-AUTH-036
+
+`F2-IMPL-AUTH-036` authorized **one** Stage-1 host build over **24** named tasks with
+network access. This probe is a separate, larger (3,569-task) authorization and does not
+inherit `-036`; it requires its own owner-signed record, scope, caps, and validity.
+
+### 12.6 Revocation, expiry, caps, automatic halts
+
+Revocation is trust-root only (`revoked_record_ids`), checked before every probe batch and
+again immediately before a task build. Expiry is checked before each batch. Caps:
+per-task attempts, total tasks, per-task time, and batch size. Automatic halts:
+`PROBE_REVOKED`, `PROBE_EXPIRED`, `PROBE_CAPS_EXHAUSTED`, `PROBE_STUCK`,
+`PROBE_INFRA_FAILURE_RATE` (>10% in a batch), `PROBE_NO_ELIGIBLE_TASK`,
+`PROBE_AUTHORIZATION_REFUSED`. No retry around a refusal; no new ID to bypass a stuck
+claim. After 50 tasks, stop and report before a larger batch.
