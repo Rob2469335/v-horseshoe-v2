@@ -22,13 +22,15 @@ def _limits(**over):
         max_executions=2,
         max_total_tasks=100,
         max_retries=5,
+        disk_floor_bytes=10**9,
+        per_task_disk_bytes=10**6,
         batch_limit=50,
     )
     base.update(over)
     return DriverLimits(**base)
 
 
-def _run(tmp_path, *, pool, classes, build, credited=0, limits=None, run_batch=None, check=lambda: None):
+def _run(tmp_path, *, pool, classes, build, credited=0, limits=None, run_batch=None, check=lambda: None, free=lambda: 10**18, cleanup=None):
     calls = []
 
     def fake_batch(batch):
@@ -43,6 +45,8 @@ def _run(tmp_path, *, pool, classes, build, credited=0, limits=None, run_batch=N
         check_grant=check,
         credited_count=lambda: credited,
         run_batch=run_batch or fake_batch,
+        free_bytes=free,
+        cleanup_after_batch=cleanup,
         log=lambda _: None,
     )
     return result, calls
@@ -139,3 +143,99 @@ def test_stuck_claim_never_retried(tmp_path):
     )
     assert result.stop_reason == "STUCK_CLAIM"
     assert len(calls) == 1
+
+def test_disk_low_halts_before_batch(tmp_path):
+    pool = ["c"]
+    classes = {"c": "OBSERVED_COMPATIBLE"}
+    build = {"c": _built(tmp_path, "c")}
+    result, calls = _run(
+        tmp_path, pool=pool, classes=classes, build=build,
+        limits=_limits(disk_floor_bytes=10**12, per_task_disk_bytes=10**9),
+        free=lambda: 0,
+    )
+    assert result.stop_reason == "DISK_LOW"
+    assert calls == []
+
+
+def test_disk_above_threshold_proceeds(tmp_path):
+    pool = ["c"]
+    classes = {"c": "OBSERVED_COMPATIBLE"}
+    build = {"c": _built(tmp_path, "c")}
+    result, calls = _run(
+        tmp_path, pool=pool, classes=classes, build=build,
+        limits=_limits(max_executions=1, disk_floor_bytes=1, per_task_disk_bytes=1),
+        free=lambda: 10**18,
+    )
+    assert calls == [["c"]]
+    assert result.stop_reason == "CAPS_EXHAUSTED"
+
+def _cleanup_env(tmp_path):
+    task = "acme__widget-1"
+    root = tmp_path / "ws"
+    ws = root / task
+    (ws / "repo").mkdir(parents=True)
+    (ws / "repo" / "junit.xml").write_text("<testsuite/>", encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+    dest = evidence_root / task / "junit.xml"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes((ws / "repo" / "junit.xml").read_bytes())
+    ledger = tmp_path / "ledger.jsonl"
+    from qwen_train.f2_s8_factory import AppendOnlyLedger
+    AppendOnlyLedger(ledger).append(
+        {"task_id": task, "outcome": "base_fail_gold_pass", "outcome_class": "scientific"}
+    )
+    manifest = tmp_path / "deletion.jsonl"
+    return task, root, ws, evidence_root, dest, ledger, manifest
+
+
+def test_cleanup_after_verified_batch_removes_workspace(tmp_path):
+    from qwen_train.f2_s8_cleanup import delete_workspace
+    task, root, ws, evidence_root, dest, ledger, manifest = _cleanup_env(tmp_path)
+
+    def cleanup(batch, outcome):
+        delete_workspace(
+            task_id=task,
+            workspace=ws,
+            allowed_roots=[root],
+            ledger_paths=[ledger],
+            evidence_root=evidence_root,
+            evidence_files=[(ws / "repo" / "junit.xml", dest)],
+            manifest_path=manifest,
+            allow_delete=True,
+        )
+
+    result, calls = _run(
+        tmp_path, pool=[task], classes={task: "OBSERVED_COMPATIBLE"},
+        build={task: {"status": "built", "workspace": str(ws)}},
+        limits=_limits(max_executions=1, disk_floor_bytes=1, per_task_disk_bytes=1),
+        cleanup=cleanup,
+    )
+    assert calls == [[task]]
+    assert not ws.exists()
+
+
+def test_cleanup_missing_evidence_keeps_workspace(tmp_path):
+    from qwen_train.f2_s8_cleanup import delete_workspace
+    task, root, ws, evidence_root, dest, ledger, manifest = _cleanup_env(tmp_path)
+    dest.write_text("tampered", encoding="utf-8")
+
+    def cleanup(batch, outcome):
+        delete_workspace(
+            task_id=task,
+            workspace=ws,
+            allowed_roots=[root],
+            ledger_paths=[ledger],
+            evidence_root=evidence_root,
+            evidence_files=[(ws / "repo" / "junit.xml", dest)],
+            manifest_path=manifest,
+            allow_delete=True,
+        )
+
+    result, _ = _run(
+        tmp_path, pool=[task], classes={task: "OBSERVED_COMPATIBLE"},
+        build={task: {"status": "built", "workspace": str(ws)}},
+        limits=_limits(max_executions=1, disk_floor_bytes=1, per_task_disk_bytes=1),
+        cleanup=cleanup,
+    )
+    assert ws.exists()
+    assert any("CLEANUP_WARNING" in line for line in result.log)

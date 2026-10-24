@@ -685,3 +685,45 @@ per-task attempts, total tasks, per-task time, and batch size. Automatic halts:
 `PROBE_INFRA_FAILURE_RATE` (>10% in a batch), `PROBE_NO_ELIGIBLE_TASK`,
 `PROBE_AUTHORIZATION_REFUSED`. No retry around a refusal; no new ID to bypass a stuck
 claim. After 50 tasks, stop and report before a larger batch.
+
+---
+
+## 13. Disk guard and cleanup (2026-10-24) — IMPLEMENTED, NOT ACTIVATED
+
+**Measured (read-only, 2026-10-24):** `C:` free **93.8 GB** / total **475.8 GB**. Built
+workspace `stanfordnlp__dspy-8739` = **150,949,704 B (0.141 GB)**; one larger prior
+workspace (`networkx__networkx-8196`) = **721,053,078 B (0.721 GB)**; `C:\f2_pilot\build_logs`
+= **630,347 B / 123 files**; `C:\f2_pilot\tools\uv.exe` = **44,932,608 B**; **no host
+wheelhouse exists** (`C:\f2_tooling` absent). Generalizing one workspace to all tasks is
+**NOT ESTABLISHED**; dependency caches/downloads were not measured.
+
+Worst-case totals at the measured 0.141 GB/task: 25 = **3.5 GB**, 300 = **42.3 GB**,
+1,500 = **211.5 GB**. At the observed 0.721 GB/task: 25 = **18.0 GB**, 300 = **216 GB**,
+1,500 = **1.08 TB**. The 1,500 case exceeds current free space.
+
+**Disk guard:** both drivers require `disk_floor_bytes` and `per_task_disk_bytes` (no
+default) and halt `DISK_LOW`/`PROBE_DISK_LOW` before a batch if free space is below
+`max(disk_floor_bytes, 3 × per_task_disk_bytes × batch_size)`. Proposed production values:
+floor **25 GB**, per-task **141 MB**, batch 50 → threshold **25 GB** (the floor wins;
+3×141 MB×50 = 21.15 GB). Tests cover low/high and no partial batch starts.
+
+**Cleanup rules (`f2_s8_cleanup.py`):** dry-run by default; real deletion requires an
+explicit `allow_delete` argument. Only allowlisted task workspace/venv/run-temp roots are
+eligible; real paths are resolved, symlinks/junctions and allowlist escapes are refused,
+and the task-directory name must match the task pattern. Deletion is allowed only when the
+task outcome is in the ledger, evidence files exist, were copied under the evidence root,
+and SHA-256 match, and the task is not retry-pending/stuck. A JSONL deletion manifest
+records path, bytes, reason, and UTC time; it is never deleted. Read-only files are
+retried with the write bit; files held open are skipped and logged, never by killing a
+process. Failed/infrastructure builds may drop the partial workspace but `.log` files are
+retained. A per-run temp sweep removes only old `run-*` directories under the allowlist.
+**Do not delete:** authorization ledger, budget root, grants, trust root, keys, `.env`,
+evidence/results, pool/registration, wheelhouse/cache, F2_SCRATCH backups/quarantine, the
+repository, or anything outside the allowlist.
+
+**Driver integration:** the execution driver supports a tested `cleanup_after_batch`
+callback; verified workspaces are removed, unverified workspaces are kept with a warning,
+and a subsequent `DISK_LOW` halts. **The real CLI does not activate cleanup**: it requires
+explicit evidence-root/manifest wiring, and no real deletion has run. Limits: a bug or a
+same-user process can still delete things; the manifest records deletions but does not
+prevent them. Nothing in this section is signed or activated.

@@ -21,9 +21,17 @@ class ProbeHalt(RuntimeError):
 @dataclass(frozen=True)
 class ProbeLimits:
     max_tasks: int
+    disk_floor_bytes: int
+    per_task_disk_bytes: int
     per_task_time_seconds: int = 3600
     batch_limit: int = 50
     max_infra_rate: float = 0.10
+
+    def disk_threshold(self, batch_size: int) -> int:
+        return max(
+            self.disk_floor_bytes,
+            3 * self.per_task_disk_bytes * max(1, batch_size),
+        )
 
 
 @dataclass
@@ -52,6 +60,7 @@ def run_probe(
     limits: ProbeLimits,
     authorize: Callable[[], None],
     builder: Callable[[Sequence[str]], Mapping[str, Mapping[str, object]]],
+    free_bytes: Callable[[], int],
     log: Callable[[str], None] = print,
 ) -> ProbeResult:
     """Fake-builder dry run. Never writes credits or production state."""
@@ -85,6 +94,13 @@ def run_probe(
         )
         if not batch:
             return stop("PROBE_NO_ELIGIBLE_TASK")
+        threshold = limits.disk_threshold(len(batch))
+        available = int(free_bytes())
+        if available < threshold:
+            return stop(
+                "PROBE_DISK_LOW",
+                f"free={available} threshold={threshold} batch={len(batch)}",
+            )
         batches += 1
         line = f"probe batch {batches}: {len(batch)} tasks"
         result.log.append(line)

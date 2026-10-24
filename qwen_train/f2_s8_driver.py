@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import shutil
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Mapping, Sequence
 
@@ -30,7 +31,15 @@ class DriverLimits:
     max_executions: int
     max_total_tasks: int
     max_retries: int
+    disk_floor_bytes: int
+    per_task_disk_bytes: int
     batch_limit: int = 50
+
+    def disk_threshold(self, batch_size: int) -> int:
+        return max(
+            self.disk_floor_bytes,
+            3 * self.per_task_disk_bytes * max(1, batch_size),
+        )
 
 
 @dataclass
@@ -101,6 +110,8 @@ def run_driver(
     check_grant: Callable[[], None],
     credited_count: Callable[[], int],
     run_batch: Callable[[Sequence[str]], Mapping[str, object]],
+    free_bytes: Callable[[], int],
+    cleanup_after_batch: Callable[[Sequence[str], Mapping[str, object]], None] | None = None,
     terminal: Iterable[str] = (),
     log: Callable[[str], None] = print,
 ) -> DriverResult:
@@ -147,6 +158,13 @@ def run_driver(
         )
         if not batch:
             return stop("NO_ELIGIBLE_BUILT_TASK", "no compatible built task remains")
+        threshold = limits.disk_threshold(len(batch))
+        available = int(free_bytes())
+        if available < threshold:
+            return stop(
+                "DISK_LOW",
+                f"free={available} threshold={threshold} batch={len(batch)}",
+            )
         if tasks_started + len(batch) > limits.max_total_tasks:
             return stop(
                 "CAPS_EXHAUSTED",
@@ -183,6 +201,13 @@ def run_driver(
                 "INFRA_FAILURE_RATE",
                 f"infrastructure_invalid={infra}/{attempted}",
             )
+        if cleanup_after_batch is not None:
+            try:
+                cleanup_after_batch(batch, outcome)
+            except Exception as exc:  # noqa: BLE001 - cleanup warning only
+                warning = f"CLEANUP_WARNING: {type(exc).__name__}: {exc}"
+                result.log.append(warning)
+                log(warning)
         result.batches = batches
         result.tasks_started = tasks_started
         if result.batches >= limits.max_executions:
@@ -206,6 +231,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     p.add_argument("--max-total-tasks", type=int, required=True)
     p.add_argument("--max-retries", type=int, required=True)
     p.add_argument("--batch-limit", type=int, default=50)
+    p.add_argument("--disk-floor-bytes", type=int, required=True)
+    p.add_argument("--per-task-disk-bytes", type=int, required=True)
+    p.add_argument("--disk-path", action="append", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--inputs", required=True)
     p.add_argument("--gates", required=True)
@@ -287,6 +315,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_executions=args.max_executions,
             max_total_tasks=args.max_total_tasks,
             max_retries=args.max_retries,
+            disk_floor_bytes=args.disk_floor_bytes,
+            per_task_disk_bytes=args.per_task_disk_bytes,
             batch_limit=args.batch_limit,
         ),
         pool_task_ids=pool["task_ids"],
@@ -295,6 +325,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         check_grant=check_grant,
         credited_count=credited_count,
         run_batch=run_batch,
+        free_bytes=lambda: min(
+            shutil.disk_usage(path).free for path in args.disk_path
+        ),
         terminal=terminal_tasks(args.admission_ledger),
     )
     print(json.dumps(result.__dict__, indent=1, sort_keys=True))

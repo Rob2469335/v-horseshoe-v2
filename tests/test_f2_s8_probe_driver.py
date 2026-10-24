@@ -9,6 +9,18 @@ from qwen_train.f2_s8_probe_driver import (
     select_probe_batch,
 )
 
+FREE = lambda: 10**18  # noqa: E731 - test-only fixture
+
+
+def _limits(max_tasks: int, **over) -> ProbeLimits:
+    base = dict(
+        max_tasks=max_tasks,
+        disk_floor_bytes=1,
+        per_task_disk_bytes=1,
+    )
+    base.update(over)
+    return ProbeLimits(**base)
+
 
 def test_probe_refuses_without_authorization():
     calls = []
@@ -19,9 +31,10 @@ def test_probe_refuses_without_authorization():
 
     result = run_probe(
         unknown_task_ids=["u1"],
-        limits=ProbeLimits(max_tasks=10),
+        limits=_limits(10),
         authorize=lambda: (_ for _ in ()).throw(ProbeHalt("PROBE_NOT_AUTHORIZED")),
         builder=builder,
+        free_bytes=FREE,
         log=lambda _: None,
     )
     assert result.stop_reason == "PROBE_NOT_AUTHORIZED"
@@ -37,9 +50,10 @@ def test_probe_batches_never_exceed_50():
 
     result = run_probe(
         unknown_task_ids=[f"u{i}" for i in range(60)],
-        limits=ProbeLimits(max_tasks=60, batch_limit=50),
+        limits=_limits(60, batch_limit=50),
         authorize=lambda: None,
         builder=builder,
+        free_bytes=FREE,
         log=lambda _: None,
     )
     assert seen == [50, 10]
@@ -60,9 +74,10 @@ def test_probe_counts_classification_and_built_workspace(tmp_path):
 
     result = run_probe(
         unknown_task_ids=["u1", "u2", "u3"],
-        limits=ProbeLimits(max_tasks=10),
+        limits=_limits(10),
         authorize=lambda: None,
         builder=builder,
+        free_bytes=FREE,
         log=lambda _: None,
     )
     assert (result.compatible, result.incompatible, result.unknown, result.built) == (
@@ -82,9 +97,10 @@ def test_probe_halts_on_infra_rate():
 
     result = run_probe(
         unknown_task_ids=[f"u{i}" for i in range(10)],
-        limits=ProbeLimits(max_tasks=10),
+        limits=_limits(10),
         authorize=lambda: None,
         builder=builder,
+        free_bytes=FREE,
         log=lambda _: None,
     )
     assert result.stop_reason == "PROBE_INFRA_FAILURE_RATE"
@@ -97,13 +113,33 @@ def test_probe_caps_exhausted():
 
     result = run_probe(
         unknown_task_ids=[f"u{i}" for i in range(10)],
-        limits=ProbeLimits(max_tasks=3),
+        limits=_limits(3),
         authorize=lambda: None,
         builder=builder,
+        free_bytes=FREE,
         log=lambda _: None,
     )
     assert result.stop_reason == "PROBE_CAPS_EXHAUSTED"
     assert result.attempted == 3
+
+
+def test_probe_disk_low_halts_before_builder():
+    calls = []
+
+    def builder(batch):
+        calls.append(batch)
+        return {}
+
+    result = run_probe(
+        unknown_task_ids=[f"u{i}" for i in range(50)],
+        limits=_limits(50, disk_floor_bytes=10**12, per_task_disk_bytes=10**9),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=lambda: 0,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_DISK_LOW"
+    assert calls == []
 
 
 def test_select_probe_batch_is_unknown_only_and_bounded():
