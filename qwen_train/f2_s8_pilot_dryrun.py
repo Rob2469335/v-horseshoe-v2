@@ -10,17 +10,37 @@ This runs real task code and produces real JUnit. It is NOT pilot evidence:
 the pilot's evidence is what the governed pipeline records from the guest
 under the trusted store. These files are scratch, kept only to explain a
 later failure.
+
+Dedicated uv execution (R1-B)
+-----------------------------
+A ``uv run pytest`` task's environment is created by uv.  The dry run used to
+build one shell string (``"<declared cmd> --junitxml=<path>"``) and run it with
+``shell=True``, so ``uv`` was resolved from the ambient ``PATH`` -- which on the
+acquisition host is the owner's profile-level ``uv.exe`` rather than the
+dedicated, hash-verified builder tool.  That is a substitution the manifest
+could not see.  A uv-owned command is now tokenised, its executable replaced
+with the verified ``C:\\f2_pilot\\tools\\uv.exe``, run as an argument list, and
+given a PATH from which every other directory holding a ``uv`` binary has been
+removed.  A command that cannot be expressed as an argument list (shell
+metacharacters) is refused rather than executed through a shell.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
 
 from qwen_train.f2_s8_acquisition import require_unprivileged_identity
-from qwen_train.f2_s8_pilot_build import declared_test_cmd, uses_uv_environment
+from qwen_train.f2_s8_pilot_build import (
+    _sha256_file,
+    declared_test_cmd,
+    resolve_and_verify_uv,
+    uses_uv_environment,
+)
 
 ROOT = Path(r"C:\f2_pilot")
 INPUTS = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_inputs\full")
@@ -39,9 +59,113 @@ UV_ALL_EXTRAS = ("openai__openai-agents-python-1633",
 #: helpers. Its absence aborts collection for the whole session.
 POSIX_BIN = r"C:\Program Files\Git\usr\bin"
 
+#: Tokens that require a shell to interpret.  A declared command containing one
+#: cannot be executed as an argument list, so the dedicated-uv guarantee cannot
+#: be made and the dry run refuses instead of silently falling back to a shell.
+_SHELL_METACHARACTERS = ("&&", "||", "|", ">", "<", ";", "`", "$(", "${")
+
+#: File names an ambient uv installation can present as on Windows and POSIX.
+_UV_EXECUTABLE_NAMES = ("uv", "uv.exe", "uv.cmd", "uv.bat") if os.name == "nt" else ("uv",)
+
+
+class UvExecutionError(RuntimeError):
+    """A uv-owned command cannot be run through the approved executable."""
+
+
+def _split_declared_command(test_cmd: str) -> list[str]:
+    """Tokenise a declared command, refusing anything a shell would interpret.
+
+    ``shlex`` with ``posix=False`` keeps backslashes in Windows paths intact.
+    Fully quoted tokens are unquoted, because the argv list no longer needs the
+    shell's quoting (and passing the quotes through would break the path).
+    """
+    text = str(test_cmd or "").strip()
+    if not text:
+        raise UvExecutionError("UV_EXECUTION_UNSAFE_COMMAND: empty command")
+    for marker in _SHELL_METACHARACTERS:
+        if marker in text:
+            raise UvExecutionError(
+                "UV_EXECUTION_UNSAFE_COMMAND: the declared command contains "
+                f"{marker!r}, so it cannot be executed as an argument list and "
+                "the dedicated uv executable cannot be guaranteed")
+    tokens = shlex.split(text, posix=False)
+    cleaned: list[str] = []
+    for token in tokens:
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+            cleaned.append(token[1:-1])
+        else:
+            cleaned.append(token)
+    return cleaned
+
+
+def _directory_has_ambient_uv(directory: Path) -> bool:
+    try:
+        return any((directory / name).is_file() for name in _UV_EXECUTABLE_NAMES)
+    except OSError:
+        return False
+
+
+def uv_safe_path(path_value: str, uv_exe: Path) -> list[str]:
+    """``PATH`` entries that cannot resolve a uv other than ``uv_exe``.
+
+    Every directory that holds a uv binary is dropped unless it is the approved
+    executable's own directory, and the approved directory is placed first.
+    This is defence in depth: the command is also an argument list, so PATH is
+    not consulted for the executable at all -- but a task that shells out to
+    ``uv`` internally still gets the approved one.
+    """
+    approved_dir = Path(uv_exe).parent
+    approved_key = approved_dir.resolve().as_posix().lower()
+    kept: list[str] = [str(approved_dir)]
+    for raw in str(path_value or "").split(os.pathsep):
+        entry = raw.strip()
+        if not entry:
+            continue
+        try:
+            resolved = Path(entry).resolve().as_posix().lower()
+        except OSError:
+            resolved = Path(entry).as_posix().lower()
+        if resolved == approved_key:
+            continue
+        if _directory_has_ambient_uv(Path(entry)):
+            continue
+        kept.append(entry)
+    return kept
+
+
+def prepare_uv_execution(
+    test_cmd: str, *, uv_path: Path | str | None = None,
+    expected_sha256: str | None = None,
+) -> dict:
+    """The exact argv and identity for a uv-owned declared command.
+
+    Returns ``{"argv", "uv_path", "uv_sha256", "ambient_uv_removed"}``.  Raises
+    when the declared command is not uv-led, when the approved executable is
+    absent or corrupt (:func:`resolve_and_verify_uv`), or when the command needs
+    a shell.  ``expected_sha256`` exists for tests; production must pass
+    ``None`` so the module's approved digest is enforced.
+    """
+    uv_exe = resolve_and_verify_uv(uv_path, expected_sha256)
+    argv = _split_declared_command(test_cmd)
+    if not argv:
+        raise UvExecutionError("UV_EXECUTION_UNSAFE_COMMAND: empty command")
+    head = Path(argv[0]).name.lower()
+    if head not in _UV_EXECUTABLE_NAMES:
+        raise UvExecutionError(
+            "UV_EXECUTION_UNSAFE_COMMAND: the declared command does not start "
+            f"with uv (starts with {argv[0]!r}); refusing to substitute")
+    return {
+        "argv": [str(uv_exe), *argv[1:]],
+        "uv_path": str(uv_exe),
+        "uv_sha256": _sha256_file(uv_exe),
+        "ambient_uv_removed": True,
+    }
+
 
 def run_test(*, python: str, repo: Path, test_cmd: str, junit: Path,
-             timeout: int, uv_offline: bool = False) -> dict:
+             timeout: int, uv_offline: bool = False,
+             uv_path: Path | str | None = None,
+             uv_sha256: str | None = None) -> dict:
     """Run the DECLARED test command with --junitxml appended, as the guest
     executor will. Nothing is rewritten: the command is the population's.
 
@@ -49,35 +173,53 @@ def run_test(*, python: str, repo: Path, test_cmd: str, junit: Path,
     ``Scripts`` directory is prepended to PATH. Without that the shell would
     resolve a different pytest (or none) and report an environment failure as
     if it were the task's.
-    """
-    import os
 
+    ``uv_offline`` marks a uv-OWNED task: its command runs through the dedicated,
+    hash-verified uv as an argument list (R1-B) and with ``UV_OFFLINE=1``.
+    """
     if "--junitxml" in test_cmd:
         raise ValueError("declared test_cmd already carries --junitxml")
     # Fail closed at the UNTRUSTED boundary: this runs the task's own test
     # command, which imports and executes repository code.
     require_unprivileged_identity("qwen_train.f2_s8_pilot_dryrun.run_test")
-    cmd = f"{test_cmd} --junitxml={junit}"
     env = dict(os.environ)
     # ``python`` is None for uv-owned tasks: there is no workspace Scripts
     # directory to prepend, and ``uv run`` supplies the environment itself.
     prefix = [p for p in (str(Path(python).parent) if python else "", POSIX_BIN) if p]
     env["PATH"] = os.pathsep.join(prefix + [env.get("PATH", "")])
-    if uv_offline:
-        env["UV_OFFLINE"] = "1"
     t0 = time.time()
-    # The declared command is a shell string; run it through the shell exactly
-    # as the guest executor does, so any quoting or PATH assumption surfaces
-    # here rather than in the guest.
-    proc = subprocess.run(
-        cmd, shell=True, cwd=repo, capture_output=True, text=True,
-        timeout=timeout, env=env,
-    )
+
+    if uv_offline:
+        plan = prepare_uv_execution(test_cmd, uv_path=uv_path,
+                                    expected_sha256=uv_sha256)
+        env["UV_OFFLINE"] = "1"
+        env["PATH"] = os.pathsep.join(
+            uv_safe_path(env.get("PATH", ""), Path(plan["uv_path"])))
+        argv = [*plan["argv"], f"--junitxml={junit}"]
+        proc = subprocess.run(
+            argv, cwd=repo, capture_output=True, text=True,
+            timeout=timeout, env=env,
+        )
+        execution = {"mode": "argv", "argv": argv,
+                     "uv_path": plan["uv_path"],
+                     "uv_sha256": plan["uv_sha256"]}
+    else:
+        cmd = f"{test_cmd} --junitxml={junit}"
+        # The declared command is a shell string; run it through the shell
+        # exactly as the guest executor does, so any quoting or PATH assumption
+        # surfaces here rather than in the guest.  This path never invokes uv.
+        proc = subprocess.run(
+            cmd, shell=True, cwd=repo, capture_output=True, text=True,
+            timeout=timeout, env=env,
+        )
+        execution = {"mode": "shell", "command": cmd}
+
     return {
         "exit_status": proc.returncode,
         "elapsed_s": int(time.time() - t0),
         "junit_exists": junit.is_file(),
         "junit_bytes": junit.stat().st_size if junit.is_file() else 0,
+        "execution": execution,
         "stdout_tail": proc.stdout[-1500:],
         "stderr_tail": proc.stderr[-1500:],
     }

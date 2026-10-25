@@ -153,6 +153,11 @@ class ExecutionResult:
     evidence_size: int = 0
     evaluator: Mapping[str, str] = field(default_factory=dict)
     reason: str = ""
+    #: Deterministic build-policy reason (e.g. ``PROJECT_PIN_CONFLICT``), when
+    #: the caller has one.  Persisted so the scheduler can distinguish a
+    #: deterministic failure from a transient one on a LATER run, instead of
+    #: re-running it to find out.
+    reason_code: str = ""
     ts: str = ""
     # --- prospective evidence-binding identities (Decision 3).  Required for an
     # --- admitted outcome; ``run_once`` refuses an admission that omits them.
@@ -278,6 +283,12 @@ class RunPlan:
     skipped_exhausted: tuple[str, ...]
     skipped_running: tuple[str, ...]
     counts: Mapping[str, int]
+    #: Tasks whose recorded failure is DETERMINISTIC (a build-policy / toolchain
+    #: / declaration defect).  A retry cannot change the result until the named
+    #: condition changes, so they are not selected and their evidence is kept.
+    skipped_deterministic: tuple[str, ...] = ()
+    #: ``{task_id: reason_code}`` for the deterministic bucket.
+    deterministic_reasons: Mapping[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -289,12 +300,59 @@ class RunPlan:
             "skipped_terminal": list(self.skipped_terminal),
             "skipped_exhausted": list(self.skipped_exhausted),
             "skipped_running": list(self.skipped_running),
+            "skipped_deterministic": list(self.skipped_deterministic),
+            "deterministic_reasons": dict(self.deterministic_reasons),
             "counts": dict(self.counts),
         }
 
 
 def _attempts_used(ledger: AppendOnlyLedger, task_id: str) -> int:
+    """Lifetime attempts: EVERY recorded attempt, whatever its outcome class.
+
+    A retry is never cheaper because the previous failure had a different
+    class -- the cap is the cap.
+    """
     return len(ledger.attempts(task_id))
+
+
+#: Build-policy reason codes that are DETERMINISTIC: the same task, on the same
+#: host, produces the same failure until the *named condition* changes (an
+#: owner decision, a deployed tool, a corrected declaration).  Retrying one of
+#: these spends a lifetime attempt and reproduces the failure, so it is reported
+#: instead of selected.  Transient infrastructure failures (timeouts, clone
+#: errors, resolver index hiccups) are deliberately NOT in this set.
+DETERMINISTIC_BUILD_FAILURE_CODES = frozenset({
+    "PROJECT_PIN_CONFLICT",
+    "PYTEST_ADMISSIBILITY_NOT_RATIFIED",
+    "PYTEST_PIN_UNRESOLVED",
+    "PYTEST_INSTALLED_DRIFT",
+    "PYTEST_INSTALLED_UNVERIFIABLE",
+    "DECLARED_TEST_SOURCE_UNRESOLVABLE",
+    "BUILDER_TOOL_UNAVAILABLE",
+    "BUILDER_TOOL_CORRUPT",
+    "PROFILE_ISOLATION_VIOLATION",
+    "UV_TOOLCHAIN_INCOMPATIBLE",
+    "PYTHON_FLOOR_INCOMPATIBLE",
+    "INTERPRETER_UNAVAILABLE",
+    "PLATFORM_INCOMPATIBLE",
+    "WORKSPACE_PRESERVATION_REFUSED",
+})
+
+
+def retry_blocked_reason(records: Sequence[Mapping[str, Any]]) -> str:
+    """The deterministic reason this task must not be retried, or ``""``.
+
+    Reads the ledger records in order and returns the reason code of any
+    deterministic build failure.  A record without a ``reason_code`` (older
+    ledgers) is not guessed at: it stays retryable under the cap.
+    """
+    for record in records:
+        if record.get("outcome") != "build_failure":
+            continue
+        code = str(record.get("reason_code") or "").strip()
+        if code in DETERMINISTIC_BUILD_FAILURE_CODES:
+            return code
+    return ""
 
 
 def plan_run(
@@ -331,6 +389,8 @@ def plan_run(
     terminal: list[str] = []
     exhausted: list[str] = []
     skipped_running: list[str] = []
+    deterministic: list[str] = []
+    deterministic_reasons: dict[str, str] = {}
     for task_id in ordered_task_ids:
         if ledger.admitted(task_id) is not None:
             admitted.append(task_id)
@@ -344,6 +404,14 @@ def plan_run(
         if _attempts_used(ledger, task_id) >= policy.max_attempts:
             exhausted.append(task_id)
             continue
+        blocked = retry_blocked_reason(ledger.attempts(task_id))
+        if blocked:
+            # Deterministic: retrying reproduces the same failure and spends a
+            # lifetime attempt.  Reported, not selected -- and its evidence is
+            # left exactly as recorded.
+            deterministic.append(task_id)
+            deterministic_reasons[task_id] = blocked
+            continue
         if len(runnable) < policy.max_tasks_per_run:
             runnable.append(task_id)
 
@@ -356,6 +424,8 @@ def plan_run(
         skipped_terminal=tuple(terminal),
         skipped_exhausted=tuple(exhausted),
         skipped_running=tuple(skipped_running),
+        skipped_deterministic=tuple(deterministic),
+        deterministic_reasons=dict(deterministic_reasons),
         counts={
             "registered": len(ordered_task_ids),
             "attempted": len({r["task_id"] for r in ledger.records()}),
@@ -501,6 +571,7 @@ def run_once(
         ),
         "evaluator": dict(result.evaluator or evaluator),
         "reason": result.reason,
+        "reason_code": result.reason_code,
     }
     if admitted:
         # The bound evidence bundle: every identity the canonical verifiers and the

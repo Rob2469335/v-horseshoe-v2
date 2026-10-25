@@ -512,3 +512,109 @@ class TestResumeAndCounts:
                        "outcome_class": "scientific", "admitted": True})
         c = counts(ledger, TASKS)
         assert c["attempted"] == 0 and c["admitted"] == 0 and c["registered"] == 3
+
+class TestLifetimeRetryAccounting:
+    """R1-D: every attempt counts, and determinism is not retried blindly."""
+
+    def _infra(self, task_id, attempt, **over):
+        return _ok(task_id, attempt, outcome="timeout",
+                   evidence_name="", evidence_sha256="", **over)
+
+    def test_every_recorded_attempt_counts_toward_the_cap(self, tmp_path):
+        from qwen_train.f2_s8_factory import _attempts_used
+
+        ledger = _ledger(tmp_path)
+        policy = RetryPolicy(max_attempts=3)
+        for attempt in (1, 2, 3):
+            run_once(task_id="t-1", ledger=ledger,
+                     runner=_runner({("t-1", attempt): self._infra("t-1", attempt)}),
+                     registration_id="reg", registration_sha256=REG_SHA,
+                     evaluator=EVAL, policy=policy)
+        assert _attempts_used(ledger, "t-1") == 3
+        with pytest.raises(FactoryError, match="exceeded max_attempts"):
+            run_once(task_id="t-1", ledger=ledger, runner=_runner({}),
+                     registration_id="reg", registration_sha256=REG_SHA,
+                     evaluator=EVAL, policy=policy)
+
+    def test_a_different_failure_class_does_not_buy_another_attempt(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        policy = RetryPolicy(max_attempts=2)
+        outcomes = ["timeout", "build_failure"]
+        for attempt, outcome in enumerate(outcomes, 1):
+            run_once(task_id="t-1", ledger=ledger,
+                     runner=_runner({("t-1", attempt): _ok(
+                         "t-1", attempt, outcome=outcome,
+                         evidence_name="", evidence_sha256="")}),
+                     registration_id="reg", registration_sha256=REG_SHA,
+                     evaluator=EVAL, policy=policy)
+        with pytest.raises(FactoryError, match="exceeded max_attempts"):
+            run_once(task_id="t-1", ledger=ledger, runner=_runner({}),
+                     registration_id="reg", registration_sha256=REG_SHA,
+                     evaluator=EVAL, policy=policy)
+
+    def test_previous_attempt_records_survive_a_retry(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        policy = RetryPolicy(max_attempts=3)
+        for attempt in (1, 2):
+            run_once(task_id="t-1", ledger=ledger,
+                     runner=_runner({("t-1", attempt): self._infra("t-1", attempt)}),
+                     registration_id="reg", registration_sha256=REG_SHA,
+                     evaluator=EVAL, policy=policy)
+        before = [r["record_digest"] for r in ledger.records()]
+        run_once(task_id="t-1", ledger=ledger,
+                 runner=_runner({("t-1", 3): self._infra("t-1", 3)}),
+                 registration_id="reg", registration_sha256=REG_SHA,
+                 evaluator=EVAL, policy=policy)
+        after = [r["record_digest"] for r in ledger.records()]
+        assert after[:2] == before
+        assert len(after) == 3
+        assert ledger.verify()[0] is True
+
+    def test_a_deterministic_build_failure_is_not_selected_again(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        ledger.append({
+            "task_id": "t-1", "outcome": "build_failure",
+            "outcome_class": "infrastructure",
+            "reason_code": "PROJECT_PIN_CONFLICT",
+            "reason": "PROJECT_PIN_CONFLICT: two pins disagree",
+        })
+        plan = plan_run(
+            ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
+            registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA,
+            policy=RetryPolicy(max_attempts=3))
+        assert plan.runnable == ("t-2", "t-3")
+        assert plan.skipped_deterministic == ("t-1",)
+        assert plan.deterministic_reasons["t-1"] == "PROJECT_PIN_CONFLICT"
+
+    def test_a_transient_failure_stays_runnable(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        ledger.append({
+            "task_id": "t-1", "outcome": "build_failure",
+            "outcome_class": "infrastructure", "reason_code": "BUILD_TIMEOUT",
+            "reason": "timed out",
+        })
+        plan = plan_run(
+            ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
+            registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA)
+        assert plan.runnable == ("t-1", "t-2", "t-3")
+        assert plan.skipped_deterministic == ()
+
+    def test_an_older_record_without_a_reason_code_is_not_guessed(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        ledger.append({
+            "task_id": "t-1", "outcome": "build_failure",
+            "outcome_class": "infrastructure", "reason": "unclassified",
+        })
+        plan = plan_run(
+            ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
+            registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA)
+        assert "t-1" in plan.runnable
+
+    def test_the_retry_decision_never_reads_a_production_ledger(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        assert str(ledger.path).startswith(str(tmp_path))
+        plan = plan_run(
+            ordered_task_ids=TASKS, ledger=ledger, registration_id="reg",
+            registration_sha256=REG_SHA, expected_registration_sha256=REG_SHA)
+        assert len(plan.runnable) == 3
+        assert not ledger.path.exists()

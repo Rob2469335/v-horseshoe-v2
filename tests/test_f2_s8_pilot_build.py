@@ -134,6 +134,7 @@ class TestManifestIsScopedToTheRun:
         """Replace the real clone/venv build -- these tests must never touch a network."""
         from qwen_train import f2_s8_pilot_build as pb
 
+        monkeypatch.setattr(pb, "_PERMIT_UNAUTHORIZED_STUB_BUILD", True)
         monkeypatch.setattr(
             pb, "resolve_repo_url",
             lambda task_id, inputs: f"https://github.com/example/{task_id}.git")
@@ -195,6 +196,7 @@ class TestManifestIsScopedToTheRun:
 
         (tmp_path / "inputs").mkdir()
         (tmp_path / "patches").mkdir()
+        monkeypatch.setattr(pb, "_PERMIT_UNAUTHORIZED_STUB_BUILD", True)
         monkeypatch.setattr(pb, "resolve_repo_url",
                             lambda task_id, inputs: "https://example/r.git")
 
@@ -323,10 +325,24 @@ class TestDeclaredPytestPin:
         from qwen_train.f2_s8_pilot_build import (
             PYTEST_PIN, effective_pytest_pin,
         )
-        assert effective_pytest_pin({"pytest_pin": "pytest>=7.4.3,<8.0.0"}) == \
-            "pytest>=7.4.3,<8.0.0"
-        assert effective_pytest_pin({}) == PYTEST_PIN
-        assert effective_pytest_pin({"groups": ["dev"]}) == PYTEST_PIN
+        # A RANGE declaration now resolves to a concrete, ratified release that
+        # satisfies it -- the previous behaviour returned the range itself, i.e.
+        # an unpinned install recorded as if it were policy.
+        resolved = effective_pytest_pin(
+            {"pytest_pin": "pytest>=7.4.3,<8.0.0"}, None, (3, 10))
+        assert resolved == "pytest==7.4.4"
+        from packaging.specifiers import SpecifierSet
+        assert SpecifierSet(">=7.4.3,<8.0.0").contains(
+            resolved.split("==", 1)[1])
+        assert effective_pytest_pin({}, None, (3, 10)) == PYTEST_PIN
+        assert effective_pytest_pin({"groups": ["dev"]}, None, (3, 10)) == PYTEST_PIN
+
+    def test_a_missing_interpreter_minor_is_refused_not_defaulted(self):
+        """The resolver used to assume (3, 10) when the minor was omitted."""
+        from qwen_train.f2_s8_pilot_build import effective_pytest_pin
+
+        with pytest.raises(RuntimeError, match="PROJECT_PIN_CONFLICT"):
+            effective_pytest_pin({})
 
     def test_litellm_declares_the_pin_its_dev_group_requires(self):
         """The two must agree, or the install plan refuses the build. Checked by
@@ -350,7 +366,8 @@ class TestDeclaredPytestPin:
         group_spec = Requirement(group_reqs[0]).specifier
 
         pin_spec = Requirement(
-            effective_pytest_pin(DECLARED_ADJUSTMENTS["BerriAI__litellm-13675"])
+            effective_pytest_pin(
+                DECLARED_ADJUSTMENTS["BerriAI__litellm-13675"], None, (3, 10))
         ).specifier
 
         common = [v for v in ("7.4.3", "7.4.4", "7.9.9", "8.3.5")
@@ -370,3 +387,107 @@ def _non_privileged_identity(monkeypatch):
     """
     from qwen_train import f2_s8_acquisition as A
     monkeypatch.setattr(A, "effective_identity_is_admin", lambda: False)
+
+class TestWorkspacePreservation:
+    """R1-D: a retry must not destroy the previous attempt's evidence."""
+
+    def test_the_previous_workspace_is_moved_not_deleted(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import preserve_previous_workspace
+
+        root = tmp_path / "pilot"
+        workspace = root / "task-1"
+        (workspace / "repo").mkdir(parents=True)
+        (workspace / "repo" / "partial.log").write_text("attempt one", encoding="utf-8")
+
+        preserved = preserve_previous_workspace(workspace, root=root)
+        assert preserved is not None
+        assert not workspace.exists(), "the live path is cleared for the new attempt"
+        kept = Path(preserved)
+        assert kept.is_dir()
+        assert (kept / "repo" / "partial.log").read_text(encoding="utf-8") == "attempt one"
+        assert kept.parent == root / "_preserved_workspaces"
+
+    def test_preservation_never_overwrites_an_existing_archive(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import preserve_previous_workspace
+
+        root = tmp_path / "pilot"
+        first = root / "task-1"
+        (first / "repo").mkdir(parents=True)
+        (first / "repo" / "one.txt").write_text("one", encoding="utf-8")
+        first_archive = preserve_previous_workspace(first, root=root)
+
+        second = root / "task-1"
+        (second / "repo").mkdir(parents=True)
+        (second / "repo" / "two.txt").write_text("two", encoding="utf-8")
+        second_archive = preserve_previous_workspace(second, root=root)
+
+        assert first_archive != second_archive
+        assert (Path(first_archive) / "repo" / "one.txt").is_file()
+        assert (Path(second_archive) / "repo" / "two.txt").is_file()
+
+    def test_an_absent_workspace_is_a_no_op(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import preserve_previous_workspace
+
+        assert preserve_previous_workspace(tmp_path / "absent", root=tmp_path) is None
+
+    def test_a_path_outside_the_root_is_refused(self, tmp_path):
+        from qwen_train.f2_s8_pilot_build import preserve_previous_workspace
+
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        with pytest.raises(RuntimeError, match="WORKSPACE_PRESERVATION_REFUSED"):
+            preserve_previous_workspace(outside, root=tmp_path / "pilot")
+        assert outside.is_dir(), "a refused move must not delete anything"
+        from qwen_train.f2_s8_pilot_build import classify_build_failure
+        assert classify_build_failure(
+            RuntimeError("WORKSPACE_PRESERVATION_REFUSED: x")) == \
+            "WORKSPACE_PRESERVATION_REFUSED"
+
+    def test_a_blocked_build_does_not_rotate_the_previous_workspace(
+            self, tmp_path, monkeypatch):
+        """The unratified-pytest gate fires BEFORE the workspace is touched."""
+        from qwen_train import f2_s8_pilot_build as B
+        from qwen_train import f2_s8_pytest_policy as policy
+
+        monkeypatch.setattr(policy, "PYTEST_ADMISSIBILITY_PATH",
+                            tmp_path / "absent-pytest-policy.json")
+
+        root = tmp_path / "pilot"
+        workspace = root / "task-1"
+        (workspace / "repo").mkdir(parents=True)
+        (workspace / "repo" / "keep.txt").write_text("keep", encoding="utf-8")
+        inputs = tmp_path / "inputs"
+        inputs.mkdir()
+        (inputs / "task-1.json").write_text(
+            json.dumps({"base_commit": "a" * 40, "repo": "o/r"}), encoding="utf-8")
+        monkeypatch.setattr(B, "ROOT", root)
+
+        with pytest.raises(RuntimeError, match="PYTEST_ADMISSIBILITY_NOT_RATIFIED"):
+            B.build("task-1", "https://example.invalid/o/r.git", inputs=inputs,
+                    patches=tmp_path / "patches", declared_python_minor="3.10")
+        assert (workspace / "repo" / "keep.txt").is_file()
+        assert not (root / "_preserved_workspaces").exists()
+
+    def test_the_previous_manifest_is_archived_not_destroyed(self, tmp_path, monkeypatch):
+        from qwen_train import f2_s8_pilot_build as pb
+
+        (tmp_path / "inputs").mkdir()
+        (tmp_path / "patches").mkdir()
+        manifest = tmp_path / "build_manifest.json"
+        original = {"stale__task-1": {"status": "built", "workspace": "C:\\f2_pilot\\stale"}}
+        manifest.write_text(json.dumps(original), encoding="utf-8")
+        monkeypatch.setattr(pb, "_PERMIT_UNAUTHORIZED_STUB_BUILD", True)
+        monkeypatch.setattr(pb, "resolve_repo_url",
+                            lambda task_id, inputs: "https://example/r.git")
+        monkeypatch.setattr(pb, "build", lambda task_id, url, **kw: {
+            "task_id": task_id, "workspace": str(tmp_path / task_id),
+            "base_commit": "a" * 40, "elapsed_s": 0})
+        monkeypatch.setattr(pb, "_declared_minor_for", lambda task_id, inputs, **kw: None)
+
+        argv = ["--manifest", str(manifest), "--inputs", str(tmp_path / "inputs"),
+                "--patches", str(tmp_path / "patches")]
+        assert pb.main(argv + ["built__task-2"]) == 0
+        archives = sorted(tmp_path.glob("build_manifest.previous-*.json"))
+        assert len(archives) == 1
+        assert json.loads(archives[0].read_text(encoding="utf-8")) == original
+        assert set(json.loads(manifest.read_text(encoding="utf-8"))) == {"built__task-2"}

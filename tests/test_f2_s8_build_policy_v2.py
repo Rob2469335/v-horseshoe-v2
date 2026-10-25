@@ -22,9 +22,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
+import sys
 import pytest
 
+from qwen_train import f2_s8_pilot_dryrun as DRY
+from qwen_train import f2_s8_pilot_build as B
 from qwen_train.f2_evaluator import (
     JUnitIdentity,
     collection_error_texts,
@@ -39,6 +43,11 @@ from qwen_train.f2_s8_pilot_build import (
     classify_build_failure,
     resolve_and_verify_uv,
 )
+from qwen_train.f2_s8_pytest_policy import (
+    ADMISSIBILITY_SCHEMA,
+    PytestAdmissibility,
+    load_pytest_admissibility,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -46,6 +55,19 @@ def _isolate_test_env(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -
     """Ensure tests run with non-privileged identity and isolated environment variables."""
     monkeypatch.delenv("F2_BUILDER_UV_PATH", raising=False)
     monkeypatch.setenv("SWARM_TEST_ISOLATION", "1")
+    # The admissibility sidecar lives at a FIXED path on purpose.  Point it at a
+    # path that does not exist so these tests never depend on (or observe) a
+    # policy file the owner may have installed on this host.
+    from qwen_train import f2_s8_pytest_policy as policy
+
+    monkeypatch.setattr(policy, "PYTEST_ADMISSIBILITY_PATH",
+                        tmp_path / "absent-pytest-policy.json")
+    # The dry-run execution seam refuses an administrator identity by design;
+    # these tests exercise its argv/env construction, not the guard (which has
+    # its own tests in tests/test_f2_s8_acquisition.py).
+    from qwen_train import f2_s8_acquisition as acquisition
+
+    monkeypatch.setattr(acquisition, "effective_identity_is_admin", lambda: False)
 
 
 class TestPytestPolicyV2Selection:
@@ -342,3 +364,529 @@ class TestManifestAndEvaluatorCompatibility:
         texts = collection_error_texts(junit_collection_err)
         assert len(texts) == 1
         assert "ImportError: missing required dependency" in texts[0]
+
+# ---------------------------------------------------------------------------
+# R1-A: fail-closed resolution over the COMPLETE declaration set
+# ---------------------------------------------------------------------------
+def _results(*args, **kwargs):
+    return select_pytest_version(*args, **kwargs)
+
+
+class TestFailClosedResolution:
+    """Every path either produces a concrete ``pytest==X.Y.Z`` or refuses."""
+
+    def test_bare_pytest_resolves_to_the_default_pin(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "test-requirements.txt").write_text("pytest\n", encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID"
+        assert res["pin"] == "pytest==8.3.5"
+        assert res["version"] == "8.3.5"
+        assert res["rule"] == "RULE_B_DEFAULT_PIN"
+        # the defect: pin="pytest", version=None was recorded as VALID
+        assert res["pin"] != "pytest"
+
+    def test_exact_approved_pin_is_kept(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       test_requirements=["pytest==8.3.5"])
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+        assert res["rule"] == "RULE_A_EXPLICIT_PROJECT_PIN"
+
+    def test_exact_version_outside_the_ratified_set_is_refused(self) -> None:
+        ratified = PytestAdmissibility(versions=("8.3.5",), source="fixture",
+                                       owner_ratified=True)
+        res = _results(declared_python_minor=(3, 10), admissibility=ratified,
+                       test_requirements=["pytest==8.4.1"])
+        assert res["status"] == "CONFLICT"
+        assert "outside the ratified set" in res["detail"]
+
+    def test_range_only_requirement_resolves_to_a_concrete_version(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       test_requirements=["pytest>=8.0,<9"])
+        assert res["status"] == "VALID"
+        assert res["rule"] == "RULE_A_DECLARED_CONSTRAINT"
+        assert res["version"] == "8.4.2"          # highest ratified release in range
+        assert res["pin"] == "pytest==8.4.2"
+
+    def test_wildcard_equality_is_intersected(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       test_requirements=["pytest==8.3.*"])
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+
+    def test_compatible_release_operator_is_intersected(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       test_requirements=["pytest~=8.3.0"])
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+
+    def test_exclusion_constraint_is_intersected(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       test_requirements=["pytest>=8,<9,!=8.4.0,!=8.4.1,!=8.4.2"])
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+
+    @pytest.mark.parametrize("order", [
+        ["pytest==8.3.5", "pytest>=8"],
+        ["pytest>=8", "pytest==8.3.5"],
+    ])
+    def test_exact_pin_with_range_is_order_independent(self, order) -> None:
+        res = _results(declared_python_minor=(3, 10), test_requirements=order)
+        assert res["status"] == "VALID"
+        assert (res["version"], res["rule"]) == ("8.3.5", "RULE_A_EXPLICIT_PROJECT_PIN")
+
+    def test_conflicting_declarations_are_refused_with_a_trace(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       test_requirements=["pytest==8.3.5", "pytest==8.4.1"])
+        assert res["status"] == "CONFLICT"
+        assert "conflicting project pytest pins" in res["detail"]
+        assert "pytest==8.4.1" in res["detail"]
+
+    def test_malformed_requirement_is_refused(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       test_requirements=["pytest[unclosed"])
+        assert res["status"] == "CONFLICT" and "unparsable" in res["detail"]
+
+    def test_direct_reference_is_refused_not_guessed(self) -> None:
+        res = _results(
+            declared_python_minor=(3, 10),
+            test_requirements=["pytest @ https://example.invalid/pytest-8.3.5-py3-none-any.whl"])
+        assert res["status"] == "CONFLICT"
+        assert "direct reference" in res["detail"]
+
+    def test_missing_python_minor_is_refused(self) -> None:
+        res = _results(test_requirements=["pytest==8.3.5"])
+        assert res["status"] == "CONFLICT"
+        assert "declared Python minor is required" in res["detail"]
+
+    def test_python_minor_outside_the_matrix_is_refused(self) -> None:
+        res = _results(declared_python_minor=(3, 15))
+        assert res["status"] == "CONFLICT"
+        assert "no compatibility fallback available" in res["detail"]
+
+    def test_declaration_in_project_dependencies(self) -> None:
+        res = _results(declared_python_minor=(3, 10),
+                       runtime_dependencies=["pytest==8.3.5", "requests"])
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+
+    def test_declaration_in_optional_dependencies(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "fixture"\n'
+            '[project.optional-dependencies]\ntest = ["pytest==8.4.1"]\n',
+            encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID" and res["version"] == "8.4.1"
+        assert res["source"].endswith("optional-dependencies].test")
+
+    def test_declaration_in_dependency_group_with_include(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "fixture"\n'
+            '[dependency-groups]\ntest = ["pytest==8.3.5"]\n'
+            'dev = [{include-group = "test"}]\n',
+            encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+
+    def test_declaration_in_setup_cfg_test_requirements(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "setup.cfg").write_text(
+            "[options.extras_require]\ntest =\n    pytest==8.3.5\n",
+            encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+        assert res["source"].startswith("setup.cfg:")
+
+    def test_declaration_in_tox_ini(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "tox.ini").write_text(
+            "[testenv]\ndeps =\n    pytest==8.4.1\n", encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID" and res["version"] == "8.4.1"
+        assert res["source"].startswith("tox.ini:")
+
+    def test_declaration_in_static_setup_py(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "setup.py").write_text(
+            "from setuptools import setup\n"
+            "setup(name='fixture', install_requires=['pytest==8.3.5'])\n",
+            encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+        assert res["source"].startswith("setup.py:")
+
+    def test_dynamic_setup_py_declaration_fails_closed(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "setup.py").write_text(
+            "from setuptools import setup\n"
+            "def reqs():\n    return ['pytest==8.3.5']\n"
+            "setup(name='fixture', install_requires=reqs())\n",
+            encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "CONFLICT"
+        assert "setup_py_dynamic_declaration" in res["detail"]
+
+    def test_dynamic_project_dependencies_fail_closed(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            '[project]\nname = "fixture"\ndynamic = ["dependencies"]\n',
+            encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "CONFLICT"
+        assert "dynamic_declaration_unsupported" in res["detail"]
+
+    def test_nested_requirements_include_is_followed(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "test-requirements.txt").write_text(
+            "-r base-test.txt\n", encoding="utf-8")
+        (tmp_path / "base-test.txt").write_text("pytest==8.4.1\n", encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID" and res["version"] == "8.4.1"
+
+    def test_lockfile_outside_the_ratified_set_is_refused(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "uv.lock").write_text(
+            'version = 1\n[[package]]\nname = "pytest"\nversion = "9.1.1"\n',
+            encoding="utf-8")
+        ratified = PytestAdmissibility(versions=("8.3.5", "8.4.1"), source="fixture",
+                                       owner_ratified=True)
+        res = _results(project=tmp_path, declared_python_minor=(3, 10),
+                       admissibility=ratified)
+        assert res["status"] == "CONFLICT"
+        assert "outside the ratified set" in res["detail"]
+
+    def test_lockfile_resolution_governs_when_valid(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "uv.lock").write_text(
+            'version = 1\n[[package]]\nname = "pytest"\nversion = "8.3.5"\n',
+            encoding="utf-8")
+        (tmp_path / "test-requirements.txt").write_text("pytest>=8\n", encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID"
+        assert res["rule"] == "RULE_A_LOCKFILE_RESOLUTION"
+        assert res["version"] == "8.3.5"
+
+    def test_lockfile_violating_a_declaration_is_refused(self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "uv.lock").write_text(
+            'version = 1\n[[package]]\nname = "pytest"\nversion = "8.3.5"\n',
+            encoding="utf-8")
+        (tmp_path / "test-requirements.txt").write_text("pytest==8.4.1\n", encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "CONFLICT"
+        assert "violates the declared constraint" in res["detail"]
+
+    def test_exact_pin_conflict_with_a_group_declaration(self) -> None:
+        """The python__mypy pattern: adjustment pin vs the project's own pin."""
+        res = _results(declared_python_minor=(3, 10),
+                       adjustment={"pytest_pin": "pytest==8.3.5"},
+                       test_requirements=["pytest==8.4.1"])
+        assert res["status"] == "CONFLICT"
+
+    def test_python_minor_conflict_with_a_range(self) -> None:
+        """The conan-io pattern: a range that cannot run on the declared minor."""
+        res = _results(declared_python_minor=(3, 7),
+                       test_requirements=["pytest>=8.4"])
+        assert res["status"] == "CONFLICT"
+        assert "(3, 7)" in res["detail"]
+
+    def test_unlicensed_dynamic_problem_is_never_silently_dropped(
+            self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "requirements.txt").write_text(
+            "-r missing-file.txt\n", encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "CONFLICT"
+        assert "requirements_include_missing" in res["detail"]
+
+    def test_evidence_records_sources_hashes_and_intersection(
+            self, tmp_path: pathlib.Path) -> None:
+        (tmp_path / "test-requirements.txt").write_text("pytest>=8,<9\n", encoding="utf-8")
+        res = _results(project=tmp_path, declared_python_minor=(3, 10))
+        assert res["status"] == "VALID"
+        assert res["intersection"] == "<9,>=8"
+        assert res["candidates"] == ["8.3.5", "8.4.0", "8.4.1", "8.4.2"]
+        assert res["declarations"][0]["source"] == "test-requirements.txt"
+        assert len(res["declarations"][0]["sha256"]) == 64
+        assert res["declaration_sources"][0]["kind"] == "requirements_file"
+        assert res["metadata_snapshot"]["id"]
+        assert res["admissibility"]["owner_ratified"] is False
+
+    def test_a_valid_result_always_carries_a_concrete_pin(self) -> None:
+        for kwargs in (
+            {"test_requirements": ["pytest>=8"]},
+            {"test_requirements": ["pytest"]},
+            {"test_requirements": ["pytest~=8.4.0"]},
+        ):
+            res = _results(declared_python_minor=(3, 10), **kwargs)
+            assert res["status"] == "VALID"
+            assert res["version"], kwargs
+            assert res["pin"] == f"pytest=={res['version']}"
+
+
+class TestAdmissibilityGate:
+    """Technical compatibility is NOT admissibility."""
+
+    @staticmethod
+    def _ratified(tmp_path: pathlib.Path, versions, *,
+                  ratified_by="test-fixture", tamper=None):
+        """A policy + provenance + evidence triple, exactly as the owner records it."""
+        from qwen_train.f2_s8_pytest_policy import (
+            ADMISSIBILITY_EVIDENCE_SCHEMA, ADMISSIBILITY_PROVENANCE_SCHEMA,
+        )
+
+        evidence_dir = tmp_path / "evidence"
+        evidence_dir.mkdir(exist_ok=True)
+        records = []
+        for role in ("population_scan", "release_metadata"):
+            artifact = evidence_dir / f"{role}.json"
+            artifact.write_text(json.dumps({"role": role}), encoding="utf-8")
+            digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            if tamper == "evidence" and role == "release_metadata":
+                digest = "0" * 64          # binds bytes that are not there
+            records.append({"role": role, "path": str(artifact),
+                            "sha256": digest,
+                            "schema": ADMISSIBILITY_EVIDENCE_SCHEMA})
+        policy_path = tmp_path / "pytest-policy.json"
+        policy_path.write_text(json.dumps({
+            "schema": ADMISSIBILITY_SCHEMA,
+            "ratified_by": ratified_by,
+            "versions": list(versions),
+        }), encoding="utf-8")
+        policy_digest = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+        provenance_path = tmp_path / "pytest-policy-provenance.json"
+        if tamper == "policy":
+            policy_digest = "0" * 64
+        authority = "someone-else" if tamper == "authority" else ratified_by
+        provenance_path.write_text(json.dumps({
+            "schema": ADMISSIBILITY_PROVENANCE_SCHEMA,
+            "ratified_by": authority,
+            "policy": {"path": str(policy_path), "sha256": policy_digest},
+            "evidence": records,
+        }), encoding="utf-8")
+        return policy_path, provenance_path
+
+    def test_unratified_policy_is_refused_at_the_execution_boundary(self) -> None:
+        from qwen_train.f2_s8_pytest_policy import OPERATIVE_PYTEST_ADMISSIBILITY
+
+        res = _results(declared_python_minor=(3, 10),
+                       admissibility=OPERATIVE_PYTEST_ADMISSIBILITY,
+                       require_owner_ratification=True)
+        assert res["status"] == "ADMISSIBILITY_NOT_RATIFIED"
+        assert "D1" in res["detail"]
+
+    def test_a_ratified_policy_document_is_hash_bound(self, tmp_path: pathlib.Path) -> None:
+        policy_path, provenance_path = self._ratified(tmp_path, ["8.3.5"])
+        policy = load_pytest_admissibility(
+            policy_path, provenance_path=provenance_path)
+        assert policy.owner_ratified is True
+        assert len(policy.sha256) == 64
+        res = _results(declared_python_minor=(3, 10),
+                       admissibility=policy, require_owner_ratification=True,
+                       test_requirements=["pytest>=8"])
+        assert res["status"] == "VALID" and res["version"] == "8.3.5"
+
+    def test_a_policy_without_provenance_is_refused(self, tmp_path: pathlib.Path) -> None:
+        policy_path, _ = self._ratified(tmp_path, ["8.3.5"])
+        with pytest.raises(Exception, match="provenance missing"):
+            load_pytest_admissibility(
+                policy_path, provenance_path=tmp_path / "absent.json")
+
+    def test_provenance_binding_a_different_policy_is_refused(
+            self, tmp_path: pathlib.Path) -> None:
+        policy_path, provenance_path = self._ratified(
+            tmp_path, ["8.3.5"], tamper="policy")
+        with pytest.raises(Exception, match="policy digest mismatch"):
+            load_pytest_admissibility(
+                policy_path, provenance_path=provenance_path)
+
+    def test_changed_evidence_is_refused(self, tmp_path: pathlib.Path) -> None:
+        policy_path, provenance_path = self._ratified(
+            tmp_path, ["8.3.5"], tamper="evidence")
+        with pytest.raises(Exception, match="evidence .* digest mismatch"):
+            load_pytest_admissibility(
+                policy_path, provenance_path=provenance_path)
+
+    def test_a_ratifying_authority_mismatch_is_refused(
+            self, tmp_path: pathlib.Path) -> None:
+        policy_path, provenance_path = self._ratified(
+            tmp_path, ["8.3.5"], tamper="authority")
+        with pytest.raises(Exception, match="ratifying authority"):
+            load_pytest_admissibility(
+                policy_path, provenance_path=provenance_path)
+
+    def test_a_policy_naming_an_unverified_release_is_refused(
+            self, tmp_path: pathlib.Path) -> None:
+        policy_path, provenance_path = self._ratified(tmp_path, ["99.99.99"])
+        with pytest.raises(Exception, match="unverified release"):
+            load_pytest_admissibility(
+                policy_path, provenance_path=provenance_path)
+
+
+class TestInstalledVersionEnforcement:
+    """R1-A 10: the INSTALLED version is asserted, not assumed."""
+
+    def test_installed_version_is_read_from_distribution_metadata(
+            self, monkeypatch) -> None:
+        import importlib.metadata
+
+        real = importlib.metadata.version("pytest")
+        captured: dict[str, object] = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = real + "\n"
+            stderr = ""
+
+        def _fake_run(args, **kwargs):
+            captured["args"] = args
+            return _Proc()
+
+        monkeypatch.setattr(B.subprocess, "run", _fake_run)
+        installed = B.installed_pytest_version(sys.executable)
+        assert installed == real
+        # it asks the INSTALLED DISTRIBUTION database, in the target interpreter
+        assert captured["args"][0] == str(sys.executable)
+        assert "importlib.metadata" in captured["args"][2]
+        evidence = B.assert_installed_pytest(sys.executable, installed)
+        assert evidence["matches"] is True
+        assert evidence["source"] == "importlib.metadata"
+
+    def test_plugin_induced_drift_is_refused(self, monkeypatch) -> None:
+        """The measured awslabs__mcp-1154 pattern: 8.3.5 requested, 9.1.1 found."""
+        monkeypatch.setattr(B, "installed_pytest_version", lambda python: "9.1.1")
+        with pytest.raises(RuntimeError, match="PYTEST_INSTALLED_DRIFT"):
+            B.assert_installed_pytest(sys.executable, "8.3.5")
+        assert B.classify_build_failure(
+            RuntimeError("PYTEST_INSTALLED_DRIFT: x")) == "PYTEST_INSTALLED_DRIFT"
+
+    def test_an_empty_approved_version_is_refused(self) -> None:
+        with pytest.raises(RuntimeError, match="PYTEST_INSTALLED_UNVERIFIABLE"):
+            B.assert_installed_pytest(sys.executable, "")
+
+    def test_a_missing_pytest_installation_is_unverifiable(self, monkeypatch) -> None:
+        class _Proc:
+            returncode = 3
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr(B.subprocess, "run", lambda *a, **k: _Proc())
+        with pytest.raises(RuntimeError, match="PYTEST_INSTALLED_UNVERIFIABLE"):
+            B.installed_pytest_version(sys.executable)
+
+    def test_approved_pytest_requirement_refuses_an_unresolved_selection(self) -> None:
+        with pytest.raises(RuntimeError, match="PYTEST_PIN_UNRESOLVED"):
+            B.approved_pytest_requirement({"status": "VALID", "version": None})
+        assert B.approved_pytest_requirement({"version": "8.3.5"}) == "pytest==8.3.5"
+
+
+class TestDedicatedUvExecution:
+    """R1-B: a uv-owned dry run uses the verified executable, never PATH."""
+
+    def _uv_stub(self, directory: pathlib.Path, text: str) -> pathlib.Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        stub = directory / "uv.cmd"
+        stub.write_text(f"@echo {text}\r\n", encoding="utf-8")
+        return stub
+
+    def test_dedicated_executable_is_selected(self, tmp_path: pathlib.Path) -> None:
+        approved = self._uv_stub(tmp_path / "approved", "APPROVED")
+        digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+        plan = DRY.prepare_uv_execution("uv run pytest -q", uv_path=approved,
+                                        expected_sha256=digest)
+        assert pathlib.Path(plan["argv"][0]) == approved
+        assert plan["argv"][1:] == ["run", "pytest", "-q"]
+        assert plan["uv_sha256"] == digest
+
+    def test_invalid_dedicated_executable_is_rejected(self, tmp_path: pathlib.Path) -> None:
+        approved = self._uv_stub(tmp_path / "approved", "APPROVED")
+        with pytest.raises(RuntimeError, match="BUILDER_TOOL_CORRUPT"):
+            DRY.prepare_uv_execution("uv run pytest", uv_path=approved,
+                                     expected_sha256="deadbeef" * 8)
+
+    def test_missing_dedicated_executable_is_reported(self, tmp_path: pathlib.Path) -> None:
+        with pytest.raises(FileNotFoundError, match="BUILDER_TOOL_UNAVAILABLE"):
+            DRY.prepare_uv_execution("uv run pytest",
+                                     uv_path=tmp_path / "missing" / "uv.exe")
+
+    def test_ambient_path_executable_cannot_hijack(self, tmp_path: pathlib.Path,
+                                                   monkeypatch) -> None:
+        approved = self._uv_stub(tmp_path / "approved", "APPROVED")
+        digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+        ambient = self._uv_stub(tmp_path / "ambient", "AMBIENT")
+        marker = tmp_path / "ambient-ran.txt"
+        ambient.write_text(f'@echo AMBIENT> "{marker}"\r\n', encoding="utf-8")
+        monkeypatch.setenv(
+            "PATH", str(ambient.parent) + os.pathsep + os.environ.get("PATH", ""))
+
+        recorded: dict[str, object] = {}
+
+        class _Proc:
+            returncode = 0
+            stdout = "APPROVED\n"
+            stderr = ""
+
+        def _fake_run(args, **kwargs):
+            recorded["args"] = args
+            recorded["env"] = kwargs.get("env") or {}
+            return _Proc()
+
+        # The suite's global fixture patches subprocess.Popen, so the production
+        # path is exercised through its process-launcher seam: the captured argv
+        # is EXACTLY what would be executed.
+        monkeypatch.setattr(DRY.subprocess, "run", _fake_run)
+        result = DRY.run_test(
+            python="", repo=tmp_path, test_cmd="uv run pytest",
+            junit=tmp_path / "out.xml", timeout=60, uv_offline=True,
+            uv_path=approved, uv_sha256=digest)
+
+        argv = list(recorded["args"])
+        assert pathlib.Path(argv[0]) == approved
+        assert pathlib.Path(argv[0]).read_text(encoding="utf-8").strip() == "@echo APPROVED"
+        assert str(ambient.parent) not in recorded["env"]["PATH"].split(os.pathsep)
+        assert result["execution"]["uv_sha256"] == digest
+        assert not marker.exists(), "the ambient uv stub was invoked"
+        assert ambient.read_text(encoding="utf-8").startswith("@echo AMBIENT")
+
+    def test_shell_metacharacter_command_is_refused(self, tmp_path: pathlib.Path) -> None:
+        approved = self._uv_stub(tmp_path / "approved", "APPROVED")
+        digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+        with pytest.raises(RuntimeError, match="UV_EXECUTION_UNSAFE_COMMAND"):
+            DRY.prepare_uv_execution("uv run pytest && echo hi", uv_path=approved,
+                                     expected_sha256=digest)
+
+    def test_non_uv_command_is_refused(self, tmp_path: pathlib.Path) -> None:
+        approved = self._uv_stub(tmp_path / "approved", "APPROVED")
+        digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+        with pytest.raises(RuntimeError, match="does not start with uv"):
+            DRY.prepare_uv_execution("pytest -q", uv_path=approved,
+                                     expected_sha256=digest)
+
+    def test_windows_path_with_spaces_is_preserved(self, tmp_path: pathlib.Path) -> None:
+        approved = self._uv_stub(tmp_path / "approved", "APPROVED")
+        digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+        plan = DRY.prepare_uv_execution(
+            'uv run pytest "tests/with space/test_a.py::test_b"',
+            uv_path=approved, expected_sha256=digest)
+        assert plan["argv"][-1] == "tests/with space/test_a.py::test_b"
+
+    def test_dry_run_result_records_the_uv_identity(self, tmp_path: pathlib.Path,
+                                                    monkeypatch) -> None:
+        approved = self._uv_stub(tmp_path / "approved", "APPROVED")
+        digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+
+        class _Proc:
+            returncode = 0
+            stdout = "APPROVED\n"
+            stderr = ""
+
+        monkeypatch.setattr(DRY.subprocess, "run", lambda *a, **k: _Proc())
+        (tmp_path / "repo").mkdir()
+        result = DRY.run_test(
+            python="", repo=tmp_path / "repo", test_cmd="uv run pytest -q",
+            junit=tmp_path / "out.xml", timeout=60, uv_offline=True,
+            uv_path=approved, uv_sha256=digest)
+        assert result["execution"]["mode"] == "argv"
+        assert result["execution"]["uv_sha256"] == digest
+        assert pathlib.Path(result["execution"]["uv_path"]) == approved
+
+class TestExactPinAgainstExclusions:
+    """An exact pin is honoured only when it is itself admissible."""
+
+    def test_exact_pin_excluded_by_its_own_exclusion_is_refused(self) -> None:
+        res = select_pytest_version(
+            declared_python_minor=(3, 10),
+            test_requirements=["pytest==8.4.1", "pytest!=8.4.1", "pytest>=8.3"])
+        assert res["status"] == "CONFLICT"
+        assert "contradicts the declared constraint" in res["detail"]
+
+    def test_a_range_that_admits_the_exact_pin_still_selects_it(self) -> None:
+        res = select_pytest_version(
+            declared_python_minor=(3, 10),
+            test_requirements=["pytest==8.4.1", "pytest>=8.3", "pytest!=8.3.5"])
+        assert res["status"] == "VALID" and res["version"] == "8.4.1"

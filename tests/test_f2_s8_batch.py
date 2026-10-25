@@ -567,6 +567,9 @@ REAL_TASKS = (
     "Tuxemon__Tuxemon-3068",
     "pgmpy__pgmpy-2314",
     "sdv-dev__SDV-2656",
+    # Added 2026-10-23 with the phase-1 retry batch admissions:
+    "Archmonger__django-dbbackup-631",
+    "QuantEcon__QuantEcon.py-797",
 )
 
 
@@ -584,9 +587,10 @@ class TestCrossChainPolicyWithRealChains:
         out = real(REAL_CHAINS, REAL_TASKS)
         # Figures below are the CURRENT ledger truth, not a frozen historical
         # literal: the chains are append-only and the r4 batch appended three
-        # admissions on 2026-10-19. They are cross-checked against an independent
-        # derivation from the raw ledgers (see the test immediately following), so
-        # updating them is never a matter of trusting the reconciler about itself.
+        # admissions on 2026-10-19, and the phase-1 retry appended two admissions
+        # on 2026-10-23. They are cross-checked against an independent derivation
+        # from the raw ledgers (see the test immediately following), so updating
+        # them is never a matter of trusting the reconciler about itself.
         #
         # NOTE (definition): credited_count is the COUNTING-RULE union -- every
         # admitted scientific record across the registered chains, each task once
@@ -594,19 +598,9 @@ class TestCrossChainPolicyWithRealChains:
         # figure as the RFC-Reading-A "accepted credit" count, which additionally
         # requires the owning BATCH to pass its post-audit; three r4 admissions are
         # ledger-admitted and counted here but are not accepted credits.
-        assert out["operative_admitted"] == [
-            "Tuxemon__Tuxemon-3068",
-            "networkx__networkx-8211",
-            "openai__openai-agents-python-1601",
-            "openai__openai-agents-python-1633",
-            "openai__openai-agents-python-1636",
-            "pgmpy__pgmpy-2314",
-            "python__mypy-19767",
-            "sdv-dev__SDV-2656",
-        ]
-        assert out["credited_count"] == 9
-        assert out["credited_admitted"] == sorted([
-            "HypothesisWorks__hypothesis-4532",
+        assert sorted(out["operative_admitted"]) == sorted([
+            "Archmonger__django-dbbackup-631",
+            "QuantEcon__QuantEcon.py-797",
             "Tuxemon__Tuxemon-3068",
             "networkx__networkx-8211",
             "openai__openai-agents-python-1601",
@@ -616,7 +610,21 @@ class TestCrossChainPolicyWithRealChains:
             "python__mypy-19767",
             "sdv-dev__SDV-2656",
         ])
-        assert 300 - out["credited_count"] == 291
+        assert out["credited_count"] == 11
+        assert out["credited_admitted"] == sorted([
+            "Archmonger__django-dbbackup-631",
+            "HypothesisWorks__hypothesis-4532",
+            "QuantEcon__QuantEcon.py-797",
+            "Tuxemon__Tuxemon-3068",
+            "networkx__networkx-8211",
+            "openai__openai-agents-python-1601",
+            "openai__openai-agents-python-1633",
+            "openai__openai-agents-python-1636",
+            "pgmpy__pgmpy-2314",
+            "python__mypy-19767",
+            "sdv-dev__SDV-2656",
+        ])
+        assert 300 - out["credited_count"] == 289
         assert out["corrections_verified"] == 1
         assert out["refused_terminal_override"] == []
         assert out["unregistered_admitted"] == []
@@ -658,7 +666,7 @@ class TestCrossChainPolicyWithRealChains:
         monkeypatch.setattr(B, "GRANDFATHERED_CORRECTION_TASK_IDS", frozenset())
         out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
         # the corrected task is refused, so the union loses exactly that one credit
-        assert out["credited_count"] == 8
+        assert out["credited_count"] == 10
         assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
         assert [r["task_id"] for r in out["refused_terminal_override"]] == [
             "HypothesisWorks__hypothesis-4532"]
@@ -940,7 +948,7 @@ class TestGrandfatherExceptionAndRegisteredTopology:
             B, "GRANDFATHERED_CORRECTION_TASK_IDS",
             frozenset({"HypothesisWorks__hypothesis-4532-2"}))
         out = B.reconcile_admissions_across_chains(REAL_CHAINS, REAL_TASKS)
-        assert out["credited_count"] == 8
+        assert out["credited_count"] == 10
         assert "HypothesisWorks__hypothesis-4532" not in out["credited_admitted"]
         assert [r["task_id"] for r in out["refused_terminal_override"]] == [
             "HypothesisWorks__hypothesis-4532"]

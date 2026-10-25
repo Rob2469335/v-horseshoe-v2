@@ -56,10 +56,41 @@ from packaging.version import InvalidVersion, Version
 from qwen_train.f2_population_acquire import SOURCES, load_acquired
 from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_registration import REGISTRATION_ID, eligible, is_pytest_command
+#: The pytest version policy (release catalogue, admissibility, static
+#: declaration collection and the fail-closed resolver) lives in its own module;
+#: the build boundary applies it.  Re-exported here because this is the module
+#: the builder and the tests have always imported the policy from.
+#:
+#: Import direction: this module imports the policy, and the policy imports this
+#: module only INSIDE its functions, so there is no import cycle.
+from qwen_train.f2_s8_pytest_policy import (
+    DEFAULT_PYTEST_PIN,
+    PYTEST_COMPATIBILITY_FALLBACK,
+    PYTEST_RELEASE_METADATA,
+    PytestAdmissibility,
+    PytestPolicyError,
+    collect_pytest_declarations,
+    find_explicit_project_pytest_pins,
+    load_pytest_admissibility,
+    require_ratified_pytest_admissibility,
+    resolve_pytest_admissibility,
+    select_pytest_version,
+)
 
 __all__ = [
     "ACQUISITION_SCHEMA",
     "AcquisitionError",
+    "DEFAULT_PYTEST_PIN",
+    "PYTEST_COMPATIBILITY_FALLBACK",
+    "PYTEST_RELEASE_METADATA",
+    "PytestAdmissibility",
+    "PytestPolicyError",
+    "collect_pytest_declarations",
+    "find_explicit_project_pytest_pins",
+    "load_pytest_admissibility",
+    "require_ratified_pytest_admissibility",
+    "resolve_pytest_admissibility",
+    "select_pytest_version",
     "TaskInputs",
     "BUILDER_SOURCE",
     "TEST_DEPENDENCY_SOURCE_NAMES",
@@ -186,7 +217,6 @@ DECLARED_ADJUSTMENTS: dict[str, dict[str, Any]] = {
     },
 }
 
-DEFAULT_PYTEST_PIN = "pytest==8.3.5"
 
 
 class AcquisitionError(Exception):
@@ -2331,314 +2361,8 @@ def declared_test_requirements(
     }
 
 
-#: Fixed, verified PyPI release metadata for pytest versions admitted by policy.
-#: Retrieved: 2026-10-22 from https://pypi.org/pypi/pytest/json
-PYTEST_RELEASE_METADATA: dict[str, dict[str, Any]] = {
-    "7.0.1": {
-        "version": "7.0.1",
-        "requires_python": ">=3.6",
-        "pypi_url": "https://pypi.org/pypi/pytest/7.0.1/json",
-        "retrieved_utc": "2026-10-22T12:00:00Z",
-        "admitted_minors": [(3, 6), (3, 7), (3, 8), (3, 9), (3, 10)],
-    },
-    "7.4.4": {
-        "version": "7.4.4",
-        "requires_python": ">=3.7",
-        "pypi_url": "https://pypi.org/pypi/pytest/7.4.4/json",
-        "retrieved_utc": "2026-10-22T12:00:00Z",
-        "admitted_minors": [(3, 7), (3, 8), (3, 9), (3, 10), (3, 11), (3, 12)],
-    },
-    "8.3.5": {
-        "version": "8.3.5",
-        "requires_python": ">=3.8",
-        "pypi_url": "https://pypi.org/pypi/pytest/8.3.5/json",
-        "retrieved_utc": "2026-10-22T12:00:00Z",
-        "admitted_minors": [(3, 8), (3, 9), (3, 10), (3, 11), (3, 12), (3, 13), (3, 14)],
-    },
-    "8.4.1": {
-        "version": "8.4.1",
-        "requires_python": ">=3.9",
-        "pypi_url": "https://pypi.org/pypi/pytest/8.4.1/json",
-        "retrieved_utc": "2026-10-22T12:00:00Z",
-        "admitted_minors": [(3, 9), (3, 10), (3, 11), (3, 12), (3, 13), (3, 14)],
-    },
-    "8.4.2": {
-        "version": "8.4.2",
-        "requires_python": ">=3.9",
-        "pypi_url": "https://pypi.org/pypi/pytest/8.4.2/json",
-        "retrieved_utc": "2026-10-22T12:00:00Z",
-        "admitted_minors": [(3, 9), (3, 10), (3, 11), (3, 12), (3, 13), (3, 14)],
-    },
-    "9.1.1": {
-        "version": "9.1.1",
-        "requires_python": ">=3.10",
-        "pypi_url": "https://pypi.org/pypi/pytest/9.1.1/json",
-        "retrieved_utc": "2026-10-22T12:00:00Z",
-        "admitted_minors": [(3, 10), (3, 11), (3, 12), (3, 13), (3, 14), (3, 15)],
-    },
-}
-
-#: Deterministic compatibility fallback table when Python minor < 3.8 and no project pin exists.
-PYTEST_COMPATIBILITY_FALLBACK: dict[tuple[int, int], str] = {
-    (3, 6): "pytest==7.0.1",
-    (3, 7): "pytest==7.4.4",
-}
-
-DEFAULT_PYTEST_PIN = "pytest==8.3.5"
-
-
-def find_explicit_project_pytest_pins(
-    project: Path | None = None,
-    dependency_inputs: Mapping[str, Any] | None = None,
-    test_requirements: Sequence[str] | None = None,
-) -> list[tuple[str, str]]:
-    """Extract explicit project-declared pytest requirements/pins and their sources.
-
-    Returns a list of (source_name, raw_requirement_str).
-    """
-    found: list[tuple[str, str]] = []
-    if test_requirements is not None:
-        for req in test_requirements:
-            text = str(req).strip()
-            try:
-                r = Requirement(text)
-                if canonicalize_name(r.name) == "pytest":
-                    found.append(("test_requirements", text))
-            except Exception:
-                if text.lower().startswith("pytest"):
-                    found.append(("test_requirements", text))
-        return found
-
-    if project is not None or dependency_inputs is not None:
-        declared = declared_test_requirements(
-            dependency_inputs or {}, project=project, auto=True
-        )
-        for req in declared.get("requirements") or ():
-            text = str(req).strip()
-            try:
-                r = Requirement(text)
-                if canonicalize_name(r.name) == "pytest":
-                    src_name = "declared_test_requirements"
-                    for src in declared.get("sources") or ():
-                        if src.get("name"):
-                            src_name = src["name"]
-                            break
-                    found.append((src_name, text))
-            except Exception:
-                if text.lower().startswith("pytest"):
-                    found.append(("declared_test_requirements", text))
-    return found
-
-
-def select_pytest_version(
-    project: Path | None = None,
-    declared_python_minor: tuple[int, int] | int = (3, 10),
-    dependency_inputs: Mapping[str, Any] | None = None,
-    adjustment: Mapping[str, Any] | None = None,
-    test_requirements: Sequence[str] | None = None,
-) -> dict[str, Any]:
-    """Deterministic pytest version selection policy for Experiment J-F2 S8.
-
-    Precedence:
-    1. Rule A (Explicit Project/Adjustment Pin):
-       If the project metadata or task adjustment explicitly pins or constrains pytest,
-       honor that exact declaration subject to Python minor compatibility. If multiple
-       conflicting pins exist or the pin contradicts the declared Python minor,
-       fail closed with status='CONFLICT'.
-    2. Rule B (Default Pin):
-       If no explicit project pin exists and the declared Python minor >= 3.8, use
-       pytest==8.3.5 (Requires-Python: >=3.8).
-    3. Rule C (Compatibility Fallback):
-       If no explicit project pin exists and the declared Python minor < 3.8, select
-       the newest verified release admitting that minor from the fixed metadata table
-       (e.g. pytest==7.4.4 for 3.7; pytest==7.0.1 for 3.6).
-    """
-    if isinstance(declared_python_minor, tuple):
-        py_minor = (int(declared_python_minor[0]), int(declared_python_minor[1]))
-    else:
-        py_minor = (3, int(declared_python_minor))
-
-    # Check adjustment pin first (Rule A - task adjustment)
-    if adjustment and adjustment.get("pytest_pin"):
-        adj_pin = str(adjustment["pytest_pin"]).strip()
-        try:
-            r = Requirement(adj_pin)
-            version_str = ""
-            for spec in r.specifier:
-                if spec.operator in ("==", "==="):
-                    version_str = spec.version
-                    break
-            if version_str:
-                meta = PYTEST_RELEASE_METADATA.get(version_str)
-                if not meta:
-                    return {
-                        "pin": adj_pin,
-                        "version": version_str,
-                        "rule": "RULE_A_ADJUSTMENT_PIN",
-                        "source": "adjustment",
-                        "declared_python_minor": py_minor,
-                        "status": "CONFLICT",
-                        "detail": f"unknown or unverified pytest version {version_str} in adjustment",
-                    }
-                req_py = meta["requires_python"]
-                if not SpecifierSet(req_py).contains(f"{py_minor[0]}.{py_minor[1]}"):
-                    return {
-                        "pin": adj_pin,
-                        "version": version_str,
-                        "rule": "RULE_A_ADJUSTMENT_PIN",
-                        "source": "adjustment",
-                        "declared_python_minor": py_minor,
-                        "status": "CONFLICT",
-                        "detail": f"adjustment pin {adj_pin} requires {req_py} which rejects Python {py_minor}",
-                    }
-            return {
-                "pin": adj_pin,
-                "version": version_str or None,
-                "rule": "RULE_A_ADJUSTMENT_PIN",
-                "source": "adjustment",
-                "declared_python_minor": py_minor,
-                "requires_python": PYTEST_RELEASE_METADATA.get(version_str, {}).get("requires_python", ""),
-                "status": "VALID",
-                "detail": None,
-            }
-        except InvalidRequirement as exc:
-            return {
-                "pin": adj_pin,
-                "version": None,
-                "rule": "RULE_A_ADJUSTMENT_PIN",
-                "source": "adjustment",
-                "declared_python_minor": py_minor,
-                "status": "CONFLICT",
-                "detail": f"invalid adjustment pin {adj_pin!r}: {exc}",
-            }
-
-    # Check explicit project pin (Rule A - project metadata)
-    project_pins = find_explicit_project_pytest_pins(
-        project=project,
-        dependency_inputs=dependency_inputs,
-        test_requirements=test_requirements,
-    )
-    if project_pins:
-        distinct_reqs = {p[1] for p in project_pins}
-        parsed_versions = []
-        for src, req_str in project_pins:
-            try:
-                r = Requirement(req_str)
-                v = None
-                for spec in r.specifier:
-                    if spec.operator in ("==", "==="):
-                        v = spec.version
-                        break
-                parsed_versions.append((src, req_str, v))
-            except Exception as exc:
-                return {
-                    "pin": req_str,
-                    "version": None,
-                    "rule": "RULE_A_EXPLICIT_PROJECT_PIN",
-                    "source": src,
-                    "declared_python_minor": py_minor,
-                    "status": "CONFLICT",
-                    "detail": f"unparsable project pytest pin {req_str!r}: {exc}",
-                }
-        exact_versions = {v for _, _, v in parsed_versions if v is not None}
-        if len(exact_versions) > 1:
-            return {
-                "pin": list(distinct_reqs)[0],
-                "version": None,
-                "rule": "RULE_A_EXPLICIT_PROJECT_PIN",
-                "source": "multiple",
-                "declared_python_minor": py_minor,
-                "status": "CONFLICT",
-                "detail": f"conflicting project pytest pins: {sorted(exact_versions)}",
-            }
-
-        src, req_str, v = parsed_versions[0]
-        if v is not None:
-            meta = PYTEST_RELEASE_METADATA.get(v)
-            if not meta:
-                return {
-                    "pin": req_str,
-                    "version": v,
-                    "rule": "RULE_A_EXPLICIT_PROJECT_PIN",
-                    "source": src,
-                    "declared_python_minor": py_minor,
-                    "status": "CONFLICT",
-                    "detail": f"missing or unverified metadata for pytest version {v}",
-                }
-            req_py = meta["requires_python"]
-            if not SpecifierSet(req_py).contains(f"{py_minor[0]}.{py_minor[1]}"):
-                return {
-                    "pin": req_str,
-                    "version": v,
-                    "rule": "RULE_A_EXPLICIT_PROJECT_PIN",
-                    "source": src,
-                    "declared_python_minor": py_minor,
-                    "requires_python": req_py,
-                    "status": "CONFLICT",
-                    "detail": f"project pin {req_str} requires {req_py} which rejects Python {py_minor}",
-                }
-            return {
-                "pin": req_str,
-                "version": v,
-                "rule": "RULE_A_EXPLICIT_PROJECT_PIN",
-                "source": src,
-                "declared_python_minor": py_minor,
-                "requires_python": req_py,
-                "status": "VALID",
-                "detail": None,
-            }
-        else:
-            return {
-                "pin": req_str,
-                "version": None,
-                "rule": "RULE_A_EXPLICIT_PROJECT_PIN",
-                "source": src,
-                "declared_python_minor": py_minor,
-                "requires_python": "",
-                "status": "VALID",
-                "detail": None,
-            }
-
-    # Rule B: Default pin pytest==8.3.5 when supported (Python >= 3.8)
-    if py_minor >= (3, 8):
-        meta = PYTEST_RELEASE_METADATA["8.3.5"]
-        return {
-            "pin": DEFAULT_PYTEST_PIN,
-            "version": "8.3.5",
-            "rule": "RULE_B_DEFAULT_PIN",
-            "source": "default",
-            "declared_python_minor": py_minor,
-            "requires_python": meta["requires_python"],
-            "status": "VALID",
-            "detail": None,
-        }
-
-    # Rule C: Deterministic compatibility fallback when Python < 3.8
-    if py_minor in PYTEST_COMPATIBILITY_FALLBACK:
-        fallback_pin = PYTEST_COMPATIBILITY_FALLBACK[py_minor]
-        ver = fallback_pin.split("==")[1]
-        meta = PYTEST_RELEASE_METADATA[ver]
-        return {
-            "pin": fallback_pin,
-            "version": ver,
-            "rule": "RULE_C_PYTHON_COMPATIBILITY_FALLBACK",
-            "source": f"PYTEST_COMPATIBILITY_FALLBACK[{py_minor}]",
-            "declared_python_minor": py_minor,
-            "requires_python": meta["requires_python"],
-            "status": "VALID",
-            "detail": None,
-        }
-
-    return {
-        "pin": "",
-        "version": None,
-        "rule": "RULE_C_PYTHON_COMPATIBILITY_FALLBACK",
-        "source": "none",
-        "declared_python_minor": py_minor,
-        "requires_python": "",
-        "status": "CONFLICT",
-        "detail": f"no compatibility fallback available for Python minor {py_minor}",
-    }
+#: The pytest version policy now lives in
+#: :mod:`qwen_train.f2_s8_pytest_policy` (imported at the top of this module).
 
 
 def builder_install_plan(

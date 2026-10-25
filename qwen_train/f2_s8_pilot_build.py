@@ -28,7 +28,9 @@ import stat
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+
+from packaging.version import Version
 
 from qwen_train.f2_population_build import source_to_screen_row
 from qwen_train.f2_evaluator import analyze_test_invocation
@@ -38,12 +40,14 @@ from qwen_train.f2_s8_acquisition import (
     DEFAULT_PYTEST_PIN,
     INTERPRETER_SEARCH_ROOTS,
     PREFERRED_PYTHON_MINORS,
+    PytestPolicyError,
     builder_install_plan,
     declared_required_version,
     declared_test_requirements,
     discover_interpreters,
     project_install_context,
     repo_url_for,
+    require_ratified_pytest_admissibility,
     require_unprivileged_identity,
     requires_python,
     resolve_task_project_root,
@@ -163,6 +167,31 @@ DEFAULT_UV_PATH = Path(r"C:\f2_pilot\tools\uv.exe")
 UV_APPROVED_SHA256 = "92fcafc6f7512ec3a0fb42bf6bf84730737252c6d3d7cae4f6f97678d746da3a"
 
 
+def _is_ephemeral_fixture_path(p_posix: str) -> bool:
+    """True for the ephemeral directories a TEST creates under the owner profile.
+
+    The profile-isolation guard exists so ``f2builder`` never depends on ACLs in
+    the owner's personal profile.  A pytest temporary directory is not such a
+    dependency: pytest creates it for the test process and removes it
+    afterwards.  The previous marker list (``pytest_tmp``) never matched
+    pytest's real layout (``.../pytest-of-<user>/pytest-<n>/...``), so every
+    Windows run of the uv-path tests tripped the guard instead of exercising the
+    digest check it was testing.
+
+    The exemption is deliberately narrow: named fixture roots plus pytest's own
+    two temp-directory naming schemes.  A durable profile path -- including the
+    owner's ``.local/bin`` -- still raises.
+    """
+    for part in p_posix.split("/"):
+        if part in ("f2_evidence", "f2_scratch", "pytest_tmp"):
+            return True
+        if part.startswith("pytest-of-"):
+            return True
+        if re.fullmatch(r"pytest-\d+", part):
+            return True
+    return False
+
+
 def resolve_and_verify_uv(
     custom_path: Path | str | None = None,
     expected_sha256: str | None = None,
@@ -202,8 +231,7 @@ def resolve_and_verify_uv(
             or p_posix.startswith(f_posix + "/")
             or "c:/users/rober" in p_posix
         )
-        is_fixture = any(part in ("f2_evidence", "f2_scratch", "pytest_tmp") for part in p_posix.split("/"))
-        if is_owner_profile and not is_fixture:
+        if is_owner_profile and not _is_ephemeral_fixture_path(p_posix):
             raise RuntimeError(
                 f"PROFILE_ISOLATION_VIOLATION: uv path {p} is located within user profile {forbidden}; "
                 f"f2builder must use dedicated tools directory"
@@ -366,22 +394,98 @@ def command_plugins(test_cmd: str) -> list[str]:
 def effective_pytest_pin(
     adjustment: Mapping[str, Any],
     project: Path | None = None,
-    declared_python_minor: tuple[int, int] | int = (3, 10),
+    declared_python_minor: Any = None,
+    *,
+    runtime_dependencies: Sequence[str] = (),
 ) -> str:
-    """The pytest requirement the installer will use for one task.
+    """The CONCRETE pytest requirement the installer will use for one task.
 
-    Delegates to :func:`select_pytest_version` in ``f2_s8_acquisition`` to implement
-    the deterministic precedence: Rule A (project/adjustment pin) -> Rule B (default 8.3.5)
-    -> Rule C (compatibility fallback).
+    Delegates to :func:`select_pytest_version` and therefore inherits its
+    fail-closed contract: a range-only declaration resolves to a specific
+    release, and a missing interpreter minor is refused rather than defaulted.
+    An unresolved result can never come back from here.
     """
     sel = select_pytest_version(
         project=project,
         declared_python_minor=declared_python_minor,
         adjustment=adjustment,
+        runtime_dependencies=runtime_dependencies,
     )
-    if sel.get("status") == "CONFLICT":
+    if sel.get("status") != "VALID" or not sel.get("version"):
         raise RuntimeError(f"PROJECT_PIN_CONFLICT: {sel.get('detail')}")
-    return str(sel["pin"])
+    return approved_pytest_requirement(sel)
+
+
+def approved_pytest_requirement(selection: Mapping[str, Any]) -> str:
+    """The exact ``pytest==X.Y.Z`` requirement a VALID selection authorises.
+
+    A selection without a concrete version is NOT a pin: returning one would
+    let pip install whatever it liked while the manifest claimed a policy.
+    """
+    version = str(selection.get("version") or "").strip()
+    if not version:
+        raise RuntimeError(
+            "PYTEST_PIN_UNRESOLVED: the selection carries no concrete pytest "
+            f"version (status={selection.get('status')!r}); refusing to install "
+            "an unpinned pytest")
+    return f"pytest=={version}"
+
+
+def installed_pytest_version(python: str | Path, *, timeout: int = 300) -> str:
+    """The version of the pytest distribution INSTALLED in ``python``'s env.
+
+    Read through ``importlib.metadata`` (the installed-distribution database),
+    not by parsing ``pip list`` text and not from the requirement that was
+    requested: a plugin or the project itself can upgrade pytest after the
+    approved pin was installed, and only the installed metadata shows that.
+    """
+    code = (
+        "import importlib.metadata as m\n"
+        "try:\n"
+        "    print(m.version('pytest'))\n"
+        "except m.PackageNotFoundError:\n"
+        "    raise SystemExit(3)\n"
+    )
+    proc = subprocess.run([str(python), "-c", code],
+                          capture_output=True, text=True, timeout=timeout)
+    if proc.returncode == 3:
+        raise RuntimeError(
+            f"PYTEST_INSTALLED_UNVERIFIABLE: pytest is not installed in {python}")
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"PYTEST_INSTALLED_UNVERIFIABLE: cannot read installed pytest from "
+            f"{python} (rc={proc.returncode}): {proc.stderr[-500:]}")
+    return proc.stdout.strip()
+
+
+def assert_installed_pytest(
+    python: str | Path, approved_version: str, *,
+    label: str = "",
+) -> dict[str, Any]:
+    """Fail closed unless the INSTALLED pytest is the approved release.
+
+    Returns the evidence record written into the manifest.  ``tests`` exercise
+    the failure paths; the build calls this after every installation phase.
+    """
+    if not str(approved_version or "").strip():
+        raise RuntimeError("PYTEST_INSTALLED_UNVERIFIABLE: no approved version")
+    installed = installed_pytest_version(python)
+    same = Version(installed) == Version(approved_version)
+    evidence = {
+        "label": label,
+        "approved_version": str(approved_version),
+        "installed_version": installed,
+        "source": "importlib.metadata",
+        "matches": same,
+    }
+    if not same:
+        # The measured drift case: awslabs__mcp-1154 asked for pytest 8.3.5 and
+        # pytest 9.1.1 was observably installed afterwards.
+        raise RuntimeError(
+            f"PYTEST_INSTALLED_DRIFT: approved pytest {approved_version} but "
+            f"{installed} is installed in {python}"
+            + (f" ({label})" if label else ""))
+    return evidence
 
 
 def run(cmd, *, cwd=None, timeout=3600, check=True):
@@ -413,22 +517,36 @@ def _requires_python(project: Path) -> tuple[tuple[int, int], tuple[int, int]] |
 
 _DISCOVERED_INTERPRETERS: dict[tuple[tuple[int, int], ...] | None, list[str]] = {}
 
-#: OWNER-RATIFIED environment sidecar (owner decision 2026-10-20).  Read-only
-#: input; the builder never writes it.  Only records with status ``ratified``
-#: are usable.  ``proposed`` is explicitly NOT accepted: correct hashes are an
-#: integrity property, not an authorization.
+#: OWNER-RATIFIED environment sidecar.  Read-only input; the builder never
+#: writes it.  Only records with status ``ratified`` are usable.  ``proposed`` is
+#: explicitly NOT accepted: correct hashes are an integrity property, not an
+#: authorization.
+#:
+#: The 2026-10-22 revision supersedes the 2026-10-20 file: it carries the same
+#: 11 declarations verbatim and adds 12 declaration-derived ones (8 built tasks
+#: keep the minor their interpreter reports; 4 proposed tasks use their own
+#: ``requires-python`` lower bound).  The older file and its provenance are left
+#: untouched in F2_SCRATCH; this sidecar's provenance binds it as the superseded
+#: source.
 DECLARED_ENVIRONMENTS_SIDECAR = Path(
     os.environ.get("F2_S8_DECLARED_ENVIRONMENTS_SIDECAR")
-    or r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_20261020.json"
+    or r"C:\Users\rober\F2_EVIDENCE\s8\declared_environments\declared_environments_ratified_20261022.json"
 )
 DECLARED_ENVIRONMENTS_PROVENANCE = Path(
     os.environ.get("F2_S8_DECLARED_ENVIRONMENTS_PROVENANCE")
-    or r"C:\Users\rober\F2_SCRATCH\s8_v3_20261020_204847\declared_environments_ratified_provenance_20261020.json"
+    or r"C:\Users\rober\F2_EVIDENCE\s8\declared_environments\declared_environments_ratified_provenance_20261022.json"
 )
 _SIDECAR_SCHEMA = "f2-s8-declared-environments/v2"
 _PROVENANCE_SCHEMA = "f2-s8-declared-environments-provenance/v2"
 _EVIDENCE_SCHEMA = "f2-s8-live-image-map/v1"
+#: Declaration-derived evidence for tasks that have NO container image.  The
+#: record states, per task, the declared ``requires-python`` and the interpreter
+#: that satisfies it -- facts read from the project tree, not an image config.
+EVIDENCE_SCHEMA_DECLARATION = "f2-s8-declared-environment-evidence/v2"
+_POLICY_EVIDENCE_SCHEMAS = (_EVIDENCE_SCHEMA, EVIDENCE_SCHEMA_DECLARATION)
 _OLD_SIDECAR_SCHEMA = "f2-s8-declared-environments/v1"
+#: A supersession chain may start from either prior version of the sidecar.
+_OLD_SIDECAR_SCHEMAS = (_OLD_SIDECAR_SCHEMA, _SIDECAR_SCHEMA)
 _SIDECAR_RATIFIED_STATUS = "ratified"
 _SIDECAR_BLOCKED_STATUS = "blocked_conflict"
 _SIDECAR_REJECTED_STATUSES = ("proposed",)
@@ -491,8 +609,16 @@ def _strict_json(text: str, what: str):
         raise DeclaredEnvironmentError(f"{what}: malformed JSON: {exc}") from exc
 
 
-def _check_bound(defn: dict, key: str, expected_schema: str, what: str) -> Path:
-    """Validate one {path, sha256, schema} binding and return the path."""
+def _check_bound_any(defn: dict, key: str, expected_schemas: Sequence[str],
+                     what: str) -> Path:
+    """Validate one {path, sha256, schema} binding against ACCEPTED schemas.
+
+    The evidence model has two legitimate shapes: the image-derived map
+    (``f2-s8-live-image-map/v1``) and the declaration-derived record
+    (``f2-s8-declared-environment-evidence/v2``) used for tasks that have no
+    container image.  A supersession chain may also start from either version of
+    the previous sidecar, so both are accepted -- but nothing else is.
+    """
     rec = defn.get(key)
     if not isinstance(rec, dict):
         raise DeclaredEnvironmentError(f"provenance.{key} is not an object")
@@ -501,9 +627,9 @@ def _check_bound(defn: dict, key: str, expected_schema: str, what: str) -> Path:
         raise DeclaredEnvironmentError(f"{what} missing: {p}")
     if _sha256_file(p) != rec.get("sha256"):
         raise DeclaredEnvironmentError(f"{what} digest mismatch: {p}")
-    if rec.get("schema") != expected_schema:
+    if rec.get("schema") not in tuple(expected_schemas):
         raise DeclaredEnvironmentError(
-            f"{what} schema {rec.get('schema')!r} != {expected_schema!r}")
+            f"{what} schema {rec.get('schema')!r} not in {tuple(expected_schemas)!r}")
     return p
 
 
@@ -513,10 +639,11 @@ def load_declared_environments(
 ) -> dict[str, str]:
     """Validated {task_id: minor} from the RATIFIED sidecar, or raise.
 
-    Integrity is bound to the ACTUAL bytes of the sidecar, of the old (proposed)
-    sidecar it was derived from, and of the policy evidence, all via the
-    provenance record.  Authorization is separate: only ``ratified`` records are
-    usable, whatever their hashes say.
+    Integrity is bound to the ACTUAL bytes of the sidecar, of the previous
+    ratified sidecar it supersedes, and of the evidence the declarations rest on
+    (an image map, or the declaration-derived record for tasks with no image),
+    all via the provenance record.  Authorization is separate: only ``ratified``
+    records are usable, whatever their hashes say.
     """
     sp = Path(sidecar or DECLARED_ENVIRONMENTS_SIDECAR)
     pv = Path(provenance or DECLARED_ENVIRONMENTS_PROVENANCE)
@@ -542,8 +669,10 @@ def load_declared_environments(
     if _sha256_file(sp) != side_rec.get("sha256"):
         raise DeclaredEnvironmentError("sidecar digest mismatch")
 
-    _check_bound(prov, "source_old_sidecar", _OLD_SIDECAR_SCHEMA, "source old sidecar")
-    _check_bound(prov, "policy_evidence", _EVIDENCE_SCHEMA, "policy evidence")
+    _check_bound_any(prov, "source_old_sidecar", _OLD_SIDECAR_SCHEMAS,
+                     "source old sidecar")
+    _check_bound_any(prov, "policy_evidence", _POLICY_EVIDENCE_SCHEMAS,
+                     "policy evidence")
 
     body = _strict_json(sp.read_text(encoding="utf-8"), "sidecar")
     if body.get("schema") != _SIDECAR_SCHEMA:
@@ -730,17 +859,292 @@ def _rmtree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+#: Historical location of preserved workspaces.  The current implementation
+#: derives it from the workspace root inside :func:`preserve_previous_workspace`,
+#: so a different root (a test, another host) keeps its evidence beside its own
+#: workspaces.
+PRESERVED_WORKSPACES = ROOT / "_preserved_workspaces"
+
+
+def preserve_previous_workspace(
+    ws: Path, *, root: Path | None = None, reason: str = "retry",
+) -> str | None:
+    """Move an existing workspace ASIDE; never delete the previous attempt.
+
+    The builder used to ``rmtree`` ``repo``, ``repo_gold`` and the venvs at the
+    start of every build.  A retry therefore destroyed the only copy of the
+    artifacts that explain why the previous attempt failed -- the workspace, its
+    install plan and any partial logs -- so "three attempts" could silently
+    mean "three attempts' evidence for one".  Preserving is also the
+    non-destructive direction: a failed move raises instead of falling back to
+    a delete.
+
+    Only a workspace strictly inside ``root`` (default :data:`ROOT`) may be
+    moved; anything else is refused, so a mistyped path can never relocate a
+    tree outside the pilot root.
+    """
+    workspace = Path(ws)
+    if not workspace.exists():
+        return None
+    root_path = Path(root if root is not None else ROOT).resolve()
+    try:
+        workspace.resolve().relative_to(root_path)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"WORKSPACE_PRESERVATION_REFUSED: {workspace} is not inside {root_path}"
+        ) from exc
+    preserved_root = root_path / "_preserved_workspaces"
+    preserved_root.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    destination = preserved_root / f"{workspace.name}.{reason}.{stamp}"
+    suffix = 1
+    while destination.exists():
+        destination = preserved_root / f"{workspace.name}.{reason}.{stamp}.{suffix}"
+        suffix += 1
+    shutil.move(str(workspace), str(destination))
+    return str(destination)
+
+
+_PERMIT_UNAUTHORIZED_STUB_BUILD: bool = False
+
+#: Repository root, used only to locate the independently-read registration
+#: artifacts.  Never used as an authorization source.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_REGISTRATION_FILE = REPO_ROOT / "data/f2_population/registration/registered_tasks.json"
+DEFAULT_REGISTRATION_MANIFEST = (
+    REPO_ROOT / "qwen_train/curriculum/f2_registration/registration_manifest.json"
+)
+
+
+def _stub_build_permitted() -> bool:
+    """The unauthorized-stub escape hatch is test-only.
+
+    A production process cannot enable it through an environment variable or
+    configuration; even the module global only takes effect inside a running
+    pytest test, so an in-process flip outside a test still fails closed.
+    """
+    return _PERMIT_UNAUTHORIZED_STUB_BUILD and bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _independent_production_binding(
+    *,
+    task_id: str | None,
+    manifest_file: Path | str | None,
+    registration_file: Path | str | None,
+    registration_manifest_file: Path | str | None,
+) -> dict[str, str]:
+    """Recompute every production binding from the artifacts the build consumes.
+
+    The signed record is never the source of the expected value: the build
+    manifest and registration artifacts are read here and hashed.  The task is
+    scoped to the signed manifest's task set.
+    """
+    mf = Path(
+        manifest_file
+        or os.environ.get("F2_BUILD_MANIFEST")
+        or (ROOT / "build_manifest.json")
+    )
+    rf = Path(
+        registration_file
+        or os.environ.get("F2_REGISTRATION_FILE")
+        or DEFAULT_REGISTRATION_FILE
+    )
+    rmf = Path(
+        registration_manifest_file
+        or os.environ.get("F2_REGISTRATION_MANIFEST_FILE")
+        or DEFAULT_REGISTRATION_MANIFEST
+    )
+    for label, path in (
+        ("build manifest", mf),
+        ("registration file", rf),
+        ("registration manifest", rmf),
+    ):
+        if not path.is_file():
+            raise RuntimeError(f"BUILD_NOT_AUTHORIZED: {label} missing: {path}")
+    try:
+        manifest_doc = json.loads(mf.read_text("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - unreadable manifest is fail-closed
+        raise RuntimeError(
+            f"BUILD_NOT_AUTHORIZED: unparseable build manifest: {exc}"
+        ) from exc
+    if not isinstance(manifest_doc, Mapping):
+        raise RuntimeError("BUILD_NOT_AUTHORIZED: build manifest is not an object")
+    if task_id and task_id not in manifest_doc:
+        raise RuntimeError(
+            f"BUILD_NOT_AUTHORIZED: task {task_id!r} not in the signed build manifest"
+        )
+    try:
+        provenance = json.loads(rmf.read_text("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - unreadable provenance is fail-closed
+        raise RuntimeError(
+            f"BUILD_NOT_AUTHORIZED: unparseable registration manifest: {exc}"
+        ) from exc
+    content_digest = str(
+        provenance.get("registration_content_sha256")
+        if isinstance(provenance, Mapping)
+        else ""
+    )
+    if len(content_digest) != 64 or any(
+        c not in "0123456789abcdef" for c in content_digest
+    ):
+        raise RuntimeError(
+            "BUILD_NOT_AUTHORIZED: registration manifest has no 64-hex "
+            "registration_content_sha256"
+        )
+    return {
+        "candidate_manifest_digest": _sha256_file(mf),
+        "registration_sha256": content_digest,
+        "registration_manifest_sha256": _sha256_file(rf),
+    }
+
+
+def _verify_build_authorization(
+    grant_path: Path | str | None = None,
+    *,
+    task_id: str | None = None,
+    authorized_run: Any | None = None,
+    manifest_file: Path | str | None = None,
+    registration_file: Path | str | None = None,
+    registration_manifest_file: Path | str | None = None,
+) -> Mapping[str, Any]:
+    """Verify an authorization grant for building a task, or fail closed.
+
+    Enforces that untrusted build backend hooks (pip install, uv sync) cannot
+    run without a cryptographically valid authorization grant for stage S8-001
+    and that the target task is inside the authorized selection.
+    """
+    if authorized_run is not None:
+        from qwen_train.f2_s8_v2_gate import (
+            S8ProbeAuthorizedRun,
+            check_probe_grant_still_valid,
+        )
+
+        if isinstance(authorized_run, S8ProbeAuthorizedRun):
+            if task_id and task_id not in authorized_run.selected_task_ids:
+                raise RuntimeError(
+                    f"BUILD_NOT_AUTHORIZED: task {task_id!r} not in authorized probe selection"
+                )
+            check_probe_grant_still_valid(authorized_run)
+            return dict(authorized_run.record)
+        if hasattr(authorized_run, "task_ids") and task_id:
+            if task_id not in authorized_run.task_ids:
+                raise RuntimeError(
+                    f"BUILD_NOT_AUTHORIZED: task {task_id!r} not in authorized task_ids"
+                )
+        if hasattr(authorized_run, "record"):
+            return dict(authorized_run.record)
+        return {"id": getattr(authorized_run, "grant_id", "")}
+
+    grant = grant_path or os.environ.get("F2_AUTHORIZATION_FILE")
+    if not grant or not Path(grant).is_file():
+        raise RuntimeError("BUILD_NOT_AUTHORIZED: missing or unreadable authorization grant file")
+
+    gp = Path(grant)
+    try:
+        doc = json.loads(gp.read_text("utf-8"))
+        rec = doc.get("record") if isinstance(doc, dict) and "record" in doc else doc
+    except Exception as exc:
+        raise RuntimeError(f"BUILD_NOT_AUTHORIZED: unparseable grant file: {exc}") from exc
+
+    ops = rec.get("operations") or []
+    is_probe = "build_probe" in ops or (
+        rec.get("schema") == "f2-authorization/v2" and rec.get("target_credited") == 0
+    )
+
+    if is_probe:
+        from qwen_train.f2_s8_v2_gate import authorize_s8_probe_run
+
+        reg_file = (
+            os.environ.get("F2_REGISTRATION_FILE")
+            or "data/f2_population/registration/registered_tasks.json"
+        )
+        compat_file = (
+            os.environ.get("F2_COMPAT_REPORT_FILE")
+            or "data/f2_population/plugin_compat/plugin_compat_report.json"
+        )
+        auth_run = authorize_s8_probe_run(
+            grant_path=gp,
+            registration_file=reg_file,
+            compat_report_file=compat_file,
+            # Verification is not execution: it must not reserve probe budget.
+            reserve_execution=False,
+        )
+        if task_id and task_id not in auth_run.selected_task_ids:
+            raise RuntimeError(
+                f"BUILD_NOT_AUTHORIZED: task {task_id!r} not in authorized probe selection"
+            )
+        return dict(auth_run.record)
+    else:
+        from qwen_train.f2_authorization import verify_authorization
+
+        if "base_gold_production" not in ops:
+            raise RuntimeError(
+                f"BUILD_NOT_AUTHORIZED: grant does not authorise S8-001 build operations (ops={ops!r})"
+            )
+        binding = _independent_production_binding(
+            task_id=task_id,
+            manifest_file=manifest_file,
+            registration_file=registration_file,
+            registration_manifest_file=registration_manifest_file,
+        )
+        verified = verify_authorization(
+            gp,
+            stage="S8-001",
+            operation="base_gold_production",
+            binding=binding,
+        )
+        return verified
+
+
 def build(task_id: str, url: str, *, inputs: Path = INPUTS,
           patches: Path = PATCHES,
-          declared_python_minor: str | int | None = None) -> dict:
+          declared_python_minor: str | int | None = None,
+          grant_file: Path | str | None = None,
+          authorized_run: Any | None = None,
+          manifest_file: Path | str | None = None,
+          registration_file: Path | str | None = None,
+          registration_manifest_file: Path | str | None = None) -> dict:
     rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
     base_commit = rec["base_commit"]
     ws = ROOT / task_id
     repo = ws / "repo"
     gold_repo = ws / "repo_gold"
 
-    _rmtree(repo)
-    _rmtree(gold_repo)
+    # Fail closed BEFORE the workspace is touched or anything is cloned: the
+    # pytest policy is an owner decision (D1) and no build may proceed under an
+    # unratified one.  Doing this first also means a blocked build cannot rotate
+    # a previous attempt's preserved evidence.
+    try:
+        require_ratified_pytest_admissibility()
+    except PytestPolicyError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    # The interpreter minor is an INPUT, never a default: an unparseable or
+    # absent declaration must fail closed instead of silently becoming (3, 10).
+    # Checked here, with the policy gate, so neither deterministic refusal can
+    # rotate a previous attempt's preserved evidence.
+    py_minor = declared_minor_tuple(declared_python_minor)
+    if py_minor is None:
+        raise DeclaredInterpreterError(
+            f"declared Python minor is missing or unparseable: "
+            f"{declared_python_minor!r}; refusing to assume a policy value")
+
+    # Fail closed BEFORE the workspace is touched or anything is cloned:
+    # a direct call to build() must not be able to prepare or execute a workspace
+    # without an authorized S8 grant.
+    if not _stub_build_permitted():
+        _verify_build_authorization(
+            grant_file,
+            task_id=task_id,
+            authorized_run=authorized_run,
+            manifest_file=manifest_file,
+            registration_file=registration_file,
+            registration_manifest_file=registration_manifest_file,
+        )
+
+    # Preserve, do not delete: a retry must not overwrite the evidence that
+    # explains the previous attempt (R1-D).
+    preserved = preserve_previous_workspace(ws)
     ws.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
@@ -784,22 +1188,24 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # so an adjustment naming ``test`` installed nothing beyond the pytest
     # plugins that happen to live there.
     adjustment: dict[str, Any] = dict(DECLARED_ADJUSTMENTS.get(task_id, {}))
-    py_minor = (
-        declared_python_minor
-        if isinstance(declared_python_minor, tuple)
-        else (3, declared_python_minor)
-    )
     ctx = project_install_context(project)
     # Deterministic pytest version selection according to Rule A / B / C.
+    # Every declaration source (project deps, extras, groups, Poetry/Hatch,
+    # setup.cfg, setup.py, tox.ini, requirements files and the lockfile) is
+    # intersected, and the OWNER-RATIFIED admissibility gate is enforced here.
     pytest_sel = select_pytest_version(
         project=project,
         declared_python_minor=py_minor,
         dependency_inputs=ctx["dependency_inputs"],
         adjustment=adjustment,
+        runtime_dependencies=ctx["runtime_dependencies"],
+        require_owner_ratification=True,
     )
+    if pytest_sel.get("status") == "ADMISSIBILITY_NOT_RATIFIED":
+        raise RuntimeError(str(pytest_sel.get("detail")))
     if pytest_sel.get("status") == "CONFLICT":
         raise RuntimeError(f"PROJECT_PIN_CONFLICT: {pytest_sel.get('detail')}")
-    pin = pytest_sel["pin"]
+    pin = approved_pytest_requirement(pytest_sel)
     # UNION the plugins the project's OWN pytest configuration demands.  The
     # hard-coded table above is keyed by instance id and goes stale the moment a
     # DIFFERENT instance of the same project is built (the phase-2 set contains
@@ -836,7 +1242,6 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     if not uses_uv:
         for label, proj in (("base", project), ("gold", gold_project)):
             venv = ws / (".venv" if label == "base" else ".venv_gold")
-            _rmtree(venv)
             run([base_python, "-m", "venv", str(venv)])
             vpy = venv / "Scripts" / "python.exe"
             run([str(vpy), "-m", "pip", "install", "--quiet",
@@ -890,8 +1295,15 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
             plan["declared_test_problems"] = declared["problems"]
             install_plan[label] = plan
             if plan["plugin_requirements"]:
+                # ``pin`` is repeated on EVERY install command.  A plugin's own
+                # metadata can require a newer pytest (the measured
+                # ``awslabs__mcp-1154`` case: 8.3.5 requested, 9.1.1 observed
+                # afterwards), so the approved constraint has to be part of each
+                # resolution -- not only the first one.  pip then either keeps
+                # the approved release or fails on an impossible intersection.
                 run([str(vpy), "-m", "pip", "install", "--quiet",
-                     "--disable-pip-version-check", *plan["plugin_requirements"]],
+                     "--disable-pip-version-check", pin,
+                     *plan["plugin_requirements"]],
                     timeout=3600)
             # Declared test dependencies go in beside the plugins, BEFORE the
             # editable install, which is the pairing the PyPA dependency-groups
@@ -904,11 +1316,12 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
                 for constraint_file in declared.get("constraints") or ():
                     constraint_args.extend(["-c", str(constraint_file)])
                 run([str(vpy), "-m", "pip", "install", "--quiet",
-                     "--disable-pip-version-check", *constraint_args,
+                     "--disable-pip-version-check", *constraint_args, pin,
                      *plan["test_requirements"]],
                     timeout=3600)
             run([str(vpy), "-m", "pip", "install", "--quiet",
-                 "--disable-pip-version-check", "-e", str(proj)], timeout=3600)
+                 "--disable-pip-version-check", pin, "-e", str(proj)],
+                timeout=3600)
             # The plan above records what was ASKED for; this records what pip
             # actually RESOLVED (name + version of every installed distribution).
             # Without it a manifest digest cannot be checked against a later
@@ -927,6 +1340,18 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
             except Exception as exc:  # noqa: BLE001 - observational, must not mask a real build error
                 plan["resolved_distributions"] = {}
                 plan["resolved_distributions_error"] = str(exc)[:500]
+            # Post-install drift protection (R1-A items 9-11): the version that
+            # is INSTALLED must be the approved one.  This runs after the last
+            # install of the side, so a plugin or the project upgrading pytest
+            # afterwards is caught here instead of being discovered as an
+            # unexplained outcome difference.
+            plan["pytest_enforcement"] = {
+                "approved_requirement": pin,
+                "applied_to": ["pytest_baseline", "plugins",
+                               "declared_test_requirements", "editable_project"],
+                **assert_installed_pytest(vpy, pytest_sel["version"],
+                                          label=f"{task_id}:{label}"),
+            }
             envs[label] = str(vpy)
 
     # Syncing here -- on the acquisition host, with the network -- populates the
@@ -955,12 +1380,26 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
                     f"the installed uv is {installed!r}; UV_TOOLCHAIN_INCOMPATIBLE")
         # Sync in the RESOLVED project root, not blindly at the repo root: a
         # monorepo's lockfile belongs to the subproject.
-        for tree in (project, gold_project):
+        uv_enforcement: dict[str, Any] = {}
+        for label, tree in (("base", project), ("gold", gold_project)):
             # Pin uv to the SAME interpreter this builder selected. Without
             # --python, uv discovers its own (newest) interpreter and chose
             # CPython 3.15 for a >=3.13 task, where psycopg-binary has no wheel.
             run([str(uv_exe), "sync", "--frozen", "--all-extras",
                  "--python", base_python], cwd=tree, timeout=3600)
+            # uv owns this environment, so the approved pytest is whatever the
+            # governing lockfile resolved -- and that is exactly what has to be
+            # verified here rather than assumed from the lock.
+            env_python = (tree / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+                          / ("python.exe" if os.name == "nt" else "python"))
+            if not env_python.is_file():
+                raise RuntimeError(
+                    f"PYTEST_INSTALLED_UNVERIFIABLE: uv sync did not create "
+                    f"{env_python}; the approved pytest {pytest_sel['version']} "
+                    "cannot be verified")
+            uv_enforcement[label] = assert_installed_pytest(
+                env_python, pytest_sel["version"], label=f"{task_id}:{label}:uv")
+        uv_evidence["pytest_enforcement"] = uv_enforcement
 
     return {
         "task_id": task_id, "base_commit": base_commit, "workspace": str(ws),
@@ -984,6 +1423,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
         # pre-check never recomputes, so a stale workspace passed silently.
         "builder": BUILDER_SOURCE,
         "pytest_selection": pytest_sel,
+        "preserved_previous_workspace": preserved,
         "uv_evidence": uv_evidence,
         "requires_python": list(_requires_python(project)) if _requires_python(project) else None,
         "elapsed_s": int(time.time() - t0),
@@ -1033,12 +1473,27 @@ def classify_build_failure(exc: BaseException) -> str:
     if isinstance(exc, subprocess.TimeoutExpired):
         return "BUILD_TIMEOUT"
     msg = str(exc)
+    if "BUILD_NOT_AUTHORIZED" in msg:
+        return "BUILD_NOT_AUTHORIZED"
     if "BUILDER_TOOL_UNAVAILABLE" in msg or "uv executable not found" in msg:
         return "BUILDER_TOOL_UNAVAILABLE"
     if "BUILDER_TOOL_CORRUPT" in msg or "SHA-256 mismatch" in msg:
         return "BUILDER_TOOL_CORRUPT"
     if "PROFILE_ISOLATION_VIOLATION" in msg:
         return "PROFILE_ISOLATION_VIOLATION"
+    # R1-A: the pytest policy boundary.  These are DETERMINISTIC build-policy
+    # reasons -- retrying changes nothing until the owner decision, the tool or
+    # the project's declarations change.
+    if "PYTEST_ADMISSIBILITY_NOT_RATIFIED" in msg:
+        return "PYTEST_ADMISSIBILITY_NOT_RATIFIED"
+    if "PYTEST_PIN_UNRESOLVED" in msg:
+        return "PYTEST_PIN_UNRESOLVED"
+    if "PYTEST_INSTALLED_DRIFT" in msg:
+        return "PYTEST_INSTALLED_DRIFT"
+    if "PYTEST_INSTALLED_UNVERIFIABLE" in msg:
+        return "PYTEST_INSTALLED_UNVERIFIABLE"
+    if "WORKSPACE_PRESERVATION_REFUSED" in msg:
+        return "WORKSPACE_PRESERVATION_REFUSED"
     if "PROJECT_PIN_CONFLICT" in msg or "conflicting declarations for pytest" in msg:
         return "PROJECT_PIN_CONFLICT"
     if "PYTHON_FLOOR_INCOMPATIBLE" in msg:
@@ -1087,6 +1542,9 @@ def classify_build_failure(exc: BaseException) -> str:
     return "BUILD_FAILURE_UNCLASSIFIED"
 
 
+_REAL_BUILD = build
+
+
 def main(argv=None) -> int:
     # Fail closed BEFORE anything repository-controlled can run: this stage
     # pip-installs the task, which executes its build backend.
@@ -1098,9 +1556,41 @@ def main(argv=None) -> int:
                     help="task record directory (one <task_id>.json per task)")
     ap.add_argument("--patches", default=str(PATCHES),
                     help="directory holding <task_id>.test_patch / .gold_patch")
+    ap.add_argument("--grant-file", default=os.environ.get("F2_AUTHORIZATION_FILE"),
+                    help="Path to signed S8 authorization grant file")
+    ap.add_argument("--registration-file",
+                    default=os.environ.get("F2_REGISTRATION_FILE")
+                    or str(DEFAULT_REGISTRATION_FILE),
+                    help="registration id list whose real bytes the grant binds")
+    ap.add_argument("--registration-manifest",
+                    default=os.environ.get("F2_REGISTRATION_MANIFEST_FILE")
+                    or str(DEFAULT_REGISTRATION_MANIFEST),
+                    help="registration provenance manifest (content digest source)")
     args = ap.parse_args(argv)
 
+    grant_file = args.grant_file
     ids = args.task_ids or list(REPOS)
+
+    # Live execution requires a verified authorization grant.
+    # Unit tests that explicitly set _PERMIT_UNAUTHORIZED_STUB_BUILD without
+    # executing builds are permitted to exercise manifest logic.
+    if not _stub_build_permitted():
+        if not grant_file or not Path(grant_file).is_file():
+            print("BUILD_NOT_AUTHORIZED: missing or unreadable authorization grant file", flush=True)
+            return 2
+
+        try:
+            for tid in ids:
+                _verify_build_authorization(
+                    grant_file,
+                    task_id=tid,
+                    manifest_file=args.manifest,
+                    registration_file=args.registration_file,
+                    registration_manifest_file=args.registration_manifest,
+                )
+        except Exception as exc:
+            print(f"BUILD_NOT_AUTHORIZED: {exc}", flush=True)
+            return 2
     manifest_path = Path(args.manifest)
     inputs = Path(args.inputs)
     patches = Path(args.patches)
@@ -1114,7 +1604,22 @@ def main(argv=None) -> int:
     # manifest is the Stage-1 deliverable the grant binds; it must not accumulate
     # entries this authorization did not name.
     carried_forward: list[str] = []
+    archived_manifest: str | None = None
     if manifest_path.is_file():
+        # Preserve, never overwrite: the file is replaced at the end of the run,
+        # so an unarchived copy would be the only record of the previous
+        # attempt's result.  The archive name is chosen to be free; an existing
+        # archive is never reused or deleted.
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        archive = manifest_path.with_name(
+            f"{manifest_path.stem}.previous-{stamp}{manifest_path.suffix}")
+        suffix = 1
+        while archive.exists():
+            archive = manifest_path.with_name(
+                f"{manifest_path.stem}.previous-{stamp}.{suffix}{manifest_path.suffix}")
+            suffix += 1
+        shutil.copy2(manifest_path, archive)
+        archived_manifest = str(archive)
         try:
             previous = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 - unreadable is not a licence to merge
@@ -1122,6 +1627,8 @@ def main(argv=None) -> int:
         if isinstance(previous, dict):
             requested = set(ids)
             carried_forward = sorted(str(k) for k in previous if k not in requested)
+    if archived_manifest:
+        print(f"ARCHIVED previous manifest -> {archived_manifest}", flush=True)
     if carried_forward:
         print(
             "NOT CARRIED FORWARD (not part of this run, so not part of the manifest "
@@ -1140,6 +1647,10 @@ def main(argv=None) -> int:
             entry = build(
                 task_id, url, inputs=inputs, patches=patches,
                 declared_python_minor=_declared_minor_for(task_id, inputs),
+                grant_file=grant_file,
+                manifest_file=manifest_path,
+                registration_file=args.registration_file,
+                registration_manifest_file=args.registration_manifest,
             )
         except Exception as exc:  # noqa: BLE001 - recorded, not fatal to the batch
             reason = classify_build_failure(exc)

@@ -276,6 +276,48 @@ def test_real_ratified_sidecar_is_accepted_and_alexa_excluded():
             f"External owner-ratified sidecar integration prerequisite missing on this runner: {pb.DECLARED_ENVIRONMENTS_SIDECAR}"
         )
     loaded = pb.load_declared_environments()
-    assert len(loaded) == 10
+    assert len(loaded) >= 22
     assert ALEXA not in loaded
     assert set(loaded.values()) <= {"3.9", "3.10", "3.11"}
+    # The 2026-10-22 supersession added the built and proposed tasks; the
+    # carried declarations must still be there.
+    for task in ("Archmonger__django-dbbackup-631",
+                 "QuantEcon__QuantEcon.py-797",
+                 "awslabs__mcp-1154",
+                 "quantumlib__Cirq-7595",
+                 "vacanza__holidays-2859",
+                 "a2aproject__a2a-python-443",
+                 "jlowin__fastmcp-1604",
+                 "jlowin__fastmcp-1578",
+                 "openai__openai-agents-python-1619"):
+        assert task in loaded, task
+    assert loaded["a2aproject__a2a-python-443"] == "3.10"
+    assert loaded["openai__openai-agents-python-1619"] == "3.9"
+
+
+def test_a_supersession_chain_may_start_from_a_v2_sidecar(tmp_path):
+    side, prov = bundle(
+        tmp_path, {TASK: ratified()},
+        old_schema="f2-s8-declared-environments/v2")
+    assert pb.load_declared_environments(side, prov)[TASK] == "3.10"
+
+
+def test_declaration_derived_evidence_schema_is_accepted(tmp_path):
+    side, prov = bundle(
+        tmp_path, {TASK: ratified()},
+        pol_schema=pb.EVIDENCE_SCHEMA_DECLARATION)
+    assert pb.load_declared_environments(side, prov)[TASK] == "3.10"
+
+
+def test_an_unknown_evidence_schema_is_refused(tmp_path):
+    side, prov = bundle(tmp_path, {TASK: ratified()},
+                        pol_schema="f2-s8-not-a-real-schema/v9")
+    with pytest.raises(pb.DeclaredEnvironmentError, match="policy evidence schema"):
+        pb.load_declared_environments(side, prov)
+
+
+def test_an_unknown_old_sidecar_schema_is_refused(tmp_path):
+    side, prov = bundle(tmp_path, {TASK: ratified()},
+                        old_schema="f2-s8-declared-environments/v9")
+    with pytest.raises(pb.DeclaredEnvironmentError, match="source old sidecar schema"):
+        pb.load_declared_environments(side, prov)
