@@ -770,7 +770,7 @@ class TestDedicatedUvExecution:
 
     def _uv_stub(self, directory: pathlib.Path, text: str) -> pathlib.Path:
         directory.mkdir(parents=True, exist_ok=True)
-        stub = directory / "uv.cmd"
+        stub = directory / ("uv.cmd" if os.name == "nt" else "uv")
         stub.write_text(f"@echo {text}\r\n", encoding="utf-8")
         return stub
 
