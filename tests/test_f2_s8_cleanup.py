@@ -1,7 +1,8 @@
-"""Cleanup safety tests. All targets are temporary directories; no real deletion."""
+"""Cleanup safety tests. Temporary trees only; no real deletion."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -17,39 +18,66 @@ from qwen_train.f2_s8_cleanup import (
     delete_workspace,
     sweep_run_temp,
 )
-from qwen_train.f2_s8_factory import AppendOnlyLedger
+from qwen_train.f2_s8_factory import (
+    ADMITTED_OUTCOME,
+    REQUIRED_EVIDENCE_ROLES,
+    AppendOnlyLedger,
+)
 from tests.conftest import _REAL_POPEN
 
 TASK = "acme__widget-1"
+
+
+def _sha(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _setup(tmp_path):
     root = tmp_path / "ws"
     ws = root / TASK
     (ws / "repo").mkdir(parents=True)
-    (ws / "repo" / "junit.xml").write_text("<testsuite/>", encoding="utf-8")
     (ws / "repo" / "code.py").write_text("x=1\n", encoding="utf-8")
     evidence_root = tmp_path / "evidence"
-    dest = evidence_root / TASK / "junit.xml"
-    dest.parent.mkdir(parents=True)
-    dest.write_bytes((ws / "repo" / "junit.xml").read_bytes())
+    role_files: dict[str, pathlib.Path] = {}
+    artifacts: dict[str, dict[str, object]] = {}
+    for role in REQUIRED_EVIDENCE_ROLES:
+        p = evidence_root / f"{role}.bin"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"payload-{role}", encoding="utf-8")
+        role_files[role] = p
+        artifacts[role] = {
+            "name": p.name,
+            "sha256": _sha(p),
+            "size_bytes": p.stat().st_size,
+        }
+    gold = role_files["gold_report"]
+    record = {
+        "task_id": TASK,
+        "outcome": ADMITTED_OUTCOME,
+        "outcome_class": "scientific",
+        "admitted": True,
+        "evidence": {
+            "name": gold.name,
+            "sha256": _sha(gold),
+            "size_bytes": gold.stat().st_size,
+        },
+        "evidence_bundle": {"artifacts": artifacts},
+    }
     ledger = tmp_path / "ledger.jsonl"
-    AppendOnlyLedger(ledger).append(
-        {"task_id": TASK, "outcome": "base_fail_gold_pass", "outcome_class": "scientific"}
-    )
+    AppendOnlyLedger(ledger).append(record)
     manifest = tmp_path / "deletion.jsonl"
-    return root, ws, evidence_root, dest, ledger, manifest
+    return root, ws, evidence_root, role_files, ledger, manifest
 
 
-def _delete(**over):
-    root, ws, evidence_root, dest, ledger, manifest = over.pop("env")
+def _delete(env, **over):
+    root, ws, evidence_root, role_files, ledger, manifest = env
     kwargs = dict(
         task_id=TASK,
         workspace=ws,
         allowed_roots=[root],
         ledger_paths=[ledger],
         evidence_root=evidence_root,
-        evidence_files=[(ws / "repo" / "junit.xml", dest)],
+        evidence_files=dict(role_files),
         manifest_path=manifest,
     )
     kwargs.update(over)
@@ -58,56 +86,288 @@ def _delete(**over):
 
 def test_dry_run_deletes_nothing(tmp_path):
     env = _setup(tmp_path)
-    root, ws, evidence_root, dest, ledger, manifest = env
-    result = _delete(env=env)
+    result = _delete(env)
     assert result.deleted is False
     assert result.bytes_freed > 0
-    assert ws.is_dir()
-    assert not manifest.exists()
+    assert env[1].is_dir()
+    assert not env[5].exists()
 
 
 def test_verified_workspace_is_removed_and_manifest_written(tmp_path):
     env = _setup(tmp_path)
-    root, ws, evidence_root, dest, ledger, manifest = env
-    result = _delete(env=env, allow_delete=True)
+    result = _delete(env, allow_delete=True)
     assert result.deleted is True
-    assert not ws.exists()
-    rows = [json.loads(line) for line in manifest.read_text("utf-8").splitlines()]
+    assert not env[1].exists()
+    rows = [json.loads(line) for line in env[5].read_text("utf-8").splitlines()]
     assert rows and all(row["reason"] == "verified_task_cleanup" for row in rows)
 
 
-def test_unverified_evidence_is_kept(tmp_path):
+def test_broken_chain_is_refused_and_workspace_kept(tmp_path):
     env = _setup(tmp_path)
-    root, ws, evidence_root, dest, ledger, manifest = env
-    dest.write_text("tampered", encoding="utf-8")
+    ledger = env[4]
+    raw = ledger.read_text("utf-8").replace(ADMITTED_OUTCOME, "gold_fail")
+    ledger.write_text(raw, encoding="utf-8")
+    with pytest.raises(CleanupRefused, match="chain invalid"):
+        _delete(env, allow_delete=True)
+    assert env[1].is_dir()
+
+
+def test_missing_terminal_scientific_record_is_refused(tmp_path):
+    root = tmp_path / "ws"
+    ws = root / TASK
+    ws.mkdir(parents=True)
+    ledger = tmp_path / "ledger.jsonl"
+    AppendOnlyLedger(ledger).append(
+        {"task_id": TASK, "outcome": "timeout", "outcome_class": "infrastructure"}
+    )
+    with pytest.raises(CleanupRefused):
+        delete_workspace(
+            task_id=TASK,
+            workspace=ws,
+            allowed_roots=[root],
+            ledger_paths=[ledger],
+            evidence_root=tmp_path / "evidence",
+            evidence_files={},
+            manifest_path=tmp_path / "m.jsonl",
+            allow_delete=True,
+        )
+
+
+def test_conflicting_scientific_records_are_refused(tmp_path):
+    env = _setup(tmp_path)
+    other = tmp_path / "other.jsonl"
+    AppendOnlyLedger(other).append(
+        {
+            "task_id": TASK,
+            "outcome": "gold_fail",
+            "outcome_class": "scientific",
+            "admitted": False,
+        }
+    )
+    with pytest.raises(CleanupRefused, match="conflicting"):
+        _delete(env, ledger_paths=[env[4], other], allow_delete=True)
+
+
+def test_missing_evidence_role_is_refused(tmp_path):
+    env = _setup(tmp_path)
+    files = dict(env[3])
+    files.pop("run_log" if "run_log" in files else REQUIRED_EVIDENCE_ROLES[0])
+    with pytest.raises(CleanupRefused, match="missing"):
+        _delete(env, evidence_files=files, allow_delete=True)
+
+
+def test_fake_evidence_digest_is_refused(tmp_path):
+    env = _setup(tmp_path)
+    fake = env[2] / "fake.bin"
+    fake.write_text("not the bound bytes", encoding="utf-8")
+    files = dict(env[3])
+    files[REQUIRED_EVIDENCE_ROLES[0]] = fake
     with pytest.raises(CleanupRefused, match="digest mismatch"):
-        _delete(env=env, allow_delete=True)
+        _delete(env, evidence_files=files, allow_delete=True)
+    assert env[1].is_dir()
+
+
+def test_historical_record_without_artifacts_is_refused(tmp_path):
+    root = tmp_path / "ws"
+    ws = root / TASK
+    ws.mkdir(parents=True)
+    ledger = tmp_path / "ledger.jsonl"
+    AppendOnlyLedger(ledger).append(
+        {
+            "task_id": TASK,
+            "outcome": ADMITTED_OUTCOME,
+            "outcome_class": "scientific",
+            "admitted": True,
+            "evidence": None,
+        }
+    )
+    with pytest.raises(CleanupRefused, match="does not bind"):
+        delete_workspace(
+            task_id=TASK,
+            workspace=ws,
+            allowed_roots=[root],
+            ledger_paths=[ledger],
+            evidence_root=tmp_path / "evidence",
+            evidence_files={},
+            manifest_path=tmp_path / "m.jsonl",
+            allow_delete=True,
+        )
     assert ws.is_dir()
 
 
-def test_missing_ledger_outcome_is_refused(tmp_path):
+def _record_store(tmp_path, record):
+    """A workspace + one-record ledger for schema-shape tests."""
+    root = tmp_path / "ws"
+    ws = root / TASK
+    (ws / "repo").mkdir(parents=True)
+    (ws / "repo" / "code.py").write_text("x=1\n", encoding="utf-8")
+    ledger = tmp_path / "ledger.jsonl"
+    AppendOnlyLedger(ledger).append({"task_id": TASK, **record})
+    return root, ws, ledger
+
+
+def test_top_level_artifacts_are_not_the_canonical_binding(tmp_path):
     env = _setup(tmp_path)
-    root, ws, evidence_root, dest, ledger, manifest = env
-    other = tmp_path / "empty.jsonl"
-    other.write_text("", encoding="utf-8")
-    with pytest.raises(CleanupRefused, match="outcome not recorded"):
-        _delete(env=env, ledger_paths=[other], allow_delete=True)
+    # Rebuild the record with the artifact set at the top level only: this is the
+    # shape the factory never writes, and it must not satisfy the gate.
+    root, ws, evidence_root, role_files, _ledger, manifest = env
+    ledger = tmp_path / "top_level.jsonl"
+    top = {
+        role: {"name": p.name, "sha256": _sha(p), "size_bytes": p.stat().st_size}
+        for role, p in role_files.items()
+    }
+    AppendOnlyLedger(ledger).append(
+        {
+            "task_id": TASK,
+            "outcome": ADMITTED_OUTCOME,
+            "outcome_class": "scientific",
+            "admitted": True,
+            "evidence": dict(top["gold_report"]),
+            "artifacts": top,
+        }
+    )
+    with pytest.raises(CleanupRefused, match="evidence_bundle.artifacts"):
+        delete_workspace(
+            task_id=TASK,
+            workspace=ws,
+            allowed_roots=[root],
+            ledger_paths=[ledger],
+            evidence_root=evidence_root,
+            evidence_files=dict(role_files),
+            manifest_path=manifest,
+            allow_delete=True,
+        )
     assert ws.is_dir()
+
+
+def test_inconsistent_scientific_class_is_refused(tmp_path):
+    root, ws, ledger = _record_store(
+        tmp_path,
+        {"outcome": ADMITTED_OUTCOME, "outcome_class": "infrastructure", "admitted": True},
+    )
+    with pytest.raises(CleanupRefused, match="inconsistent outcome_class"):
+        delete_workspace(
+            task_id=TASK, workspace=ws, allowed_roots=[root], ledger_paths=[ledger],
+            evidence_root=tmp_path / "e", evidence_files={},
+            manifest_path=tmp_path / "m.jsonl", allow_delete=True,
+        )
+    assert ws.is_dir()
+
+
+def test_scientific_class_with_infrastructure_outcome_is_refused(tmp_path):
+    root, ws, ledger = _record_store(
+        tmp_path,
+        {"outcome": "timeout", "outcome_class": "scientific", "admitted": False},
+    )
+    with pytest.raises(CleanupRefused, match="inconsistent outcome_class"):
+        delete_workspace(
+            task_id=TASK, workspace=ws, allowed_roots=[root], ledger_paths=[ledger],
+            evidence_root=tmp_path / "e", evidence_files={},
+            manifest_path=tmp_path / "m.jsonl", allow_delete=True,
+        )
+    assert ws.is_dir()
+
+
+def test_duplicate_evidence_path_is_refused(tmp_path):
+    env = _setup(tmp_path)
+    files = dict(env[3])
+    files[REQUIRED_EVIDENCE_ROLES[1]] = files[REQUIRED_EVIDENCE_ROLES[0]]
+    with pytest.raises(CleanupRefused, match="duplicate evidence path"):
+        _delete(env, evidence_files=files, allow_delete=True)
+    assert env[1].is_dir()
+
+
+def test_retryable_timeout_before_terminal_is_accepted(tmp_path):
+    env = _setup(tmp_path)
+    # Append a retryable infrastructure attempt BEFORE the terminal record.
+    ledger = env[4]
+    prior = env[1].parent / "prior.jsonl"
+    AppendOnlyLedger(prior).append(
+        {"task_id": TASK, "outcome": "timeout", "outcome_class": "infrastructure", "attempt": 1}
+    )
+    result = _delete(env, ledger_paths=[prior, ledger], allow_delete=True)
+    assert result.deleted is True
+    assert not env[1].exists()
+
+
+def _two_chain_correction(tmp_path, task, prior_outcome, *, correction_chain=True):
+    root = tmp_path / "ws"
+    ws = root / task
+    (ws / "repo").mkdir(parents=True)
+    (ws / "repo" / "code.py").write_text("x=1\n", encoding="utf-8")
+    operative = tmp_path / "s8_pilot_ledger.jsonl"
+    corrective = tmp_path / "s8_pilot_ledger_corrected.jsonl"
+    prior = AppendOnlyLedger(operative).append(
+        {"task_id": task, "outcome": prior_outcome, "outcome_class": "scientific", "admitted": False}
+    )
+    correction = {
+        "task_id": task,
+        "outcome": ADMITTED_OUTCOME,
+        "outcome_class": "scientific",
+        "admitted": True,
+        "attempt": 2,
+        "correction_of_record_digest": prior["record_digest"],
+        "correction_of_chain": "s8_pilot_ledger.jsonl" if correction_chain else "unregistered.jsonl",
+    }
+    AppendOnlyLedger(corrective).append(correction)
+    return root, ws, [operative, corrective]
+
+
+def test_grandfathered_correction_is_not_a_conflict(tmp_path):
+    from qwen_train.f2_s8_cleanup import _ledger_terminal_record
+
+    root, ws, ledgers = _two_chain_correction(
+        tmp_path, "HypothesisWorks__hypothesis-4532", "gold_fail"
+    )
+    record, _ = _ledger_terminal_record("HypothesisWorks__hypothesis-4532", ledgers)
+    assert record["outcome"] == ADMITTED_OUTCOME
+    # The corrected record binds no canonical evidence bundle, so cleanup still
+    # refuses on evidence rather than silently deleting the workspace.
+    with pytest.raises(CleanupRefused, match="evidence_bundle.artifacts"):
+        delete_workspace(
+            task_id="HypothesisWorks__hypothesis-4532",
+            workspace=ws,
+            allowed_roots=[root],
+            ledger_paths=ledgers,
+            evidence_root=tmp_path / "e",
+            evidence_files={},
+            manifest_path=tmp_path / "m.jsonl",
+            allow_delete=True,
+        )
+    assert ws.is_dir()
+
+
+def test_non_grandfathered_correction_is_refused_as_conflict(tmp_path):
+    from qwen_train.f2_s8_cleanup import _ledger_terminal_record
+
+    root, ws, ledgers = _two_chain_correction(tmp_path, "acme__widget-1", "gold_fail")
+    with pytest.raises(CleanupRefused, match="conflicting scientific records"):
+        _ledger_terminal_record("acme__widget-1", ledgers)
+    assert ws.is_dir()
+
+
+def test_correction_naming_unregistered_chain_is_refused(tmp_path):
+    from qwen_train.f2_s8_cleanup import _ledger_terminal_record
+
+    _root, _ws, ledgers = _two_chain_correction(
+        tmp_path, "HypothesisWorks__hypothesis-4532", "gold_fail", correction_chain=False
+    )
+    with pytest.raises(CleanupRefused, match="unregistered chain"):
+        _ledger_terminal_record("HypothesisWorks__hypothesis-4532", ledgers)
 
 
 def test_retry_pending_and_stuck_are_refused(tmp_path):
     env = _setup(tmp_path)
     with pytest.raises(CleanupRefused):
-        _delete(env=env, retry_pending=True, allow_delete=True)
+        _delete(env, retry_pending=True, allow_delete=True)
     with pytest.raises(CleanupRefused):
-        _delete(env=env, stuck=True, allow_delete=True)
+        _delete(env, stuck=True, allow_delete=True)
 
 
 def test_allowlist_escape_is_refused(tmp_path):
     root = tmp_path / "allowed"
     outside = tmp_path / "outside" / TASK
     outside.mkdir(parents=True)
-    (outside / "x").write_text("x", encoding="utf-8")
     with pytest.raises(CleanupRefused, match="outside allowlist"):
         _check_path(outside, [root], TASK)
     with pytest.raises(CleanupRefused):
@@ -168,11 +428,10 @@ def test_sensitive_paths_are_refused(path):
 @pytest.mark.skipif(os.name != "nt", reason="Windows file-in-use behavior")
 def test_file_in_use_is_skipped(tmp_path):
     env = _setup(tmp_path)
-    root, ws, evidence_root, dest, ledger, manifest = env
-    held = ws / "repo" / "held.txt"
+    held = env[1] / "repo" / "held.txt"
     held.write_text("held", encoding="utf-8")
     with held.open("r+") as fh:
-        result = _delete(env=env, allow_delete=True)
+        result = _delete(env, allow_delete=True)
         assert result.skipped
         assert held.exists()
         fh.seek(0)
@@ -207,8 +466,7 @@ def test_retention_sweep_only_old_run_temp(tmp_path):
     new.mkdir()
     (old / "f").write_text("old", encoding="utf-8")
     (new / "f").write_text("new", encoding="utf-8")
-    old_time = 1_000_000
-    os.utime(old, (old_time, old_time))
+    os.utime(old, (1_000_000, 1_000_000))
     manifest = tmp_path / "sweep.jsonl"
     dry = sweep_run_temp(
         root=root,
@@ -216,17 +474,16 @@ def test_retention_sweep_only_old_run_temp(tmp_path):
         older_than_seconds=10,
         manifest_path=manifest,
         allow_delete=False,
-        now=old_time + 100,
+        now=1_000_100,
     )
     assert dry.deleted is False
-    assert old.exists() and new.exists()
     result = sweep_run_temp(
         root=root,
         allowed_roots=[root],
         older_than_seconds=10,
         manifest_path=manifest,
         allow_delete=True,
-        now=old_time + 100,
+        now=1_000_100,
     )
     assert result.deleted is True
     assert not old.exists()

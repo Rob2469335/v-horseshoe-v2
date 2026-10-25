@@ -92,9 +92,13 @@ def select_batch(
 def terminal_tasks(
     ledger_paths: Sequence[pathlib.Path | str],
 ) -> set[str]:
+    """Verified terminal-scientific task IDs across the admission chains."""
     out: set[str] = set()
     for path in ledger_paths:
         ledger = AppendOnlyLedger(path)
+        ok, reason = ledger.verify()
+        if not ok:
+            raise DriverHalt("LEDGER_INVALID", f"{path}: {reason}")
         for record in ledger.records():
             if record.get("outcome_class") == "scientific":
                 out.add(str(record.get("task_id")))
@@ -111,6 +115,7 @@ def run_driver(
     credited_count: Callable[[], int],
     run_batch: Callable[[Sequence[str]], Mapping[str, object]],
     free_bytes: Callable[[], int],
+    refresh_terminal: Callable[[], Iterable[str]] | None = None,
     cleanup_after_batch: Callable[[Sequence[str], Mapping[str, object]], None] | None = None,
     terminal: Iterable[str] = (),
     log: Callable[[str], None] = print,
@@ -121,6 +126,14 @@ def run_driver(
     batches = 0
     tasks_started = 0
     credited = 0
+
+    if refresh_terminal is not None:
+        try:
+            terminal_set = set(refresh_terminal())
+        except DriverHalt as exc:
+            result.stop_reason = exc.reason
+            result.detail = exc.detail
+            return result
 
     def stop(reason: str, detail: str = "") -> DriverResult:
         result.stop_reason = reason
@@ -201,6 +214,46 @@ def run_driver(
                 "INFRA_FAILURE_RATE",
                 f"infrastructure_invalid={infra}/{attempted}",
             )
+        batch_set = set(batch)
+        if batch_set & terminal_set:
+            return stop(
+                "LEDGER_DISAGREEMENT",
+                f"selected terminal task(s): {sorted(batch_set & terminal_set)[:3]}",
+            )
+        raw_results = outcome.get("task_results")
+        task_results = dict(raw_results) if isinstance(raw_results, Mapping) else {}
+        outside = sorted(set(task_results) - batch_set)
+        if outside:
+            return stop(
+                "LEDGER_DISAGREEMENT",
+                f"runner returned task(s) outside the batch: {outside[:3]}",
+            )
+        scientific_outcomes = {
+            str(tid)
+            for tid, row in task_results.items()
+            if isinstance(row, Mapping) and row.get("outcome_class") == "scientific"
+        }
+        if refresh_terminal is not None:
+            try:
+                refreshed = set(refresh_terminal())
+            except DriverHalt as exc:
+                return stop(exc.reason, exc.detail)
+            if not terminal_set <= refreshed:
+                return stop(
+                    "LEDGER_DISAGREEMENT",
+                    "a previously terminal task is no longer terminal in the ledger",
+                )
+            not_recorded = sorted(scientific_outcomes - refreshed)
+            if not_recorded:
+                return stop(
+                    "LEDGER_DISAGREEMENT",
+                    f"scientific outcome not recorded in ledger: {not_recorded[:3]}",
+                )
+            terminal_set = refreshed
+        else:
+            # Without an authoritative refresh, only scientific outcomes terminalise;
+            # infrastructure outcomes remain retryable under the ledger retry cap.
+            terminal_set |= scientific_outcomes
         if cleanup_after_batch is not None:
             try:
                 cleanup_after_batch(batch, outcome)
@@ -303,10 +356,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         runner.main(argv_main)
         payload = json.loads((bdir / "pilot_results.json").read_text("utf-8"))
         totals = payload.get("totals") or {}
+        task_results = {
+            str(row.get("task_id")): {
+                "outcome": row.get("outcome"),
+                "outcome_class": row.get("outcome_class"),
+            }
+            for row in payload.get("tasks") or []
+            if row.get("task_id")
+        }
         return {
             "attempted": int(totals.get("attempted", 0)),
             "infrastructure_invalid": int(totals.get("infrastructure_invalid", 0)),
             "task_ids": list(batch),
+            "task_results": task_results,
         }
 
     result = run_driver(
@@ -328,7 +390,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         free_bytes=lambda: min(
             shutil.disk_usage(path).free for path in args.disk_path
         ),
+        refresh_terminal=lambda: terminal_tasks(args.admission_ledger),
         terminal=terminal_tasks(args.admission_ledger),
     )
     print(json.dumps(result.__dict__, indent=1, sort_keys=True))
     return 0 if result.stop_reason in {"TARGET_REACHED"} else 1
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI only
+    raise SystemExit(main())

@@ -10,9 +10,18 @@ import re
 import stat
 import time
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
-from qwen_train.f2_s8_factory import AppendOnlyLedger
+from qwen_train.f2_s8_batch import (
+    GRANDFATHERED_CORRECTION_TASK_IDS,
+    REGISTERED_CHAINS,
+)
+from qwen_train.f2_s8_factory import (
+    INFRASTRUCTURE_OUTCOMES,
+    REQUIRED_EVIDENCE_ROLES,
+    SCIENTIFIC_OUTCOMES,
+    AppendOnlyLedger,
+)
 
 TASK_DIR_RE = re.compile(r"^[A-Za-z0-9_.\-]+__[A-Za-z0-9_.\-]+-\d+$")
 
@@ -117,37 +126,138 @@ def _sha(path: pathlib.Path) -> str:
     return h.hexdigest()
 
 
+def _evidence_path_ok(path: pathlib.Path, evidence_root: pathlib.Path) -> pathlib.Path:
+    raw = path.absolute()
+    for component in (raw, *raw.parents):
+        if _is_reparse(component):
+            raise CleanupRefused(f"symlink/junction in evidence path: {component}")
+    resolved = raw.resolve(strict=False)
+    root = evidence_root.resolve(strict=False)
+    if resolved != root and root not in resolved.parents:
+        raise CleanupRefused(f"evidence path outside evidence root: {resolved}")
+    return resolved
+
+
 def _evidence_ok(
-    evidence_files: Sequence[tuple[pathlib.Path | str, pathlib.Path | str]],
+    evidence_files: Mapping[str, pathlib.Path | str],
     evidence_root: pathlib.Path,
+    record: Mapping[str, object],
 ) -> None:
-    if not evidence_files:
-        raise CleanupRefused("no evidence files supplied")
-    root = pathlib.Path(evidence_root).resolve(strict=False)
-    for src, dst in evidence_files:
-        src_p = pathlib.Path(src)
-        dst_p = pathlib.Path(dst)
-        if not src_p.is_file() or not dst_p.is_file():
-            raise CleanupRefused(f"evidence missing: {src_p} -> {dst_p}")
-        try:
-            dst_r = dst_p.resolve(strict=False)
-            if dst_r != root and root not in dst_r.parents:
-                raise CleanupRefused(f"evidence copy outside evidence root: {dst_p}")
-        except OSError as exc:
-            raise CleanupRefused(f"evidence path unreadable: {dst_p}: {exc}") from exc
-        if _sha(src_p) != _sha(dst_p):
-            raise CleanupRefused(f"evidence digest mismatch: {src_p}")
+    """Require the authoritative evidence roles and their ledger-bound hashes.
+
+    The factory binds the artifact set at ``record["evidence_bundle"]["artifacts"]``
+    (``f2_s8_factory.run_once``); a top-level ``artifacts`` key is not the
+    canonical schema and is deliberately not accepted as a substitute.
+    """
+    bundle = record.get("evidence_bundle")
+    artifacts = bundle.get("artifacts") if isinstance(bundle, Mapping) else None
+    if not isinstance(artifacts, Mapping):
+        raise CleanupRefused(
+            "ledger record does not bind evidence_bundle.artifacts "
+            "(historical/incomplete record; cleanup refused)"
+        )
+    missing_roles = [r for r in REQUIRED_EVIDENCE_ROLES if r not in artifacts]
+    if missing_roles:
+        raise CleanupRefused(f"ledger record is missing evidence roles: {missing_roles}")
+    unknown = sorted(set(evidence_files) - set(REQUIRED_EVIDENCE_ROLES))
+    if unknown:
+        raise CleanupRefused(f"unknown evidence roles supplied: {unknown}")
+    missing = [r for r in REQUIRED_EVIDENCE_ROLES if r not in evidence_files]
+    if missing:
+        raise CleanupRefused(f"evidence files missing for roles: {missing}")
+    seen_paths: set[pathlib.Path] = set()
+    for role in REQUIRED_EVIDENCE_ROLES:
+        ref = artifacts.get(role) or {}
+        bound_sha = str(ref.get("sha256") or "")
+        if len(bound_sha) != 64:
+            raise CleanupRefused(f"ledger role {role!r} has no 64-hex SHA-256")
+        path = _evidence_path_ok(pathlib.Path(evidence_files[role]), evidence_root)
+        if not path.is_file():
+            raise CleanupRefused(f"evidence file missing for role {role!r}: {path}")
+        if path in seen_paths:
+            raise CleanupRefused(f"duplicate evidence path for role {role!r}: {path}")
+        seen_paths.add(path)
+        if _sha(path) != bound_sha:
+            raise CleanupRefused(f"evidence digest mismatch for role {role!r}: {path}")
+        size = ref.get("size_bytes")
+        if isinstance(size, int) and size >= 0 and path.stat().st_size != size:
+            raise CleanupRefused(f"evidence size mismatch for role {role!r}: {path}")
+    gold_ref = artifacts.get("gold_report") or {}
+    declared = record.get("evidence") or {}
+    if not isinstance(declared, Mapping) or str(declared.get("sha256") or "") != str(
+        gold_ref.get("sha256") or ""
+    ):
+        raise CleanupRefused("ledger evidence identity does not match gold_report artifact")
 
 
-def _ledger_ok(task_id: str, ledger_paths: Sequence[pathlib.Path | str]) -> None:
+def _ledger_terminal_record(
+    task_id: str, ledger_paths: Sequence[pathlib.Path | str]
+) -> tuple[Mapping[str, object], pathlib.Path]:
+    """Verified, unique scientific terminal record for the task."""
     if not ledger_paths:
         raise CleanupRefused("no ledger paths supplied")
+    scientific: list[tuple[Mapping[str, object], pathlib.Path]] = []
     for path in ledger_paths:
         ledger = AppendOnlyLedger(path)
+        ok, reason = ledger.verify()
+        if not ok:
+            raise CleanupRefused(f"ledger chain invalid ({path}): {reason}")
         for record in ledger.records():
-            if str(record.get("task_id")) == task_id and record.get("outcome"):
-                return
-    raise CleanupRefused(f"outcome not recorded for {task_id!r}")
+            if str(record.get("task_id")) != task_id:
+                continue
+            outcome = str(record.get("outcome") or "")
+            outcome_class = record.get("outcome_class")
+            if outcome in SCIENTIFIC_OUTCOMES:
+                if outcome_class != "scientific":
+                    raise CleanupRefused(
+                        f"inconsistent outcome_class for {task_id!r}: {outcome!r} is "
+                        f"scientific but class is {outcome_class!r}"
+                    )
+                scientific.append((record, path))
+                continue
+            if outcome in INFRASTRUCTURE_OUTCOMES:
+                if outcome_class not in (None, "infrastructure"):
+                    raise CleanupRefused(
+                        f"inconsistent outcome_class for {task_id!r}: {outcome!r} is "
+                        f"infrastructure but class is {outcome_class!r}"
+                    )
+                continue  # retryable; never a terminal scientific result
+            raise CleanupRefused(f"unrecognized outcome for {task_id!r}: {outcome!r}")
+    if not scientific:
+        raise CleanupRefused(f"no terminal scientific record for {task_id!r}")
+    if len(scientific) > 1:
+        # A correction may supersede a prior terminal scientific record only when
+        # it is the single owner-sanctioned, code-pinned exception and binds to
+        # the exact record it corrects (counting rule §2/§4).  Anything else is a
+        # genuine conflict and is refused.
+        corrections = [
+            (rec, p)
+            for rec, p in scientific
+            if str(rec.get("correction_of_record_digest") or "")
+        ]
+        if len(corrections) != 1 or task_id not in GRANDFATHERED_CORRECTION_TASK_IDS:
+            raise CleanupRefused(f"conflicting scientific records for {task_id!r}")
+        correction, correction_path = corrections[0]
+        corrected = str(correction.get("correction_of_record_digest") or "")
+        if pathlib.Path(str(correction_path)).name not in REGISTERED_CHAINS:
+            raise CleanupRefused(f"correction chain is not registered for {task_id!r}")
+        correcting_chain = pathlib.Path(
+            str(correction.get("correction_of_chain") or "")
+        ).name
+        if correcting_chain not in REGISTERED_CHAINS:
+            raise CleanupRefused(f"correction names an unregistered chain for {task_id!r}")
+        superseded = [
+            (rec, p)
+            for rec, p in scientific
+            if str(rec.get("record_digest") or "") == corrected
+        ]
+        if len(superseded) != len(scientific) - 1:
+            raise CleanupRefused(f"conflicting scientific records for {task_id!r}")
+        scientific = [corrections[0]]
+    record, path = scientific[0]
+    if str(record.get("outcome") or "") not in SCIENTIFIC_OUTCOMES:
+        raise CleanupRefused(f"non-scientific terminal outcome for {task_id!r}")
+    return record, path
 
 
 def _manifest_ok(manifest_path: pathlib.Path, workspace: pathlib.Path) -> pathlib.Path:
@@ -229,7 +339,7 @@ def delete_workspace(
     allowed_roots: Sequence[pathlib.Path | str],
     ledger_paths: Sequence[pathlib.Path | str],
     evidence_root: pathlib.Path | str,
-    evidence_files: Sequence[tuple[pathlib.Path | str, pathlib.Path | str]],
+    evidence_files: Mapping[str, pathlib.Path | str],
     manifest_path: pathlib.Path | str,
     retry_pending: bool = False,
     stuck: bool = False,
@@ -238,8 +348,8 @@ def delete_workspace(
     ws = _check_path(pathlib.Path(workspace), [pathlib.Path(r) for r in allowed_roots], task_id)
     if retry_pending or stuck:
         raise CleanupRefused(f"task {task_id!r} is retry-pending/stuck")
-    _ledger_ok(task_id, ledger_paths)
-    _evidence_ok(evidence_files, pathlib.Path(evidence_root))
+    record, _ledger = _ledger_terminal_record(task_id, ledger_paths)
+    _evidence_ok(evidence_files, pathlib.Path(evidence_root), record)
     size = _size(ws)
     if not allow_delete:
         return CleanupResult(False, size, [], None, "dry-run")
