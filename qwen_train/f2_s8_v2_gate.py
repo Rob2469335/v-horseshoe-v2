@@ -133,7 +133,9 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
-from dataclasses import dataclass
+import os
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Sequence
@@ -170,6 +172,33 @@ LEDGER_INVALID = "LEDGER_INVALID"
 CREDITED_TASK = "CREDITED_TASK"
 TERMINAL_TASK = "TERMINAL_TASK"
 
+PROBE_OPERATION = "build_probe"
+PROBE_NOT_AUTHORIZED = "PROBE_NOT_AUTHORIZED"
+PROBE_IDENTITY_MISMATCH = "PROBE_IDENTITY_MISMATCH"
+PROBE_POOL_DIGEST_MISMATCH = "PROBE_POOL_DIGEST_MISMATCH"
+PROBE_SELECTION_DIGEST_MISMATCH = "PROBE_SELECTION_DIGEST_MISMATCH"
+PROBE_LEDGER_MUTATION_FORBIDDEN = "PROBE_LEDGER_MUTATION_FORBIDDEN"
+PROBE_CREDITS_FORBIDDEN = "PROBE_CREDITS_FORBIDDEN"
+PROBE_NETWORK_ENFORCEMENT_UNAVAILABLE = "PROBE_NETWORK_ENFORCEMENT_UNAVAILABLE"
+PROBE_DISK_LOW = "PROBE_DISK_LOW"
+PROBE_REVOKED = "PROBE_REVOKED"
+PROBE_TASK_OUTSIDE_SELECTION = "PROBE_TASK_OUTSIDE_SELECTION"
+PROBE_PREREQUISITES_MISSING = "PROBE_PREREQUISITES_MISSING"
+
+PROBE_CODES = (
+    PROBE_NOT_AUTHORIZED,
+    PROBE_IDENTITY_MISMATCH,
+    PROBE_POOL_DIGEST_MISMATCH,
+    PROBE_SELECTION_DIGEST_MISMATCH,
+    PROBE_LEDGER_MUTATION_FORBIDDEN,
+    PROBE_CREDITS_FORBIDDEN,
+    PROBE_NETWORK_ENFORCEMENT_UNAVAILABLE,
+    PROBE_DISK_LOW,
+    PROBE_REVOKED,
+    PROBE_TASK_OUTSIDE_SELECTION,
+    PROBE_PREREQUISITES_MISSING,
+)
+
 #: Every code this module can emit. Machine-checkable, so a typo cannot invent
 #: a new refusal class silently.
 CODES = frozenset({
@@ -179,6 +208,7 @@ CODES = frozenset({
     PROVENANCE_DIGEST_MISMATCH, POOL_BYTES_CHANGED, POOL_BINDING_MISMATCH,
     POOL_INVALID, POOL_NOT_IN_REGISTRATION, EMPTY_MANIFEST, DUPLICATE_TASK,
     EXCLUDED_TASK, OUT_OF_POOL, LEDGER_INVALID, CREDITED_TASK, TERMINAL_TASK,
+    *PROBE_CODES,
 })
 
 #: The precedence order above, as data, so a test can pin it.
@@ -190,6 +220,7 @@ PRECEDENCE = (
     REGISTRATION_BINDING_MISSING, POOL_NOT_IN_REGISTRATION,
     EMPTY_MANIFEST, DUPLICATE_TASK, EXCLUDED_TASK, OUT_OF_POOL,
     LEDGER_INVALID, CREDITED_TASK, TERMINAL_TASK,
+    *PROBE_CODES,
 )
 
 
@@ -589,3 +620,481 @@ def v2_preflight(
         not_before=not_before,
         not_after=not_after,
     )
+
+
+@dataclass(frozen=True)
+class S8ProbeAuthorizedRun:
+    """Immutable evidence for one verified v2 build-probe authorized run."""
+
+    grant_id: str
+    grant_digest: str
+    stage: str
+    operation: str
+    repository_revision: str
+    probe_pool_digest: str
+    probe_selection_digest: str
+    ordering_policy: str
+    allowed_identities: tuple[str, ...]
+    network_policy: str
+    retention_policy: str
+    selected_task_ids: tuple[str, ...]
+    ledger_fingerprints_before: Mapping[str, str]
+    budget_limits: Mapping[str, int]
+    batch_limit: int
+    disk_floor_bytes: int
+    per_task_disk_bytes: int
+    execution_id: str | None = None
+    not_before: str = ""
+    not_after: str = ""
+    record: Mapping[str, Any] = field(default_factory=dict)
+    #: Retained authoritative sources, used to RE-DERIVE the authorization from
+    #: disk on every mid-run revalidation.  An in-memory snapshot is never the
+    #: sole authority for mutable disk state.
+    grant_path: str = ""
+    registration_file: str = ""
+    registration_manifest_file: str = ""
+    compat_report_file: str = ""
+    ledger_paths: tuple[str, ...] = ()
+    built_task_ids: tuple[str, ...] = ()
+    trust_root_path: str = ""
+    repository_root: str = ""
+    budget_ledger_root: str = ""
+    current_username: str = ""
+
+
+def authorize_s8_probe_run(
+    *,
+    grant_path: Path | str | None = None,
+    record: Mapping[str, Any] | None = None,
+    registration_file: Path | str,
+    registration_manifest_file: Path | str | None = None,
+    compat_report_file: Path | str,
+    ledger_paths: Sequence[Path | str] = (),
+    built_task_ids: Iterable[str] = (),
+    trust_root_path: Path | str | None = None,
+    repository_root: Path | str | None = None,
+    now: _dt.datetime | None = None,
+    budget_ledger_root: Path | str | None = None,
+    #: Verification-only by default.  A caller that is about to perform a real
+    #: protected execution MUST pass ``reserve_execution=True`` explicitly.
+    #: Authorization checks, preflight, dry-runs, revalidation and inspection
+    #: must never burn budget as a side effect of verifying a grant.
+    reserve_execution: bool = False,
+    execution_id: str | None = None,
+    current_username: str | None = None,
+) -> S8ProbeAuthorizedRun:
+    """Verify authorization for a build-probe run. Fail-closed on any discrepancy.
+
+    Verification is non-reserving unless the caller explicitly requests a
+    reservation.  Only the real execution path may do so.
+    """
+    from qwen_train.f2_s8_acquisition import require_unprivileged_identity
+
+    require_unprivileged_identity("authorize_s8_probe_run")
+
+    username = (
+        current_username
+        if current_username is not None
+        else (os.environ.get("USERNAME") or "unknown")
+    ).lower()
+
+    from qwen_train.f2_authorization import record_digest, verify_authorization
+    from qwen_train.f2_s8_probe_driver import compute_ordered_probe_candidates
+
+    # Read registration bytes and digest
+    reg_path = Path(registration_file)
+    if not reg_path.is_file():
+        raise V2GateError(MISSING_ARTIFACT, f"registration file missing: {reg_path}")
+    reg_bytes = reg_path.read_bytes()
+    reg_sha256 = hashlib.sha256(reg_bytes).hexdigest()
+
+    reg_manifest_sha256 = ""
+    if registration_manifest_file is not None:
+        rm_path = Path(registration_manifest_file)
+    else:
+        # Check adjacent to registration file first, then standard locations
+        sibling_rm = reg_path.parent / "registration_manifest.json"
+        curr_rm = Path("qwen_train/curriculum/f2_registration/registration_manifest.json")
+        data_rm = Path("data/f2_population/registration/registration_manifest.json")
+        if sibling_rm.is_file():
+            rm_path = sibling_rm
+        elif data_rm.is_file():
+            rm_path = data_rm
+        elif curr_rm.is_file():
+            rm_path = curr_rm
+        else:
+            raise V2GateError(
+                MISSING_ARTIFACT,
+                "registration manifest missing: no file provided and defaults not found",
+            )
+    if not rm_path.is_file():
+        raise V2GateError(MISSING_ARTIFACT, f"registration manifest missing: {rm_path}")
+    reg_manifest_sha256 = hashlib.sha256(rm_path.read_bytes()).hexdigest()
+
+    # Read compat report to get UNKNOWN tasks
+    compat_path = Path(compat_report_file)
+    if not compat_path.is_file():
+        raise V2GateError(MISSING_ARTIFACT, f"compat report missing: {compat_path}")
+    try:
+        compat_data = json.loads(compat_path.read_text("utf-8"))
+    except Exception as exc:
+        raise V2GateError(PROBE_NOT_AUTHORIZED, f"unreadable compat report: {exc}") from exc
+
+    tasks_dict = compat_data.get("tasks") or {}
+    compat_classes = {
+        tid: str(row.get("classification") or "") for tid, row in tasks_dict.items()
+    }
+
+    # Compute registration order.  Two deliberate formats are accepted:
+    #   * ordered metadata (a list of objects with ``instance_id``), and
+    #   * a plain JSON list of task-id strings.
+    # Anything else is a terminal refusal.  Falling back to ``compat_classes``
+    # key order would silently change which tasks the probe selects.
+    from qwen_train.f2_s8_acquisition import load_registration_order
+
+    try:
+        registration_order = load_registration_order(reg_path)
+    except Exception:
+        try:
+            parsed = json.loads(reg_bytes)
+        except Exception as exc:
+            raise V2GateError(
+                REGISTRATION_UNREADABLE,
+                f"registration is not parseable JSON: {exc}",
+            ) from exc
+        if not isinstance(parsed, list) or not parsed:
+            raise V2GateError(
+                REGISTRATION_UNREADABLE,
+                "registration is neither ordered metadata nor a non-empty id list",
+            )
+        if all(isinstance(x, str) for x in parsed):
+            order = [str(x) for x in parsed]
+        elif all(isinstance(x, dict) and x.get("instance_id") for x in parsed):
+            order = [str(x["instance_id"]) for x in parsed]
+        else:
+            raise V2GateError(
+                REGISTRATION_UNREADABLE,
+                "registration entries are neither task-id strings nor instance_id objects",
+            )
+        if len(set(order)) != len(order):
+            raise V2GateError(
+                REGISTRATION_UNREADABLE, "registration contains duplicate task ids"
+            )
+        registration_order = order
+
+    # Terminal tasks from ledgers.  Every configured ledger must verify before
+    # its rows may influence the selection: an unverified chain could hide a
+    # terminal task or inject one.
+    from qwen_train.f2_s8_factory import AppendOnlyLedger
+
+    term_ids: set[str] = set()
+    for lp in ledger_paths:
+        p = Path(lp)
+        if p.is_file():
+            ledger = AppendOnlyLedger(p)
+            ok, reason = ledger.verify()
+            if not ok:
+                raise V2GateError(
+                    PROBE_NOT_AUTHORIZED,
+                    f"admission ledger failed verification ({p}): {reason}",
+                )
+            for r in ledger.records():
+                if r.get("outcome_class") == "scientific":
+                    term_ids.add(str(r.get("task_id")))
+
+    # Read the grant record
+    if grant_path is None:
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            "grant_path is required; unverified probe record attestation is forbidden",
+        )
+    grant_file_path = Path(grant_path)
+    if not grant_file_path.is_file():
+        raise V2GateError(MISSING_ARTIFACT, f"grant file missing: {grant_file_path}")
+    try:
+        doc = json.loads(grant_file_path.read_text("utf-8"))
+        rec = doc.get("record") if isinstance(doc, dict) and "record" in doc else doc
+    except Exception as exc:
+        raise V2GateError(INVALID_GRANT, f"unparseable grant: {exc}") from exc
+
+    ordering_policy = str(rec.get("ordering_policy") or "REGISTRATION_ORDER_UNBUILT")
+    raw_budget = rec.get("budget") or {}
+    max_total_tasks = int(raw_budget.get("max_total_tasks") or 50)
+
+    # Compute expected probe candidates
+    computed_pool_digest, selected_ids, computed_selection_digest = (
+        compute_ordered_probe_candidates(
+            registration_order=registration_order,
+            compat_classes=compat_classes,
+            terminal_task_ids=term_ids,
+            built_task_ids=set(built_task_ids),
+            ordering_policy=ordering_policy,
+            max_tasks=max_total_tasks,
+        )
+    )
+
+    # Check pool and selection digests
+    grant_pool_digest = rec.get("probe_pool_digest")
+    if grant_pool_digest != computed_pool_digest:
+        raise V2GateError(
+            PROBE_POOL_DIGEST_MISMATCH,
+            f"probe_pool_digest mismatch: grant={grant_pool_digest} computed={computed_pool_digest}",
+        )
+    grant_sel_digest = rec.get("probe_selection_digest")
+    if grant_sel_digest != computed_selection_digest:
+        raise V2GateError(
+            PROBE_SELECTION_DIGEST_MISMATCH,
+            f"probe_selection_digest mismatch: grant={grant_sel_digest} computed={computed_selection_digest}",
+        )
+
+    # Expected binding for verification
+    expected_binding = {
+        "repository_revision": rec.get("repository_revision"),
+        "registration_sha256": reg_sha256,
+        "registration_manifest_sha256": reg_manifest_sha256,
+        "probe_pool_digest": computed_pool_digest,
+        "probe_selection_digest": computed_selection_digest,
+        "ordering_policy": ordering_policy,
+        "allowed_identities": rec.get("allowed_identities"),
+        "network_policy": rec.get("network_policy"),
+        "retention_policy": rec.get("retention_policy"),
+        "awards_credits": False,
+    }
+
+    verified_rec = verify_authorization(
+        grant_path,
+        stage="S8-001",
+        operation="build_probe",
+        binding=expected_binding,
+        trust_root=trust_root_path,
+        repository_root=repository_root,
+        now=now,
+    )
+
+    # Verify identity
+    allowed_ids = tuple(
+        str(u).lower() for u in (verified_rec.get("allowed_identities") or ())
+    )
+    if username and allowed_ids and username not in allowed_ids:
+        raise V2GateError(
+            PROBE_IDENTITY_MISMATCH,
+            f"current user {username!r} not in allowed_identities {allowed_ids!r}",
+        )
+
+    # Pre-probe snapshot of admission ledgers
+    ledger_fingerprints: dict[str, str] = {}
+    for lp in ledger_paths:
+        p = Path(lp)
+        if p.is_file():
+            ledger_fingerprints[str(p.resolve())] = hashlib.sha256(
+                p.read_bytes()
+            ).hexdigest()
+
+    # Reserve budget if requested
+    exec_id = execution_id or f"probe-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}"
+    if reserve_execution:
+        from qwen_train.f2_authz_budget import reserve
+
+        reserve(
+            record=verified_rec,
+            binding=expected_binding,
+            binding_digest=computed_selection_digest,
+            stage="S8-001",
+            operation="build_probe",
+            execution_id=exec_id,
+            task_count=len(selected_ids) or 1,
+            task_ids=list(selected_ids) if selected_ids else ["task-0"],
+            ledger_root=budget_ledger_root,
+        )
+
+    return S8ProbeAuthorizedRun(
+        grant_id=str(verified_rec.get("id") or ""),
+        grant_digest=record_digest(verified_rec),
+        stage=str(verified_rec.get("stage") or "S8-001"),
+        operation="build_probe",
+        repository_revision=str(verified_rec.get("repository_revision") or ""),
+        probe_pool_digest=computed_pool_digest,
+        probe_selection_digest=computed_selection_digest,
+        ordering_policy=ordering_policy,
+        allowed_identities=allowed_ids,
+        network_policy=str(
+            verified_rec.get("network_policy") or "OFFLINE_WHEELHOUSE_ONLY"
+        ),
+        retention_policy=str(
+            verified_rec.get("retention_policy")
+            or "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE"
+        ),
+        selected_task_ids=tuple(selected_ids),
+        ledger_fingerprints_before=MappingProxyType(ledger_fingerprints),
+        budget_limits=MappingProxyType(dict(raw_budget)),
+        batch_limit=int(raw_budget.get("batch_limit") or 10),
+        disk_floor_bytes=int(raw_budget.get("disk_floor_bytes") or 25_000_000_000),
+        per_task_disk_bytes=int(
+            raw_budget.get("per_task_disk_bytes") or 3_500_000_000
+        ),
+        execution_id=exec_id,
+        not_before=str(verified_rec.get("not_before") or ""),
+        not_after=str(verified_rec.get("not_after") or ""),
+        record=MappingProxyType(dict(verified_rec)),
+        grant_path=str(grant_file_path),
+        registration_file=str(reg_path),
+        registration_manifest_file=str(rm_path),
+        compat_report_file=str(compat_path),
+        ledger_paths=tuple(str(x) for x in ledger_paths),
+        built_task_ids=tuple(sorted({str(x) for x in built_task_ids})),
+        trust_root_path=str(trust_root_path) if trust_root_path else "",
+        repository_root=str(repository_root) if repository_root else "",
+        budget_ledger_root=str(budget_ledger_root) if budget_ledger_root else "",
+        current_username=username,
+    )
+
+
+def check_probe_grant_still_valid(
+    authorized: S8ProbeAuthorizedRun,
+    *,
+    now: _dt.datetime | None = None,
+    budget_ledger_root: Path | str | None = None,
+) -> bool:
+    from qwen_train.f2_authorization import _parse_ts
+
+    current = now or _dt.datetime.now(_dt.timezone.utc)
+    if authorized.not_after:
+        na = _parse_ts(authorized.not_after)
+        if current > na:
+            raise V2GateError(EXPIRED, f"probe grant expired at {authorized.not_after}")
+
+    if not (
+        authorized.grant_path
+        and authorized.registration_file
+        and authorized.compat_report_file
+    ):
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            "revalidation requires the retained authoritative source paths "
+            "(grant, registration, compat report)",
+        )
+
+    # 1. Admission ledgers must be byte-identical to the launch snapshot.
+    for p_str, old_sha in authorized.ledger_fingerprints_before.items():
+        p = Path(p_str)
+        if not p.is_file():
+            raise V2GateError(
+                PROBE_LEDGER_MUTATION_FORBIDDEN,
+                f"admission ledger missing during probe: {p}",
+            )
+        curr_sha = hashlib.sha256(p.read_bytes()).hexdigest()
+        if curr_sha != old_sha:
+            raise V2GateError(
+                PROBE_LEDGER_MUTATION_FORBIDDEN,
+                f"admission ledger mutated during probe: {p} was {old_sha} now {curr_sha}",
+            )
+
+    # 2. Explicit trust-root revocation check.  Run BEFORE re-deriving so a
+    #    revoked record or a bad pin is reported as such, not as generic drift.
+    if authorized.record and authorized.record.get("id"):
+        from qwen_train.f2_authorization import load_trust_root
+
+        trust_root = (
+            Path(authorized.trust_root_path)
+            if authorized.trust_root_path
+            else None
+        )
+        try:
+            _signers, _rev_keys, _epochs, rev_records = load_trust_root(
+                trust_root, require_pin=True
+            )
+            if authorized.record["id"] in rev_records:
+                raise V2GateError(
+                    PROBE_REVOKED,
+                    f"probe grant {authorized.record['id']!r} is revoked in trust root",
+                )
+        except V2GateError:
+            raise
+        except Exception as exc:
+            raise V2GateError(
+                PROBE_NOT_AUTHORIZED,
+                f"trust root verification failed during probe revalidation: {exc}",
+            ) from exc
+
+    # 3. Re-derive the authorization from the authoritative files on disk.
+    #    This re-reads the grant and re-verifies its signature, trust root,
+    #    revocation, revision/dirty binding, registration and manifest bytes,
+    #    compat report, and recomputes the probe selection.  It is verification
+    #    only: it must never reserve execution budget.
+    try:
+        fresh = authorize_s8_probe_run(
+            grant_path=authorized.grant_path,
+            registration_file=authorized.registration_file,
+            registration_manifest_file=(
+                authorized.registration_manifest_file or None
+            ),
+            compat_report_file=authorized.compat_report_file,
+            ledger_paths=authorized.ledger_paths,
+            built_task_ids=authorized.built_task_ids,
+            trust_root_path=authorized.trust_root_path or None,
+            repository_root=authorized.repository_root or None,
+            now=current,
+            budget_ledger_root=(
+                budget_ledger_root or authorized.budget_ledger_root or None
+            ),
+            reserve_execution=False,
+            execution_id=authorized.execution_id,
+            current_username=authorized.current_username or None,
+        )
+    except V2GateError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - any failure to re-derive is fatal
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            f"authoritative revalidation failed: {exc}",
+        ) from exc
+
+    # 4. The re-derived authorization must be exactly the same authorization.
+    for field_name in (
+        "grant_id",
+        "grant_digest",
+        "stage",
+        "operation",
+        "repository_revision",
+        "probe_pool_digest",
+        "probe_selection_digest",
+        "ordering_policy",
+        "allowed_identities",
+        "network_policy",
+        "retention_policy",
+        "selected_task_ids",
+        "not_before",
+        "not_after",
+    ):
+        was = getattr(authorized, field_name)
+        now_value = getattr(fresh, field_name)
+        if was != now_value:
+            raise V2GateError(
+                PROBE_NOT_AUTHORIZED,
+                f"authoritative revalidation drift in {field_name}: "
+                f"was {was!r} now {now_value!r}",
+            )
+
+    # 5. Budget store integrity / revocation, using the retained root so an
+    #    explicit temporary root is never silently replaced by production.
+    from qwen_train.f2_authz_budget import audit, BudgetError
+
+    try:
+        audit(
+            authorized.grant_digest,
+            budget_ledger_root or authorized.budget_ledger_root or None,
+            is_probe=True,
+        )
+    except BudgetError as exc:
+        if "REVOKED" in str(exc) or "AUTHORIZATION_REVOKED" in str(exc):
+            raise V2GateError(PROBE_REVOKED, f"probe grant revoked: {exc}") from exc
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            f"budget store audit failed during probe revalidation: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            f"unexpected failure during budget audit: {exc}",
+        ) from exc
+    return True

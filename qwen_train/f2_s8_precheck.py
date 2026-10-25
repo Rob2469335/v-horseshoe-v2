@@ -1022,12 +1022,21 @@ def run_precheck(
             env = dict(os.environ)
             env["PATH"] = str(python.parent) + os.pathsep + env.get("PATH", "")
             env["PYTHONDONTWRITEBYTECODE"] = "1"
+            # Ensure candidate venv pytest can load the offline network blocker
+            repo_root = Path(__file__).resolve().parent.parent
+            qwen_train_dir = str(repo_root / "qwen_train")
+            existing_pp = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{qwen_train_dir}{os.pathsep}{existing_pp}"
+                if existing_pp
+                else qwen_train_dir
+            )
             # Declared KEY=VALUE assignments go through the ENVIRONMENT, never
             # deleted from the command.
             env.update(dict(invocation.env))
             cmd = [
                 str(python), "-m", "pytest", *pytest_args,
-                "--collect-only", "-q", "-p", "no:cacheprovider", "--no-header",
+                "--collect-only", "-q", "-p", "no:cacheprovider", "-p", "_pytest_no_network", "--no-header",
             ]
             try:
                 proc = execute(cmd, cwd, env, timeout_seconds)

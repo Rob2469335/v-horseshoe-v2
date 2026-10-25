@@ -54,7 +54,7 @@ STAGE_OPERATIONS = {
     "POP-001": frozenset({"acquire", "register"}),
     "EXPL-001": frozenset({"exploratory_run"}),
     "CONF-001": frozenset({"confirmatory_run"}),
-    "S8-001": frozenset({"base_gold_production"}),
+    "S8-001": frozenset({"base_gold_production", "build_probe"}),
 }
 
 # An arm execution has exactly one allowed operation per executable stage.  Keep
@@ -87,6 +87,13 @@ BINDING_FIELDS = (
     "arm",
     "candidate_pool_digest",
     "registration_manifest_sha256",
+    "probe_pool_digest",
+    "probe_selection_digest",
+    "ordering_policy",
+    "allowed_identities",
+    "network_policy",
+    "retention_policy",
+    "awards_credits",
 )
 
 #: A binding document additionally carries the stage/operation it is bound to.
@@ -129,6 +136,20 @@ OPERATION_REQUIRED_BINDINGS: dict[tuple[str, str], frozenset[str]] = {
             "candidate_manifest_digest",
             "registration_sha256",
             "registration_manifest_sha256",
+        }
+    ),
+    ("S8-001", "build_probe"): frozenset(
+        {
+            "repository_revision",
+            "registration_sha256",
+            "registration_manifest_sha256",
+            "probe_pool_digest",
+            "probe_selection_digest",
+            "ordering_policy",
+            "allowed_identities",
+            "network_policy",
+            "retention_policy",
+            "awards_credits",
         }
     ),
     ("CONF-001", "confirmatory_run"): frozenset(
@@ -537,30 +558,92 @@ def verify_authorization(
         budget = budget_of(record)
         if budget is None:
             raise AuthorizationError("v2 authorization record must declare valid 'budget'")
-        target_credited = record.get("target_credited")
-        if (
-            isinstance(target_credited, bool)
-            or not isinstance(target_credited, int)
-            or target_credited < 300
-        ):
-            raise AuthorizationError(
-                "v2 authorization target_credited must be an integer >= 300"
-            )
-        pool_digest = record.get("candidate_pool_digest")
-        if not isinstance(pool_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", pool_digest):
-            raise AuthorizationError("v2 authorization record is missing a 64-hex candidate_pool_digest")
-        if (stage, operation) == ("S8-001", "base_gold_production"):
-            reg_manifest = record.get("registration_manifest_sha256")
-            if not isinstance(reg_manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", reg_manifest):
+        ops = record.get("operations") or []
+        is_probe = "build_probe" in ops or operation == "build_probe"
+        if is_probe:
+            target_credited = record.get("target_credited")
+            if (
+                isinstance(target_credited, bool)
+                or not isinstance(target_credited, int)
+                or target_credited != 0
+            ):
                 raise AuthorizationError(
-                    "v2 authorization record is missing a 64-hex registration_manifest_sha256"
+                    "PROBE_CREDITS_FORBIDDEN: v2 probe authorization target_credited must be 0"
                 )
-        elif "registration_manifest_sha256" in record:
-            reg_manifest = record["registration_manifest_sha256"]
-            if not isinstance(reg_manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", reg_manifest):
+            if record.get("awards_credits") is not False:
                 raise AuthorizationError(
-                    "v2 authorization record declares a malformed registration_manifest_sha256"
+                    "PROBE_CREDITS_FORBIDDEN: v2 probe authorization awards_credits must be false"
                 )
+            for hex_key in ("probe_pool_digest", "probe_selection_digest", "registration_manifest_sha256"):
+                val = record.get(hex_key)
+                if not isinstance(val, str) or not re.fullmatch(r"[0-9a-f]{64}", val):
+                    raise AuthorizationError(
+                        f"v2 probe authorization record is missing a 64-hex {hex_key}"
+                    )
+            ordering_policy = record.get("ordering_policy")
+            if ordering_policy not in {
+                "REGISTRATION_ORDER_UNBUILT",
+                "REGISTRATION_ORDER_RAW",
+                "ASCII_SORTED_UNBUILT",
+            }:
+                raise AuthorizationError(
+                    f"v2 probe authorization declares invalid ordering_policy: {ordering_policy!r}"
+                )
+            allowed_identities = record.get("allowed_identities")
+            if (
+                not isinstance(allowed_identities, (list, tuple))
+                or not allowed_identities
+                or not all(isinstance(x, str) and x for x in allowed_identities)
+            ):
+                raise AuthorizationError(
+                    "v2 probe authorization requires non-empty allowed_identities list of strings"
+                )
+            network_policy = record.get("network_policy")
+            if network_policy not in {
+                "OFFLINE_WHEELHOUSE_ONLY",
+                "PYPI_INSTALL_ONLY_COLLECTION_OFFLINE",
+                "CONTROLLED_ACQUISITION_OFFLINE_EXECUTION",
+            }:
+                raise AuthorizationError(
+                    f"v2 probe authorization declares invalid network_policy: {network_policy!r}"
+                )
+            retention_policy = record.get("retention_policy")
+            if retention_policy not in {
+                "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE",
+                "DELETE_ALL_AFTER_CLASSIFICATION",
+            }:
+                raise AuthorizationError(
+                    f"v2 probe authorization declares invalid retention_policy: {retention_policy!r}"
+                )
+        else:
+            target_credited = record.get("target_credited")
+            if (
+                isinstance(target_credited, bool)
+                or not isinstance(target_credited, int)
+                or target_credited < 300
+            ):
+                raise AuthorizationError(
+                    "v2 authorization target_credited must be an integer >= 300"
+                )
+            if record.get("awards_credits") is False:
+                raise AuthorizationError(
+                    "v2 production authorization awards_credits must not be false"
+                )
+            pool_digest = record.get("candidate_pool_digest")
+            if not isinstance(pool_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", pool_digest):
+                raise AuthorizationError("v2 authorization record is missing a 64-hex candidate_pool_digest")
+            if (stage, operation) == ("S8-001", "base_gold_production"):
+                reg_manifest = record.get("registration_manifest_sha256")
+                if not isinstance(reg_manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", reg_manifest):
+                    raise AuthorizationError(
+                        "v2 authorization record is missing a 64-hex registration_manifest_sha256"
+                    )
+            elif "registration_manifest_sha256" in record:
+                reg_manifest = record["registration_manifest_sha256"]
+                if not isinstance(reg_manifest, str) or not re.fullmatch(r"[0-9a-f]{64}", reg_manifest):
+                    raise AuthorizationError(
+                        "v2 authorization record declares a malformed registration_manifest_sha256"
+                    )
     if record["stage"] != stage:
         raise AuthorizationError(
             f"stage mismatch: record {record['stage']!r} != required {stage!r}"
@@ -717,18 +800,23 @@ def _check_binding(
                 f"no independently obtained expected value for required "
                 f"binding {name!r} - fail-closed"
             )
-        if record[name] != expected:
+        rec_val = list(record[name]) if isinstance(record[name], (list, tuple)) else record[name]
+        exp_val = list(expected) if isinstance(expected, (list, tuple)) else expected
+        if rec_val != exp_val:
             raise AuthorizationError(
                 f"{name} mismatch: record binds {record[name]!r}, execution "
                 f"requires {expected!r}"
             )
     # Any optional binding present BOTH in record and expectation must agree.
     for name in sorted(set(record) & set(supplied) - required):
-        if name in BINDING_FIELDS and record[name] != supplied[name]:
-            raise AuthorizationError(
-                f"{name} mismatch: record binds {record[name]!r}, execution "
-                f"requires {supplied[name]!r}"
-            )
+        if name in BINDING_FIELDS:
+            rec_val = list(record[name]) if isinstance(record[name], (list, tuple)) else record[name]
+            exp_val = list(supplied[name]) if isinstance(supplied[name], (list, tuple)) else supplied[name]
+            if rec_val != exp_val:
+                raise AuthorizationError(
+                    f"{name} mismatch: record binds {record[name]!r}, execution "
+                    f"requires {supplied[name]!r}"
+                )
 
 
 def require_authorized(*, stage: str, operation: str, **kwargs: Any) -> Mapping[str, Any]:

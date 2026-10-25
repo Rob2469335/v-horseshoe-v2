@@ -62,28 +62,47 @@ _RESERVATION_LOCK_NAME = ".reservation.lock"
 PRODUCTION_BUDGET_ROOT: pathlib.Path | None = pathlib.Path(
     r"C:\Users\rober\F2_AUTHZ\budget_v2"
 )
+PRODUCTION_PROBE_BUDGET_ROOT: pathlib.Path | None = pathlib.Path(
+    r"C:\Users\rober\F2_AUTHZ\probe_budget_v2"
+)
 
 
 class BudgetError(AuthorizationError):
     """Budget policy is absent, malformed, exhausted, or the store is ambiguous."""
 
 
-def budget_root(explicit: pathlib.Path | str | None = None) -> pathlib.Path:
+def budget_root(
+    explicit: pathlib.Path | str | None = None,
+    *,
+    is_probe: bool = False,
+) -> pathlib.Path:
     if explicit is not None:
         return pathlib.Path(explicit)
-    if PRODUCTION_BUDGET_ROOT is None:
+    root = PRODUCTION_PROBE_BUDGET_ROOT if is_probe else PRODUCTION_BUDGET_ROOT
+    if root is None:
+        label = "PRODUCTION_PROBE_BUDGET_ROOT" if is_probe else "PRODUCTION_BUDGET_ROOT"
         raise BudgetError(
-            "no v2 budget root is authorized: PRODUCTION_BUDGET_ROOT is unset"
+            f"no v2 {'probe ' if is_probe else ''}budget root is authorized: {label} is unset"
         )
-    return pathlib.Path(PRODUCTION_BUDGET_ROOT)
+    return pathlib.Path(root)
 
 
 def budget_of(record: Mapping[str, Any]) -> dict[str, int] | None:
     if record.get("schema") != SCHEMA_V2:
         return None
+    ops = record.get("operations") or []
+    is_probe = "build_probe" in ops
     target = record.get("target_credited")
-    if isinstance(target, bool) or not isinstance(target, int) or target < 300:
-        raise BudgetError("v2 authorization target_credited must be an integer >= 300")
+    if is_probe:
+        if isinstance(target, bool) or not isinstance(target, int) or target != 0:
+            raise BudgetError("PROBE_CREDITS_FORBIDDEN: v2 probe authorization target_credited must be 0")
+        if record.get("awards_credits") is not False:
+            raise BudgetError("PROBE_CREDITS_FORBIDDEN: v2 probe authorization awards_credits must be false")
+    else:
+        if isinstance(target, bool) or not isinstance(target, int) or target < 300:
+            raise BudgetError("v2 authorization target_credited must be an integer >= 300")
+        if record.get("awards_credits") is False:
+            raise BudgetError("v2 production authorization awards_credits must not be false")
     raw = record.get("budget")
     if not isinstance(raw, Mapping):
         raise BudgetError("v2 authorization declares no budget object")
@@ -591,17 +610,27 @@ def classify_store(
     }
 
 
-def audit(record_digest_value: str, ledger_root: pathlib.Path | str | None = None) -> dict[str, int]:
+def audit(
+    record_digest_value: str,
+    ledger_root: pathlib.Path | str | None = None,
+    *,
+    is_probe: bool = False,
+) -> dict[str, int]:
     """Classify every entry. Any unknown, malformed, or unresolved entry fails closed."""
-    d = _grant_dir(budget_root(ledger_root), record_digest_value)
+    d = _grant_dir(budget_root(ledger_root, is_probe=is_probe), record_digest_value)
     report = classify_store(d, record_digest_value)
     if report["status"] != "HEALTHY":
         raise BudgetError(f"budget store is {report['status']}: {report['reason']}")
     return report["counts"]
 
 
-def usage(record_digest_value: str, ledger_root: pathlib.Path | str | None = None) -> int:
-    return audit(record_digest_value, ledger_root)["slots"]
+def usage(
+    record_digest_value: str,
+    ledger_root: pathlib.Path | str | None = None,
+    *,
+    is_probe: bool = False,
+) -> int:
+    return audit(record_digest_value, ledger_root, is_probe=is_probe)["slots"]
 
 
 def _rollback_created(paths: Sequence[pathlib.Path]) -> bool:
@@ -674,7 +703,8 @@ def reserve(
         task_ids = [f"task-{i}" for i in range(task_count)]
 
     digest = record_digest(record)
-    root = budget_root(ledger_root)
+    is_probe = "build_probe" in (record.get("operations") or [])
+    root = budget_root(ledger_root, is_probe=is_probe)
     gdir = _grant_dir(root, digest)
     gdir.mkdir(parents=True, exist_ok=True)
 
@@ -817,7 +847,8 @@ def claim_retry(
         raise BudgetError(f"retry_attempt must be integer >= 1, got {retry_attempt!r}")
 
     digest = record_digest(record)
-    root = budget_root(ledger_root)
+    is_probe = "build_probe" in (record.get("operations") or [])
+    root = budget_root(ledger_root, is_probe=is_probe)
     gdir = _grant_dir(root, digest)
     gdir.mkdir(parents=True, exist_ok=True)
 
@@ -890,7 +921,8 @@ def remaining(record: Mapping[str, Any], ledger_root: pathlib.Path | str | None 
     budget = budget_of(record)
     if budget is None:
         raise BudgetError("not a budgeted (v2) authorization")
-    d = _grant_dir(budget_root(ledger_root), record_digest(record))
+    is_probe = "build_probe" in (record.get("operations") or [])
+    d = _grant_dir(budget_root(ledger_root, is_probe=is_probe), record_digest(record))
     report = classify_store(d, record_digest(record))
     if report.get("terminal") in ("COMPLETED", "REVOKED"):
         return {"executions": 0, "tasks": 0, "retries": 0}

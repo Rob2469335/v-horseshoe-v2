@@ -382,6 +382,42 @@ def cleanup_failed_build(
     return CleanupResult(True, sum(s for _p, s in deleted), skipped, str(manifest))
 
 
+def cleanup_probe_workspace(
+    *,
+    task_id: str,
+    workspace: pathlib.Path | str,
+    allowed_roots: Sequence[pathlib.Path | str],
+    probe_report_path: pathlib.Path | str,
+    build_log_path: pathlib.Path | str,
+    manifest_path: pathlib.Path | str,
+    allow_delete: bool = False,
+) -> CleanupResult:
+    """Safely remove a probe workspace after verifying probe report and build log."""
+    ws = _check_path(pathlib.Path(workspace), [pathlib.Path(r) for r in allowed_roots], task_id)
+    report_file = pathlib.Path(probe_report_path)
+    if not report_file.is_file():
+        raise CleanupRefused(f"probe report missing or unreadable: {probe_report_path}")
+    try:
+        report_data = json.loads(report_file.read_text("utf-8"))
+    except Exception as exc:
+        raise CleanupRefused(f"probe report unreadable JSON: {exc}") from exc
+    tasks_dict = report_data.get("tasks") if isinstance(report_data, dict) else None
+    task_entry = tasks_dict.get(task_id) if isinstance(tasks_dict, dict) else (report_data.get(task_id) if isinstance(report_data, dict) else None)
+    if not isinstance(task_entry, dict):
+        raise CleanupRefused(f"task {task_id} not found in probe report {report_file.name}")
+    log_file = pathlib.Path(build_log_path)
+    if not log_file.is_file() or log_file.stat().st_size == 0:
+        raise CleanupRefused(f"build log missing or empty: {build_log_path}")
+
+    size = _size(ws)
+    if not allow_delete:
+        return CleanupResult(False, size, [], None, "dry-run")
+    manifest = _manifest_ok(pathlib.Path(manifest_path), ws)
+    deleted, skipped = _delete_tree(ws, keep_suffixes=(".log",))
+    _append_manifest(manifest, "probe_workspace_cleanup", deleted)
+    return CleanupResult(True, sum(s for _p, s in deleted), skipped, str(manifest))
+
+
 def sweep_run_temp(
     *,
     root: pathlib.Path | str,
