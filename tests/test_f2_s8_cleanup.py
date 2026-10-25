@@ -418,6 +418,10 @@ def test_windows_junction_is_refused_and_target_untouched(tmp_path):
             subprocess.run(["cmd", "/c", "rmdir", str(link)], capture_output=True)
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows absolute paths and the Windows sensitive-root policy",
+)
 @pytest.mark.parametrize(
     "path",
     [
