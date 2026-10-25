@@ -198,6 +198,8 @@ def _ledger_terminal_record(
         raise CleanupRefused("no ledger paths supplied")
     scientific: list[tuple[Mapping[str, object], pathlib.Path]] = []
     for path in ledger_paths:
+        if not pathlib.Path(path).is_file():
+            raise CleanupRefused(f"ledger missing ({path})")
         ledger = AppendOnlyLedger(path)
         ok, reason = ledger.verify()
         if not ok:

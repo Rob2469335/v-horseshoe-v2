@@ -95,6 +95,8 @@ def terminal_tasks(
     """Verified terminal-scientific task IDs across the admission chains."""
     out: set[str] = set()
     for path in ledger_paths:
+        if not pathlib.Path(path).is_file():
+            raise DriverHalt("LEDGER_MISSING", f"{path}")
         ledger = AppendOnlyLedger(path)
         ok, reason = ledger.verify()
         if not ok:

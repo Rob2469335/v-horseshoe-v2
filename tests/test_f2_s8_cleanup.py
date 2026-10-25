@@ -102,6 +102,24 @@ def test_verified_workspace_is_removed_and_manifest_written(tmp_path):
     assert rows and all(row["reason"] == "verified_task_cleanup" for row in rows)
 
 
+def test_missing_ledger_is_not_treated_as_empty(tmp_path):
+    root, ws, _ledger = _record_store(
+        tmp_path, {"outcome": "timeout", "outcome_class": "infrastructure"}
+    )
+    with pytest.raises(CleanupRefused, match="ledger missing"):
+        delete_workspace(
+            task_id=TASK,
+            workspace=ws,
+            allowed_roots=[root],
+            ledger_paths=[tmp_path / "does-not-exist.jsonl"],
+            evidence_root=tmp_path / "e",
+            evidence_files={},
+            manifest_path=tmp_path / "m.jsonl",
+            allow_delete=True,
+        )
+    assert ws.is_dir()
+
+
 def test_broken_chain_is_refused_and_workspace_kept(tmp_path):
     env = _setup(tmp_path)
     ledger = env[4]

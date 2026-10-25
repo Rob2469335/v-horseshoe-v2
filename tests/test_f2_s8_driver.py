@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from qwen_train.f2_s8_driver import (
     DriverHalt,
     DriverLimits,
@@ -366,6 +368,25 @@ def test_scientific_outcome_not_recorded_halts(tmp_path):
         run_batch=run_batch, refresh=lambda: set(),
     )
     assert result.stop_reason == "LEDGER_DISAGREEMENT"
+
+
+def test_missing_admission_ledger_halts(tmp_path):
+    from qwen_train.f2_s8_driver import terminal_tasks
+
+    with pytest.raises(DriverHalt, match="LEDGER_MISSING"):
+        terminal_tasks([tmp_path / "absent.jsonl"])
+
+    tasks = ["t0"]
+    classes = {"t0": "OBSERVED_COMPATIBLE"}
+    build = {"t0": _built(tmp_path, "t0")}
+    result, _ = _run(
+        tmp_path,
+        pool=tasks,
+        classes=classes,
+        build=build,
+        refresh=lambda: terminal_tasks([tmp_path / "absent.jsonl"]),
+    )
+    assert result.stop_reason == "LEDGER_MISSING"
 
 
 def test_runner_outcome_outside_batch_halts(tmp_path):
