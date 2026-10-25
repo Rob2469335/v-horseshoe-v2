@@ -120,7 +120,8 @@ def test_checkpoint_write_is_atomic_overwrite_latest(tmp_path):
     assert loaded["messages"] == ["one", "two"]
     # no stale .tmp left behind
     assert not list((tmp_path / "checkpoints" / cid).glob("*.tmp"))
-    assert not list((tmp_path / "checkpoints" / cid).glob("*.lock"))
+    names = {p.name for p in (tmp_path / "checkpoints" / cid).iterdir()}
+    assert names.issubset({"checkpoint.json", "checkpoint.json.lock"})
 
 
 def test_load_missing_returns_none(tmp_path):
