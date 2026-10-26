@@ -29,6 +29,15 @@ def wilson_score_interval(
 ) -> tuple[float, float, float]:
     """Calculate the Wilson score confidence interval for a binomial proportion.
 
+    This is the *uncorrected* Wilson score interval (Wilson, 1927; Newcombe,
+    1998), which is the accepted general-purpose default for a binomial
+    proportion because it stays inside ``[0.0, 1.0]`` and holds coverage far
+    better than the Wald interval at small ``n`` or extreme ``p``. It is
+    deliberately *not* the continuity-corrected variant: Newcombe's
+    continuity correction adds ``+/- z/(2n)`` terms inside the square root and
+    is a distinct, more conservative formula reserved for regulatory or
+    clinical use. Do not describe this function as continuity-corrected.
+
     Returns ``(lower_bound, point_estimate, upper_bound)`` where all values
     are in ``[0.0, 1.0]``.
 
@@ -98,8 +107,16 @@ def deterministic_sample_tasks(
 ) -> list[str]:
     """Select a deterministic, uniform pseudo-random sample of task IDs.
 
-    Uses HMAC/SHA-256 keyed hashing of each task ID with the preregistered
-    seed. The sample is guaranteed to be:
+    Scores each task ID with domain-separated SHA-256 over the ASCII bytes of
+    ``f"f2-s8-feasibility-sample:{seed}:{task_id}"`` and keeps the
+    ``sample_size`` lowest-scoring IDs. This is *not* HMAC: the seed is a
+    public, preregistered value (bound into the sample manifest), so a keyed
+    PRF would add no security - HMAC's guarantee depends on key secrecy
+    (RFC 9381 §1), which a published seed does not provide. Domain separation
+    via the fixed prefix is what prevents cross-protocol collisions with other
+    SHA-256 digests in this system.
+
+    The sample is guaranteed to be:
     * Reproducible across all operating systems and Python versions.
     * Invariant to the order of items in ``task_ids``.
     * Without replacement.

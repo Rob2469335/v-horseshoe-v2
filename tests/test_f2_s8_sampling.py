@@ -1,5 +1,7 @@
 """Unit tests for deterministic feasibility sampling and Wilson score interval calculations."""
 
+import hashlib
+
 import pytest
 
 from qwen_train.f2_s8_sampling import (
@@ -139,3 +141,79 @@ def test_filter_unknown_population():
     # t5: excluded (in terminals)
     # t6: eligible (UNKNOWN, not excluded, not terminal)
     assert filtered == ["t1", "t6"]
+
+
+def test_deterministic_sample_tasks_matches_domain_separated_sha256():
+    """Lock the sampling primitive to plain domain-separated SHA-256.
+
+    Recomputes the ranking independently so any silent switch to HMAC (or any
+    other keyed PRF) fails here. The seed is a public preregistered value, so
+    HMAC would add no security and would silently change every sample digest.
+    """
+    ids = [f"owner__repo-{i}" for i in range(1, 21)]
+    seed = 7
+    selected = deterministic_sample_tasks(ids, sample_size=5, seed=seed)
+
+    prefix = f"f2-s8-feasibility-sample:{seed}:"
+    scored = sorted(
+        (hashlib.sha256(f"{prefix}{tid}".encode("utf-8")).digest(), tid)
+        for tid in sorted(set(ids))
+    )
+    expected = sorted(tid for _, tid in scored[:5])
+
+    assert selected == expected
+    # Golden value: pins the exact selection for seed=7 over owner__repo-1..20.
+    assert selected == [
+        "owner__repo-1",
+        "owner__repo-11",
+        "owner__repo-15",
+        "owner__repo-4",
+        "owner__repo-6",
+    ]
+
+
+def test_deterministic_sample_tasks_int_seed_equals_str_seed():
+    """The seed is stringified before hashing, so 7 and '7' must agree."""
+    ids = [f"owner__repo-{i}" for i in range(1, 21)]
+    assert deterministic_sample_tasks(ids, sample_size=5, seed=7) == (
+        deterministic_sample_tasks(ids, sample_size=5, seed="7")
+    )
+
+
+def test_sample_manifest_digest_golden_value():
+    """Pin the canonical manifest digest for a fixed sample.
+
+    A change here means the canonical serialization changed, which silently
+    invalidates every previously recorded sample manifest digest.
+    """
+    ids = [f"owner__repo-{i}" for i in range(1, 21)]
+    selected = deterministic_sample_tasks(ids, sample_size=5, seed=7)
+    manifest = sample_manifest(
+        selected, seed=7, population_sha256="0" * 64, sample_size=5
+    )
+    assert sample_manifest_digest(manifest) == (
+        "e8940135504f40e657c2e23e9726f16ee46f1264a93b7285d94edf3f1ec81785"
+    )
+
+
+def test_wilson_score_interval_golden_values_uncorrected():
+    """Pin the *uncorrected* Wilson interval against known values.
+
+    These are the uncorrected (Wilson 1927 / Newcombe 1998) bounds. The
+    continuity-corrected variant is a different, more conservative formula and
+    must NOT reproduce these numbers.
+    """
+    lower, point, upper = wilson_score_interval(25, 50, confidence=0.95)
+    assert lower == pytest.approx(0.3664451431682858)
+    assert point == pytest.approx(0.5)
+    assert upper == pytest.approx(0.6335548568317142)
+
+    lower0, point0, upper0 = wilson_score_interval(0, 50, confidence=0.95)
+    assert lower0 == 0.0
+    assert point0 == 0.0
+    assert upper0 == pytest.approx(0.07134759913335872)
+
+    lowern, pointn, uppern = wilson_score_interval(50, 50, confidence=0.95)
+    assert lowern == pytest.approx(0.9286524008666414)
+    assert pointn == 1.0
+    assert uppern == 1.0
