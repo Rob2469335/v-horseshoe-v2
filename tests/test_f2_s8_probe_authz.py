@@ -54,14 +54,18 @@ VALID_RETENTION_POLICY = "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE"
 def _make_reg_and_compat(
     tmp_path: pathlib.Path,
     task_ids: Sequence[str] = ("acme__widget-1", "acme__gadget-2"),
+    *,
+    conflicts: Sequence[str] = (),
 ):
     reg_file = tmp_path / "registered_tasks.json"
     reg_file.write_text(json.dumps(list(task_ids)), encoding="utf-8")
     compat_file = tmp_path / "compat_report.json"
     compat_data = {
+        "schema": "f2-plugin-compat/v1",
         "tasks": {
             tid: {"classification": "UNKNOWN"} for tid in task_ids
-        }
+        },
+        "resolved_by_source_priority": list(conflicts),
     }
     compat_file.write_text(json.dumps(compat_data), encoding="utf-8")
     return reg_file, compat_file
@@ -71,10 +75,15 @@ def _compute_digests(
     task_ids: Sequence[str],
     ordering_policy: str = "REGISTRATION_ORDER_UNBUILT",
     max_tasks: int = 10,
+    *,
+    conflicts: Sequence[str] = (),
 ):
+    conflict_set = set(conflicts)
     return compute_ordered_probe_candidates(
         registration_order=task_ids,
-        compat_classes={tid: "UNKNOWN" for tid in task_ids},
+        compat_classes={
+            tid: "UNKNOWN" for tid in task_ids if tid not in conflict_set
+        },
         ordering_policy=ordering_policy,
         max_tasks=max_tasks,
     )
@@ -98,6 +107,7 @@ def _setup_probe_env(
     repo_revision: str = TEST_REPO_REVISION,
     dirty: bool = False,
     task_ids: Sequence[str] = ("acme__widget-1", "acme__gadget-2"),
+    conflicts: Sequence[str] = (),
     **over: Any,
 ) -> dict[str, Any]:
     pathlib.Path(tmp_path).mkdir(parents=True, exist_ok=True)
@@ -111,14 +121,24 @@ def _setup_probe_env(
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(trust_root))
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", root_sha)
 
-    reg_file, compat_file = _make_reg_and_compat(tmp_path, task_ids)
-    reg_sha256 = hashlib.sha256(reg_file.read_bytes()).hexdigest()
+    reg_file, compat_file = _make_reg_and_compat(tmp_path, task_ids, conflicts=conflicts)
+    file_sha256 = hashlib.sha256(reg_file.read_bytes()).hexdigest()
+    content_digest = hashlib.sha256(
+        ("semantic:" + ",".join(task_ids)).encode("utf-8")
+    ).hexdigest()
     manifest_file = tmp_path / "registration_manifest.json"
-    manifest_file.write_text(json.dumps({"manifest_version": 1, "tasks": list(task_ids)}), encoding="utf-8")
-    manifest_sha256 = hashlib.sha256(manifest_file.read_bytes()).hexdigest()
+    manifest_file.write_text(
+        json.dumps(
+            {
+                "tasks_sha256": file_sha256,
+                "registration_content_sha256": content_digest,
+            }
+        ),
+        encoding="utf-8",
+    )
     if pool_digest is None or selection_digest is None:
         computed_pool, _sel, computed_sel = _compute_digests(
-            task_ids, ordering_policy=ordering_policy
+            task_ids, ordering_policy=ordering_policy, conflicts=conflicts
         )
         pool_digest = pool_digest or computed_pool
         selection_digest = selection_digest or computed_sel
@@ -139,8 +159,8 @@ def _setup_probe_env(
         "awards_credits": awards_credits,
         "probe_pool_digest": pool_digest,
         "probe_selection_digest": selection_digest,
-        "registration_sha256": reg_sha256,
-        "registration_manifest_sha256": over.get("registration_manifest_sha256", manifest_sha256),
+        "registration_sha256": content_digest,
+        "registration_manifest_sha256": over.get("registration_manifest_sha256", file_sha256),
         "not_before": (t_now - dt.timedelta(minutes=5)).isoformat(),
         "not_after": (t_now + expires_delta).isoformat(),
         "budget": {"max_executions": 5, "max_total_tasks": 100, "max_retries": 10},
@@ -151,7 +171,7 @@ def _setup_probe_env(
 
     expected_binding = {
         "repository_revision": repo_revision,
-        "registration_sha256": reg_sha256,
+        "registration_sha256": content_digest,
         "registration_manifest_sha256": rec["registration_manifest_sha256"],
         "probe_pool_digest": pool_digest,
         "probe_selection_digest": selection_digest,
@@ -1329,6 +1349,11 @@ def test_authorize_explicit_reservation_reserves_in_isolated_root(tmp_path, monk
 def test_authorize_probe_rejects_unreadable_registration_order(tmp_path, monkeypatch):
     env = _setup_probe_env(tmp_path, monkeypatch)
     env["reg_file"].write_text(json.dumps({"not": "a list"}), encoding="utf-8")
+    manifest = json.loads(env["manifest_file"].read_text(encoding="utf-8"))
+    manifest["tasks_sha256"] = hashlib.sha256(
+        env["reg_file"].read_bytes()
+    ).hexdigest()
+    env["manifest_file"].write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(V2GateError) as exc_info:
         authorize_s8_probe_run(
@@ -1371,6 +1396,68 @@ def test_authorize_probe_rejects_corrupt_admission_ledger(tmp_path, monkeypatch)
         )
     assert exc_info.value.code == "PROBE_NOT_AUTHORIZED"
     assert "failed verification" in str(exc_info.value)
+
+
+def test_probe_gate_excludes_source_priority_conflicts(tmp_path, monkeypatch):
+    env = _setup_probe_env(
+        tmp_path,
+        monkeypatch,
+        task_ids=("acme__widget-1", "acme__gadget-2"),
+        conflicts=("acme__widget-1",),
+    )
+    auth = authorize_s8_probe_run(
+        grant_path=env["grant_file"],
+        registration_file=env["reg_file"],
+        registration_manifest_file=env["manifest_file"],
+        compat_report_file=env["compat_file"],
+        budget_ledger_root=tmp_path / "broot_conflicts",
+        current_username="testuser",
+    )
+    assert "acme__widget-1" not in auth.selected_task_ids
+    assert "acme__gadget-2" in auth.selected_task_ids
+
+
+def test_probe_grant_binds_target_compatible(tmp_path, monkeypatch):
+    env = _setup_probe_env(tmp_path, monkeypatch, target_compatible=1)
+    auth = authorize_s8_probe_run(
+        grant_path=env["grant_file"],
+        registration_file=env["reg_file"],
+        registration_manifest_file=env["manifest_file"],
+        compat_report_file=env["compat_file"],
+        budget_ledger_root=tmp_path / "broot_target",
+        current_username="testuser",
+    )
+    assert auth.target_compatible == 1
+
+
+@pytest.mark.parametrize("value", [-1, True, "1", 101])
+def test_probe_grant_rejects_invalid_target_compatible(tmp_path, monkeypatch, value):
+    env = _setup_probe_env(tmp_path, monkeypatch, target_compatible=value)
+    with pytest.raises(V2GateError) as exc_info:
+        authorize_s8_probe_run(
+            grant_path=env["grant_file"],
+            registration_file=env["reg_file"],
+            registration_manifest_file=env["manifest_file"],
+            compat_report_file=env["compat_file"],
+            budget_ledger_root=tmp_path / "broot_bad_target",
+            current_username="testuser",
+        )
+    assert exc_info.value.code == "PROBE_NOT_AUTHORIZED"
+
+
+def test_probe_grant_record_must_be_a_json_object(tmp_path, monkeypatch):
+    env = _setup_probe_env(tmp_path, monkeypatch)
+    env["grant_file"].write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+    with pytest.raises(V2GateError) as exc_info:
+        authorize_s8_probe_run(
+            grant_path=env["grant_file"],
+            registration_file=env["reg_file"],
+            registration_manifest_file=env["manifest_file"],
+            compat_report_file=env["compat_file"],
+            budget_ledger_root=tmp_path / "broot_non_object_grant",
+            current_username="testuser",
+        )
+    assert exc_info.value.code == "INVALID_GRANT"
 
 
 # ---------------------------------------------------------------------------
@@ -1420,7 +1507,9 @@ def test_revalidation_rejects_changed_registration_bytes(tmp_path, monkeypatch):
 
 def test_revalidation_rejects_changed_registration_manifest(tmp_path, monkeypatch):
     env, auth = _authorized_probe(tmp_path, monkeypatch)
-    env["manifest_file"].write_bytes(env["manifest_file"].read_bytes() + b"\n")
+    manifest = json.loads(env["manifest_file"].read_text(encoding="utf-8"))
+    manifest["registration_content_sha256"] = "0" * 64
+    env["manifest_file"].write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(V2GateError):
         check_probe_grant_still_valid(auth, budget_ledger_root=tmp_path / "broot")
 
@@ -1518,3 +1607,249 @@ def test_failed_mid_run_revalidation_blocks_execution():
     )
     assert result.stop_reason == "PROBE_REVOKED"
     assert batches == [["u1"]]
+
+
+# ---------------------------------------------------------------------------
+# S8 Final Push: EXCLUDE-185 non-bypassability & target_compatible drift
+# ---------------------------------------------------------------------------
+def _write_exclusion_policy(tmp_path: pathlib.Path, excluded_ids: Sequence[str]) -> pathlib.Path:
+    sorted_ids = sorted(str(x) for x in excluded_ids)
+    canon_ids = json.dumps(sorted_ids, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    policy = {
+        "schema": "f2-s8-exclusion-policy/v1",
+        "policy_id": "EXCLUDE-185",
+        "count": len(sorted_ids),
+        "excluded_task_ids": sorted_ids,
+        "excluded_task_ids_sha256": hashlib.sha256(canon_ids).hexdigest(),
+    }
+    p = tmp_path / "exclude_185.json"
+    p.write_text(json.dumps(policy, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    return p
+
+
+def test_exclude_185_cannot_be_bypassed_across_candidate_paths(tmp_path, monkeypatch):
+    from qwen_train.f2_s8_candidate_pool import (
+        PoolError,
+        build_pool,
+        canonical_bytes,
+        load_exclusion_policy,
+    )
+    from qwen_train.f2_s8_driver import plugin_classes, select_batch
+    from qwen_train.f2_s8_v2_gate import v2_preflight
+
+    conflict_task = "acme__widget-1"
+    good_task = "acme__gadget-2"
+    policy_path = _write_exclusion_policy(tmp_path, [conflict_task])
+    _pol, forbidden_ids, _sha = load_exclusion_policy(policy_path)
+    assert forbidden_ids == {conflict_task}
+
+    # 1. build_pool refuses forbidden_task_ids in task_ids
+    with pytest.raises(PoolError, match="forbidden/excluded"):
+        build_pool(
+            task_ids=[conflict_task, good_task],
+            registration_sha256="a" * 64,
+            forbidden_task_ids=forbidden_ids,
+        )
+
+    # 2. plugin_classes strips resolved_by_source_priority even if marked OBSERVED_COMPATIBLE
+    report = {
+        "results": [
+            {"task_id": conflict_task, "classification": "OBSERVED_COMPATIBLE"},
+            {"task_id": good_task, "classification": "OBSERVED_COMPATIBLE"},
+        ],
+        "resolved_by_source_priority": [conflict_task],
+    }
+    cls_map = plugin_classes(report)
+    assert conflict_task not in cls_map
+    assert cls_map[good_task] == "OBSERVED_COMPATIBLE"
+
+    # 3. select_batch refuses excluded_tasks even if a caller passes a custom class map & built workspace
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    selected = select_batch(
+        [conflict_task, good_task],
+        {conflict_task: "OBSERVED_COMPATIBLE", good_task: "OBSERVED_COMPATIBLE"},
+        {
+            conflict_task: {"status": "built", "workspace": str(ws)},
+            good_task: {"status": "built", "workspace": str(ws)},
+        },
+        excluded_tasks=forbidden_ids,
+    )
+    assert selected == [good_task]
+
+    # 4. authorize_s8_probe_run refuses when compat report conflicts disagree with exclusion_policy_file
+    env = _setup_probe_env(
+        tmp_path,
+        monkeypatch,
+        task_ids=(conflict_task, good_task),
+        conflicts=("some_other_task-1",),
+    )
+    with pytest.raises(V2GateError, match="disagrees with exclusion policy"):
+        authorize_s8_probe_run(
+            grant_path=env["grant_file"],
+            registration_file=env["reg_file"],
+            registration_manifest_file=env["manifest_file"],
+            compat_report_file=env["compat_file"],
+            exclusion_policy_file=policy_path,
+            budget_ledger_root=tmp_path / "broot_excl_mismatch",
+            current_username="testuser",
+        )
+
+    # 5. v2_preflight refuses a pool that includes a task from exclusion_policy_file
+    reg_bytes = json.dumps([conflict_task, good_task]).encode("utf-8")
+    reg_file = tmp_path / "reg_v2.json"
+    reg_file.write_bytes(reg_bytes)
+    reg_file_sha = hashlib.sha256(reg_bytes).hexdigest()
+    reg_content_sha = "b" * 64
+    prov_file = tmp_path / "reg_v2.provenance.json"
+    prov_file.write_text(
+        json.dumps(
+            {
+                "tasks_sha256": reg_file_sha,
+                "registration_content_sha256": reg_content_sha,
+            }
+        ),
+        encoding="utf-8",
+    )
+    bad_pool = build_pool(
+        task_ids=[conflict_task, good_task],
+        registration_sha256=reg_content_sha,
+        provenance={"registration_file_sha256": reg_file_sha},
+    )
+    bad_pool_file = tmp_path / "bad_pool.json"
+    bad_pool_bytes = canonical_bytes(bad_pool)
+    bad_pool_file.write_bytes(bad_pool_bytes)
+    bad_pool_sha = hashlib.sha256(bad_pool_bytes).hexdigest()
+
+    t_now = dt.datetime.now(dt.timezone.utc)
+    prod_rec = {
+        "id": "grant-prod-1",
+        "schema": "f2-authorization/v2",
+        "stage": "S8-001",
+        "operations": ["base_gold_production"],
+        "not_before": (t_now - dt.timedelta(minutes=5)).isoformat(),
+        "not_after": (t_now + dt.timedelta(hours=2)).isoformat(),
+        "registration_sha256": reg_content_sha,
+        "candidate_pool_digest": bad_pool_sha,
+        "target_credited": 300,
+        "budget": {"max_executions": 5, "max_total_tasks": 50, "max_retries": 5},
+    }
+    with pytest.raises(V2GateError) as exc_info:
+        v2_preflight(
+            record=prod_rec,
+            registration_file=reg_file,
+            candidate_pool_file=bad_pool_file,
+            manifest_task_ids=[good_task],
+            exclusion_policy_file=policy_path,
+        )
+    assert exc_info.value.code == "EXCLUDED_TASK"
+
+
+    # 6. authorize_s8_probe_run refuses if a configured ledger path is missing
+    with pytest.raises(V2GateError) as exc_missing_ledger:
+        authorize_s8_probe_run(
+            grant_path=env["grant_file"],
+            registration_file=env["reg_file"],
+            registration_manifest_file=env["manifest_file"],
+            compat_report_file=env["compat_file"],
+            ledger_paths=[tmp_path / "nonexistent_ledger.jsonl"],
+            budget_ledger_root=tmp_path / "broot_missing_ledger",
+            current_username="testuser",
+        )
+    assert exc_missing_ledger.value.code == "MISSING_ARTIFACT"
+
+
+def test_revalidation_rejects_target_compatible_drift(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    _env, auth = _authorized_probe(tmp_path, monkeypatch)
+    mutated = replace(auth, target_compatible=auth.target_compatible + 1)
+    with pytest.raises(V2GateError, match="target_compatible"):
+        check_probe_grant_still_valid(mutated, budget_ledger_root=tmp_path / "broot")
+
+
+def test_compat_report_missing_schema_refused(tmp_path, monkeypatch):
+    """Compatibility reports lacking explicit schema or rule_version are refused."""
+    env = _setup_probe_env(tmp_path, monkeypatch)
+    bad_compat = tmp_path / "no_schema_compat.json"
+    bad_compat.write_text(
+        json.dumps({
+            "tasks": {tid: {"classification": "UNKNOWN"} for tid in env["task_ids"]}
+        }),
+        encoding="utf-8",
+    )
+    with pytest.raises(V2GateError, match="unsupported or missing compat report schema"):
+        authorize_s8_probe_run(
+            grant_path=env["grant_file"],
+            registration_file=env["reg_file"],
+            registration_manifest_file=env["manifest_file"],
+            compat_report_file=bad_compat,
+            budget_ledger_root=tmp_path / "broot_no_schema",
+            current_username="testuser",
+        )
+
+
+def test_compat_report_conflicting_grouping_refused(tmp_path, monkeypatch):
+    """Compatibility reports with contradictory tasks and results are refused."""
+    env = _setup_probe_env(tmp_path, monkeypatch)
+    conflicting_compat = tmp_path / "conflicting_compat.json"
+    conflicting_compat.write_text(
+        json.dumps({
+            "schema": "f2-plugin-compat/v1",
+            "tasks": {
+                env["task_ids"][0]: {"classification": "OBSERVED_COMPATIBLE"},
+            },
+            "results": [
+                {"task_id": env["task_ids"][0], "classification": "OBSERVED_INCOMPATIBLE"},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    with pytest.raises(V2GateError, match="conflicting classifications between tasks and results"):
+        authorize_s8_probe_run(
+            grant_path=env["grant_file"],
+            registration_file=env["reg_file"],
+            registration_manifest_file=env["manifest_file"],
+            compat_report_file=conflicting_compat,
+            budget_ledger_root=tmp_path / "broot_conflict_compat",
+            current_username="testuser",
+        )
+
+
+def test_revalidation_rejects_exclusion_policy_drift(tmp_path, monkeypatch):
+    """Revalidation catches mid-run tampering or modification of exclusion policy."""
+    policy_path = tmp_path / "test_exclude.json"
+    policy_data = {
+        "schema": "f2-s8-exclusion-policy/v1",
+        "description": "test",
+        "count": 1,
+        "excluded_task_ids": ["acme__widget-1"],
+        "excluded_task_ids_sha256": hashlib.sha256(json.dumps(["acme__widget-1"], separators=(",", ":")).encode("utf-8")).hexdigest(),
+    }
+    policy_path.write_text(json.dumps(policy_data), encoding="utf-8")
+
+    env = _setup_probe_env(
+        tmp_path,
+        monkeypatch,
+        task_ids=("acme__widget-1", "acme__gadget-2"),
+        conflicts=("acme__widget-1",),
+    )
+    broot = tmp_path / "broot_excl_drift"
+    auth = authorize_s8_probe_run(
+        grant_path=env["grant_file"],
+        registration_file=env["reg_file"],
+        registration_manifest_file=env["manifest_file"],
+        compat_report_file=env["compat_file"],
+        exclusion_policy_file=policy_path,
+        budget_ledger_root=broot,
+        current_username="testuser",
+    )
+    assert auth.exclusion_policy_sha256 != ""
+
+    # Tamper with policy file
+    policy_data["description"] = "tampered"
+    policy_path.write_text(json.dumps(policy_data), encoding="utf-8")
+
+    with pytest.raises(V2GateError, match="exclusion_policy_sha256"):
+        check_probe_grant_still_valid(auth, budget_ledger_root=broot)
+

@@ -615,6 +615,19 @@ def verify_authorization(
                 raise AuthorizationError(
                     f"v2 probe authorization declares invalid retention_policy: {retention_policy!r}"
                 )
+            if "target_compatible" in record:
+                target_compatible = record.get("target_compatible")
+                max_total = int(budget["max_total_tasks"])
+                if (
+                    isinstance(target_compatible, bool)
+                    or not isinstance(target_compatible, int)
+                    or target_compatible < 0
+                    or target_compatible > max_total
+                ):
+                    raise AuthorizationError(
+                        "v2 probe authorization target_compatible must be an integer "
+                        f"in 0..{max_total}"
+                    )
         else:
             target_credited = record.get("target_credited")
             if (

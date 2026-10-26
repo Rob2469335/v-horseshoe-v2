@@ -281,6 +281,190 @@ def test_missing_classification_halts_without_cleanup_callback():
     assert result.stop_reason == "CLEANUP_CLASSIFICATION_UNRECOGNIZED"
 
 
+def test_missing_builder_is_a_hard_prerequisite_failure():
+    result = run_probe(
+        unknown_task_ids=["u1"],
+        limits=_limits(10),
+        authorize=lambda: None,
+        builder=None,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_UNAVAILABLE"
+    assert result.stop_reason != "PROBE_COMPLETE"
+
+
+def test_builder_unavailable_is_not_unknown():
+    from qwen_train.f2_s8_probe_driver import BuilderUnavailable
+
+    def builder(batch):
+        raise BuilderUnavailable("guest builder not provisioned")
+
+    result = run_probe(
+        unknown_task_ids=["u1"],
+        limits=_limits(10),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_UNAVAILABLE"
+    assert result.unknown == 0
+
+
+def test_builder_missing_task_is_a_contract_failure():
+    def builder(batch):
+        return {}
+
+    result = run_probe(
+        unknown_task_ids=["u1", "u2"],
+        limits=_limits(10),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+
+
+def test_builder_extra_task_is_a_contract_failure():
+    def builder(batch):
+        return {tid: {"classification": "UNKNOWN"} for tid in [*batch, "extra"]}
+
+    result = run_probe(
+        unknown_task_ids=["u1"],
+        limits=_limits(10),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+
+
+def test_build_cell_task_id_mismatch_is_a_contract_failure():
+    from qwen_train.f2_s8_probe_driver import BuildCell
+
+    def builder(batch):
+        return {"u1": BuildCell("other", "UNKNOWN")}
+
+    result = run_probe(
+        unknown_task_ids=["u1"],
+        limits=_limits(10),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+
+
+def _compat(tmp_path, task_id):
+    ws = tmp_path / task_id
+    ws.mkdir(exist_ok=True)
+    return {"classification": "OBSERVED_COMPATIBLE", "workspace": str(ws)}
+
+
+def test_target_compatible_stops_before_the_next_batch(tmp_path):
+    tasks = ["u1", "u2"]
+    calls = []
+
+    def builder(batch):
+        calls.append(list(batch))
+        return {tid: _compat(tmp_path, tid) for tid in batch}
+
+    result = run_probe(
+        unknown_task_ids=tasks,
+        limits=_limits(10, batch_limit=1, target_compatible=1),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_TARGET_REACHED"
+    assert result.built == 1
+    assert calls == [["u1"]]
+
+
+def test_target_not_reached_runs_all_tasks(tmp_path):
+    tasks = ["u1", "u2"]
+
+    def builder(batch):
+        return {tid: _compat(tmp_path, tid) for tid in batch}
+
+    result = run_probe(
+        unknown_task_ids=tasks,
+        limits=_limits(10, target_compatible=5),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_COMPLETE"
+    assert result.built == 2
+
+
+def test_target_does_not_count_compatible_without_a_workspace():
+    def builder(batch):
+        return {tid: {"classification": "OBSERVED_COMPATIBLE"} for tid in batch}
+
+    result = run_probe(
+        unknown_task_ids=["u1"],
+        limits=_limits(10, target_compatible=1),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_COMPLETE"
+    assert result.compatible == 1
+    assert result.built == 0
+
+
+def test_execution_cap_stops_after_the_cap(tmp_path):
+    tasks = ["u1", "u2"]
+    calls = []
+
+    def builder(batch):
+        calls.append(list(batch))
+        return {tid: {"classification": "UNKNOWN"} for tid in batch}
+
+    result = run_probe(
+        unknown_task_ids=tasks,
+        limits=_limits(10, batch_limit=1, max_executions=1),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=FREE,
+        verify_ledgers=lambda: None,
+        log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_EXECUTION_CAP"
+    assert calls == [["u1"]]
+
+
+def test_negative_stop_limits_are_rejected():
+    with pytest.raises(ValueError):
+        ProbeLimits(max_tasks=1, target_compatible=-1)
+    with pytest.raises(ValueError):
+        ProbeLimits(max_tasks=1, max_executions=-1)
+
+
+def test_dry_run_builder_is_explicitly_unknown():
+    from qwen_train.f2_s8_probe_driver import DryRunBuilder
+
+    rows = DryRunBuilder()(["u1"])
+    assert rows["u1"].classification == "UNKNOWN"
+    assert rows["u1"].workspace is None
+
+
 def test_probe_halts_on_unrecognized_cleanup_classification(tmp_path, monkeypatch):
     import qwen_train.f2_s8_cleanup as cleanup
 

@@ -134,6 +134,7 @@ import datetime as _dt
 import hashlib
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -173,6 +174,7 @@ CREDITED_TASK = "CREDITED_TASK"
 TERMINAL_TASK = "TERMINAL_TASK"
 
 PROBE_OPERATION = "build_probe"
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 PROBE_NOT_AUTHORIZED = "PROBE_NOT_AUTHORIZED"
 PROBE_IDENTITY_MISMATCH = "PROBE_IDENTITY_MISMATCH"
 PROBE_POOL_DIGEST_MISMATCH = "PROBE_POOL_DIGEST_MISMATCH"
@@ -578,6 +580,7 @@ def v2_preflight(
     manifest_digest: str = "",
     registration_bytes: bytes | None = None,
     now: _dt.datetime | None = None,
+    exclusion_policy_file: Path | str | None = None,
 ) -> VerifiedV2Preflight:
     """Refuse unless every v2 condition holds. Returns frozen evidence. No side effects.
 
@@ -592,6 +595,26 @@ def v2_preflight(
     )
     pool = _read_pool(record, Path(candidate_pool_file))
     _check_registration_anchor(reg, pool)
+
+    if exclusion_policy_file is not None:
+        from qwen_train.f2_s8_candidate_pool import load_exclusion_policy
+
+        try:
+            _pol, forbidden_ids, _pol_sha = load_exclusion_policy(exclusion_policy_file)
+        except PoolError as exc:
+            raise V2GateError(POOL_INVALID, f"exclusion policy invalid: {exc}") from exc
+        leaked_in_pool = sorted(set(pool["task_ids"]) & forbidden_ids)
+        _refuse(
+            not leaked_in_pool,
+            EXCLUDED_TASK,
+            f"candidate pool includes EXCLUDE-185 task(s): {leaked_in_pool[:5]}",
+        )
+        leaked_in_manifest = sorted({str(t) for t in manifest_task_ids} & forbidden_ids)
+        _refuse(
+            not leaked_in_manifest,
+            EXCLUDED_TASK,
+            f"manifest includes EXCLUDE-185 task(s): {leaked_in_manifest[:5]}",
+        )
 
     not_registered = sorted(set(pool["task_ids"]) - set(reg.task_ids))
     _refuse(
@@ -643,6 +666,7 @@ class S8ProbeAuthorizedRun:
     batch_limit: int
     disk_floor_bytes: int
     per_task_disk_bytes: int
+    target_compatible: int = 0
     execution_id: str | None = None
     not_before: str = ""
     not_after: str = ""
@@ -654,12 +678,96 @@ class S8ProbeAuthorizedRun:
     registration_file: str = ""
     registration_manifest_file: str = ""
     compat_report_file: str = ""
+    exclusion_policy_file: str = ""
+    exclusion_policy_sha256: str = ""
+    compat_report_sha256: str = ""
     ledger_paths: tuple[str, ...] = ()
     built_task_ids: tuple[str, ...] = ()
     trust_root_path: str = ""
     repository_root: str = ""
     budget_ledger_root: str = ""
     current_username: str = ""
+
+
+SUPPORTED_COMPAT_SCHEMAS = frozenset({
+    "f2-plugin-compat/v1",
+    "f2-s8-plugin-compat/v1",
+    "f2-plugin-compat-v2",
+})
+
+
+def _compat_classes_from_report(data: Mapping[str, Any]) -> dict[str, str]:
+    """Read and strictly validate the compat report's task classes."""
+    if not isinstance(data, Mapping):
+        raise V2GateError(PROBE_NOT_AUTHORIZED, "compat report is not a JSON object")
+
+    schema = data.get("schema") or data.get("rule_version")
+    if not schema or str(schema) not in SUPPORTED_COMPAT_SCHEMAS:
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            f"unsupported or missing compat report schema: {schema!r}; "
+            f"expected one of {sorted(SUPPORTED_COMPAT_SCHEMAS)}",
+        )
+
+    has_tasks = "tasks" in data and isinstance(data["tasks"], Mapping)
+    has_results = "results" in data and isinstance(data["results"], list)
+    has_unknown = "unknown_tasks" in data and isinstance(data["unknown_tasks"], list)
+
+    tasks_classes: dict[str, str] = {}
+    if has_tasks:
+        for tid, row in data["tasks"].items():
+            if isinstance(row, Mapping) and "classification" in row:
+                tasks_classes[str(tid)] = str(row["classification"] or "")
+            else:
+                raise V2GateError(
+                    PROBE_NOT_AUTHORIZED, f"malformed tasks entry for {tid!r}"
+                )
+
+    results_classes: dict[str, str] = {}
+    if has_results:
+        for row in data["results"]:
+            if isinstance(row, Mapping) and row.get("task_id"):
+                results_classes[str(row["task_id"])] = str(row.get("classification") or "")
+            else:
+                raise V2GateError(
+                    PROBE_NOT_AUTHORIZED, f"malformed results row in compat report: {row!r}"
+                )
+
+    if has_tasks and has_results:
+        common_keys = set(tasks_classes.keys()) & set(results_classes.keys())
+        conflicts = [k for k in common_keys if tasks_classes[k] != results_classes[k]]
+        if conflicts:
+            raise V2GateError(
+                PROBE_NOT_AUTHORIZED,
+                f"compat report has conflicting classifications between tasks and results for: {conflicts[:5]}",
+            )
+        return dict(tasks_classes) if tasks_classes else dict(results_classes)
+
+    if has_tasks:
+        if not tasks_classes:
+            raise V2GateError(PROBE_NOT_AUTHORIZED, "compat report tasks mapping is empty")
+        return tasks_classes
+
+    if has_results:
+        if not results_classes:
+            raise V2GateError(PROBE_NOT_AUTHORIZED, "compat report results list is empty")
+        return results_classes
+
+    if has_unknown:
+        classes: dict[str, str] = {}
+        for row in data["unknown_tasks"]:
+            tid = row.get("task_id") if isinstance(row, Mapping) else row
+            if isinstance(tid, str) and tid:
+                classes[tid] = "UNKNOWN"
+            else:
+                raise V2GateError(PROBE_NOT_AUTHORIZED, f"malformed unknown_tasks entry: {row!r}")
+        if classes:
+            return classes
+
+    raise V2GateError(
+        PROBE_NOT_AUTHORIZED,
+        "compat report has no usable tasks/results/unknown_tasks grouping",
+    )
 
 
 def authorize_s8_probe_run(
@@ -669,6 +777,7 @@ def authorize_s8_probe_run(
     registration_file: Path | str,
     registration_manifest_file: Path | str | None = None,
     compat_report_file: Path | str,
+    exclusion_policy_file: Path | str | None = None,
     ledger_paths: Sequence[Path | str] = (),
     built_task_ids: Iterable[str] = (),
     trust_root_path: Path | str | None = None,
@@ -701,49 +810,103 @@ def authorize_s8_probe_run(
     from qwen_train.f2_authorization import record_digest, verify_authorization
     from qwen_train.f2_s8_probe_driver import compute_ordered_probe_candidates
 
-    # Read registration bytes and digest
+    # Read registration bytes and the provenance/content digest.
     reg_path = Path(registration_file)
     if not reg_path.is_file():
         raise V2GateError(MISSING_ARTIFACT, f"registration file missing: {reg_path}")
     reg_bytes = reg_path.read_bytes()
-    reg_sha256 = hashlib.sha256(reg_bytes).hexdigest()
+    file_sha256 = hashlib.sha256(reg_bytes).hexdigest()
 
-    reg_manifest_sha256 = ""
+    # The provenance artifact supplies the semantic content digest; the real
+    # registration file bytes supply registration_manifest_sha256.  These are
+    # distinct values and must not be substituted for one another.
     if registration_manifest_file is not None:
-        rm_path = Path(registration_manifest_file)
+        prov_path = Path(registration_manifest_file)
     else:
-        # Check adjacent to registration file first, then standard locations
-        sibling_rm = reg_path.parent / "registration_manifest.json"
-        curr_rm = Path("qwen_train/curriculum/f2_registration/registration_manifest.json")
-        data_rm = Path("data/f2_population/registration/registration_manifest.json")
-        if sibling_rm.is_file():
-            rm_path = sibling_rm
-        elif data_rm.is_file():
-            rm_path = data_rm
-        elif curr_rm.is_file():
-            rm_path = curr_rm
-        else:
-            raise V2GateError(
-                MISSING_ARTIFACT,
-                "registration manifest missing: no file provided and defaults not found",
-            )
-    if not rm_path.is_file():
-        raise V2GateError(MISSING_ARTIFACT, f"registration manifest missing: {rm_path}")
-    reg_manifest_sha256 = hashlib.sha256(rm_path.read_bytes()).hexdigest()
+        prov_path = reg_path.with_name(reg_path.stem + ".provenance.json")
+        if not prov_path.is_file():
+            for candidate in (
+                reg_path.parent / "registration_manifest.json",
+                Path("qwen_train/curriculum/f2_registration/registration_manifest.json"),
+                Path("data/f2_population/registration/registration_manifest.json"),
+            ):
+                if candidate.is_file():
+                    prov_path = candidate
+                    break
+    if not prov_path.is_file():
+        raise V2GateError(
+            MISSING_ARTIFACT, f"registration provenance missing: {prov_path}"
+        )
+    try:
+        provenance = json.loads(prov_path.read_text("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise V2GateError(
+            PROVENANCE_INVALID, f"registration provenance unreadable: {exc}"
+        ) from exc
+    if not isinstance(provenance, Mapping):
+        raise V2GateError(PROVENANCE_INVALID, "registration provenance is not an object")
+    content_digest = str(provenance.get("registration_content_sha256") or "")
+    if not _SHA256_HEX.fullmatch(content_digest):
+        raise V2GateError(
+            PROVENANCE_INVALID,
+            "provenance declares no 64-hex registration_content_sha256",
+        )
+    declared_tasks = str(provenance.get("tasks_sha256") or "")
+    if not _SHA256_HEX.fullmatch(declared_tasks):
+        raise V2GateError(
+            PROVENANCE_INVALID,
+            "provenance declares no 64-hex tasks_sha256; cannot bind registration bytes",
+        )
+    if declared_tasks != file_sha256:
+        raise V2GateError(
+            REGISTRATION_BYTES_CHANGED,
+            "registration bytes do not match the provenance tasks_sha256: "
+            f"file={file_sha256} declared={declared_tasks}",
+        )
 
     # Read compat report to get UNKNOWN tasks
     compat_path = Path(compat_report_file)
     if not compat_path.is_file():
         raise V2GateError(MISSING_ARTIFACT, f"compat report missing: {compat_path}")
+    raw_compat_bytes = compat_path.read_bytes()
+    compat_report_sha256 = hashlib.sha256(raw_compat_bytes).hexdigest()
     try:
-        compat_data = json.loads(compat_path.read_text("utf-8"))
+        compat_data = json.loads(raw_compat_bytes.decode("utf-8"))
     except Exception as exc:
         raise V2GateError(PROBE_NOT_AUTHORIZED, f"unreadable compat report: {exc}") from exc
 
-    tasks_dict = compat_data.get("tasks") or {}
-    compat_classes = {
-        tid: str(row.get("classification") or "") for tid, row in tasks_dict.items()
-    }
+    compat_classes = _compat_classes_from_report(compat_data)
+    # EXCLUDE-185: the compat report records the SOURCE_PRIORITY-resolved
+    # cross-source conflicts separately.  They must not enter the probe
+    # selection even when their plugin classification is UNKNOWN.
+    raw_conflicts = compat_data.get("resolved_by_source_priority") or []
+    if not isinstance(raw_conflicts, list):
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            "compat report resolved_by_source_priority must be a list",
+        )
+    conflict_ids = {str(x) for x in raw_conflicts}
+    resolved_excl_path = Path(exclusion_policy_file) if exclusion_policy_file else None
+    policy_sha = ""
+    if resolved_excl_path is not None:
+        from qwen_train.f2_s8_candidate_pool import load_exclusion_policy
+
+        try:
+            _pol, policy_ids, policy_sha = load_exclusion_policy(resolved_excl_path)
+        except PoolError as exc:
+            raise V2GateError(
+                PROBE_NOT_AUTHORIZED, f"exclusion policy rejected: {exc}"
+            ) from exc
+        if conflict_ids and conflict_ids != policy_ids:
+            raise V2GateError(
+                PROBE_NOT_AUTHORIZED,
+                "compat report resolved_by_source_priority disagrees with exclusion policy",
+            )
+        conflict_ids |= policy_ids
+    if conflict_ids:
+        compat_classes = {
+            tid: cls for tid, cls in compat_classes.items() if tid not in conflict_ids
+        }
 
     # Compute registration order.  Two deliberate formats are accepted:
     #   * ordered metadata (a list of objects with ``instance_id``), and
@@ -784,23 +947,35 @@ def authorize_s8_probe_run(
 
     # Terminal tasks from ledgers.  Every configured ledger must verify before
     # its rows may influence the selection: an unverified chain could hide a
-    # terminal task or inject one.
+    # terminal task or inject one.  A missing configured ledger is a hard
+    # refusal so a typo or wrong path never silently alters the selection.
     from qwen_train.f2_s8_factory import AppendOnlyLedger
 
     term_ids: set[str] = set()
     for lp in ledger_paths:
         p = Path(lp)
-        if p.is_file():
-            ledger = AppendOnlyLedger(p)
-            ok, reason = ledger.verify()
-            if not ok:
-                raise V2GateError(
-                    PROBE_NOT_AUTHORIZED,
-                    f"admission ledger failed verification ({p}): {reason}",
-                )
-            for r in ledger.records():
-                if r.get("outcome_class") == "scientific":
-                    term_ids.add(str(r.get("task_id")))
+        if not p.is_file():
+            raise V2GateError(
+                MISSING_ARTIFACT,
+                f"configured admission ledger missing: {p}",
+            )
+        ledger = AppendOnlyLedger(p)
+        ok, reason = ledger.verify()
+        if not ok:
+            raise V2GateError(
+                PROBE_NOT_AUTHORIZED,
+                f"admission ledger failed verification ({p}): {reason}",
+            )
+        for r in ledger.records():
+            if r.get("outcome_class") == "scientific":
+                term_ids.add(str(r.get("task_id")))
+
+    # The probe population excludes tasks already terminal/credited in the
+    # registered chains; they are not UNKNOWN candidates.
+    if term_ids:
+        compat_classes = {
+            tid: cls for tid, cls in compat_classes.items() if tid not in term_ids
+        }
 
     # Read the grant record
     if grant_path is None:
@@ -816,10 +991,27 @@ def authorize_s8_probe_run(
         rec = doc.get("record") if isinstance(doc, dict) and "record" in doc else doc
     except Exception as exc:
         raise V2GateError(INVALID_GRANT, f"unparseable grant: {exc}") from exc
+    if not isinstance(rec, Mapping):
+        raise V2GateError(INVALID_GRANT, "grant record is not a JSON object")
 
     ordering_policy = str(rec.get("ordering_policy") or "REGISTRATION_ORDER_UNBUILT")
     raw_budget = rec.get("budget") or {}
     max_total_tasks = int(raw_budget.get("max_total_tasks") or 50)
+    target_compatible = rec.get("target_compatible", 0)
+    if (
+        isinstance(target_compatible, bool)
+        or not isinstance(target_compatible, int)
+        or target_compatible < 0
+    ):
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            "probe grant target_compatible must be a non-negative integer",
+        )
+    if target_compatible > max_total_tasks:
+        raise V2GateError(
+            PROBE_NOT_AUTHORIZED,
+            "probe grant target_compatible exceeds max_total_tasks",
+        )
 
     # Compute expected probe candidates
     computed_pool_digest, selected_ids, computed_selection_digest = (
@@ -850,8 +1042,8 @@ def authorize_s8_probe_run(
     # Expected binding for verification
     expected_binding = {
         "repository_revision": rec.get("repository_revision"),
-        "registration_sha256": reg_sha256,
-        "registration_manifest_sha256": reg_manifest_sha256,
+        "registration_sha256": content_digest,
+        "registration_manifest_sha256": file_sha256,
         "probe_pool_digest": computed_pool_digest,
         "probe_selection_digest": computed_selection_digest,
         "ordering_policy": ordering_policy,
@@ -932,14 +1124,18 @@ def authorize_s8_probe_run(
         per_task_disk_bytes=int(
             raw_budget.get("per_task_disk_bytes") or 3_500_000_000
         ),
+        target_compatible=target_compatible,
         execution_id=exec_id,
         not_before=str(verified_rec.get("not_before") or ""),
         not_after=str(verified_rec.get("not_after") or ""),
         record=MappingProxyType(dict(verified_rec)),
         grant_path=str(grant_file_path),
         registration_file=str(reg_path),
-        registration_manifest_file=str(rm_path),
+        registration_manifest_file=str(prov_path),
         compat_report_file=str(compat_path),
+        compat_report_sha256=compat_report_sha256,
+        exclusion_policy_file=str(resolved_excl_path) if resolved_excl_path else "",
+        exclusion_policy_sha256=policy_sha,
         ledger_paths=tuple(str(x) for x in ledger_paths),
         built_task_ids=tuple(sorted({str(x) for x in built_task_ids})),
         trust_root_path=str(trust_root_path) if trust_root_path else "",
@@ -1029,6 +1225,7 @@ def check_probe_grant_still_valid(
                 authorized.registration_manifest_file or None
             ),
             compat_report_file=authorized.compat_report_file,
+            exclusion_policy_file=authorized.exclusion_policy_file or None,
             ledger_paths=authorized.ledger_paths,
             built_task_ids=authorized.built_task_ids,
             trust_root_path=authorized.trust_root_path or None,
@@ -1063,8 +1260,11 @@ def check_probe_grant_still_valid(
         "network_policy",
         "retention_policy",
         "selected_task_ids",
+        "target_compatible",
         "not_before",
         "not_after",
+        "exclusion_policy_sha256",
+        "compat_report_sha256",
     ):
         was = getattr(authorized, field_name)
         now_value = getattr(fresh, field_name)
