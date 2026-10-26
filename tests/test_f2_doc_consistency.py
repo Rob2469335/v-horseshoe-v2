@@ -33,6 +33,8 @@ TASK_CONTRACT = DOCS / "EXPERIMENT_J_TASK_READINESS_CONTRACT.md"
 HANDOFF = DOCS / "EXPERIMENT_J_F2_OPERATOR_HANDOFF.md"
 STATE = DOCS / "LEARNING_EXPERIMENT_STATE.md"
 TOPOLOGY = DOCS / "INFERENCE_TOPOLOGY.md"
+PILOT_PACKAGE = DOCS / "F2_S8_EXECUTION_AND_PILOT_PACKAGE.md"
+ENV_SPEC = DOCS / "EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md"
 
 #: The vocabulary ``f2_preflight`` emits. A handoff step claiming a state outside
 #: this set cannot be reconciled with the machine report by eye.
@@ -302,3 +304,175 @@ class TestFrozenAndHistoricalAreNotRewritten:
         assert digest == (
             "F0DDF84CC876EDD8574AB63568F92045F2798F2AA3F40FF306939E42A1E1731E"
         ), "AGENTS_LEGACY.md is immutable and must not change"
+
+
+class TestPilotPackageMatchesCode:
+    """The pilot runbook must name exactly what the pilot code reads.
+
+    These assertions are derived from the code, not copied from it, so adding a
+    governance input or changing the adopted model identity cannot leave the
+    operator's runbook silently stale -- the failure mode is a launch that fails
+    closed in the guest naming a variable nobody was told to set.
+    """
+
+    def test_runbook_names_every_s8_governance_input(self):
+        from qwen_train.f2_s8_compose import S8_ENV_FALLBACKS, S8_GOVERNANCE_ENV
+
+        text = read(PILOT_PACKAGE)
+        for name, _label in S8_GOVERNANCE_ENV:
+            documented = S8_ENV_FALLBACKS.get(name, name)
+            assert documented in text, (
+                f"the pilot runbook never names {documented}, the variable the "
+                f"pilot reads for the {name} governance input"
+            )
+
+    def test_runbook_binds_the_distiller_to_the_adopted_artifact(self):
+        from swarm_os.services.experiment_model_identity import (
+            EXPECTED_GGUF_RELATIVE_PATH,
+            EXPECTED_GGUF_SHA256,
+        )
+
+        text = read(PILOT_PACKAGE)
+        found = re.search(
+            r'^\$env:SWARM_DISTILLER_WEIGHTS_DIGEST\s*=\s*"([0-9a-f]{64})"',
+            text,
+            re.MULTILINE,
+        )
+        assert found, "the runbook has no SWARM_DISTILLER_WEIGHTS_DIGEST assignment"
+        assert found.group(1) == EXPECTED_GGUF_SHA256, (
+            "the runbook's distiller digest is not the adopted artifact's digest; "
+            "a stale digest names an artifact the launcher does not serve"
+        )
+        assert pathlib.Path(EXPECTED_GGUF_RELATIVE_PATH).name in text, (
+            "the runbook never names the adopted GGUF"
+        )
+
+    def test_runbook_records_the_offline_build_backend_requirement(self):
+        """A uv-owned task cannot build offline without its build backend."""
+        from qwen_train.f2_s8_pilot_live import WHEELHOUSE
+
+        text = read(PILOT_PACKAGE)
+        assert "UV_FIND_LINKS" in text, "the runbook never names UV_FIND_LINKS"
+        assert "hatchling" in text, "the runbook never names the build backend"
+        assert WHEELHOUSE in text, "the runbook never names the wheelhouse path"
+
+class TestEnvSpecRecordsTheProvisioningDecision:
+    """The provisioning-location decision must stay RECORDED.
+
+    Owner decision 2026-10-15: process/session-only provisioning for governed
+    execution inputs (``OPERATOR_HANDOFF.md`` 1.1); the spec's earlier ``.env``
+    option is withdrawn and a prior ``.env`` append was reverted (``WORK_LOG.md``
+    2026-10-14).  This guard fails if the record is removed or the unresolved
+    wording returns.
+    """
+
+    def test_env_spec_is_present(self):
+        assert ENV_SPEC.is_file(), "the operational environment spec is missing"
+
+    def test_conflict_is_recorded_as_resolved_process_session_only(self):
+        text = read(ENV_SPEC)
+        assert "RESOLVED" in text
+        assert "process/session-only" in text
+        assert "not reconciled by existing governance" not in text
+        # It must name the governing authority and the reverted append.
+        assert "EXPERIMENT_J_F2_OPERATOR_HANDOFF.md" in text
+        assert "reverted" in text
+        # And the executed mechanism: the S8 path reads the process env only.
+        assert "f2_s8_compose.load_governance_from_env" in text
+
+    def test_spec_records_the_three_s8_only_inputs(self):
+        text = read(ENV_SPEC)
+        for var in ("SWARM_S8_ENVIRONMENT_IDENTITY", "SWARM_S8_BASE_STATE_DIGEST",
+                    "SWARM_S8_GOLD_STATE_DIGEST"):
+            assert var in text, var
+        assert "no F2 fallback" in text
+
+
+class TestCrossSourceConflictPolicyIsRecorded:
+    """The cross-source conflict policy exists, and the runbook must say so.
+
+    ``f2_population_build.build_union`` resolves a cross-source disagreement by
+    ``SOURCE_PRIORITY`` (keep the highest-priority source; record the other as
+    ``conflicting_cross_source_priority_selected``).  A read-only reconciliation
+    on 2026-10-15 found **185 of 185** in-registration conflicts carry exactly
+    that disposition, so the pilot package's earlier claim -- *"No existing
+    policy names a winner ... a GOVERNANCE GAP requiring a rule"* -- was false.
+    This guard fails if that claim returns or the policy stops being recorded.
+    """
+
+    def test_runbook_no_longer_claims_no_policy_exists(self):
+        # The stale wording may survive ONLY inside the attributed correction
+        # that quotes it (mirrors TestContradictionsStayFixed's pattern).
+        text = read(PILOT_PACKAGE)
+        for line in text.splitlines():
+            if "No existing policy names a winner" in line:
+                assert any(
+                    sig in line for sig in ("wrong", "corrected", "previous", "no longer")
+                ), f"unattributed stale claim: {line!r}"
+
+    def test_runbook_records_the_existing_priority_policy(self):
+        text = read(PILOT_PACKAGE)
+        assert "SOURCE_PRIORITY" in text
+        assert "conflicting_cross_source_priority_selected" in text
+
+
+class TestSession39And40ReconciliationIsRecorded:
+    """The reconciliation pass must stay in the runbook, and must not slip into
+    claiming population-wide yield from two observed tasks."""
+
+    def test_runbook_still_has_its_result_collection_section(self):
+        text = read(PILOT_PACKAGE)
+        assert "## 15. Result Collection, Integrity Verification & Rollback" in text
+        assert "## 16. Session 39" in text
+        # section 16 must not swallow section 15's heading
+        assert text.index("## 15.") < text.index("## 16.")
+
+    def test_runbook_distinguishes_missing_from_failed_and_infrastructure(self):
+        text = read(PILOT_PACKAGE)
+        for token in (
+            "node absent from collected JUnit",
+            "test failing after execution",
+            "test collection failing",
+            "infrastructure failure",
+            "scientifically unresolved",
+        ):
+            assert token in text, f"the runbook no longer distinguishes: {token}"
+
+    def test_runbook_marks_the_yield_question_not_established(self):
+        text = read(PILOT_PACKAGE)
+        assert "NOT ESTABLISHED" in text
+        assert "Two observed tasks establish nothing population-wide" in text
+        assert "No yield percentage is recorded" in text
+
+    def test_runbook_states_that_a_working_path_is_not_admission(self):
+        text = read(PILOT_PACKAGE)
+        assert "is not scientific success and is not" in text
+
+
+class TestMissingNodeIsNeverASuccessfulPair:
+    """The evaluator, not the prose, is the authority: a declared node absent from
+    the JUnit must never yield a passing verdict."""
+
+    def _junit(self, tmp_path, text):
+        p = tmp_path / "j.xml"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_a_declared_node_absent_from_the_junit_never_passes(self, tmp_path):
+        from qwen_train import f2_evaluator as V
+
+        # a JUnit that collected something, but not the declared node
+        junit = self._junit(tmp_path,
+            "<testsuites><testsuite name='pytest' tests='1'>"
+            "<testcase classname='some.other.module' name='test_other'/>"
+            "</testsuite></testsuites>")
+        out = tmp_path / "r.json"
+        V.produce_report(
+            junit_path=junit, fail_to_pass=["tests/test_x.py::test_declared"],
+            pass_to_pass=[], out_path=out, instance_id="t", repository="r",
+            base_commit="0" * 40, execution_state_identity="gold",
+        )
+        payload = V.parse_report(out.read_bytes())
+        verdict, why = V.verdict_from_report_payload(payload)
+        assert verdict != "pass"
+        assert "missing" in why

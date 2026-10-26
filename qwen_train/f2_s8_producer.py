@@ -62,6 +62,15 @@ def base_fails_gold_passes(*, base_report: Mapping[str, Any], gold_report: Mappi
     return base_report.get("declared_result") == "fail" and gold_report.get("declared_result") == "pass"
 
 
+#: Marker for the owner-authorized (2026-10-18) ERROR classification.  The
+#: OUTCOME stays the established ``infrastructure_failure`` -- the factory's
+#: outcome vocabulary is a closed, length-checked contract and a second
+#: synonymous name would fragment it.  The explicit classification therefore
+#: lives in the persisted ``reason`` string, which is machine-greppable and is
+#: carried into the hash-chained ledger row.
+ENVIRONMENT_ERROR_PREFIX = evidence.ENVIRONMENT_ERROR_PREFIX
+
+
 def compose_execution_result(
     *,
     spec: TaskSpec,
@@ -82,6 +91,23 @@ def compose_execution_result(
                           f"{label} reported {receipt.payload['failure_class']}")
     if base_report is None or gold_report is None:
         return _infra(spec, attempt, "infrastructure_failure", "evaluator report missing")
+
+    # OWNER-AUTHORIZED ERROR CLASS (2026-10-18).  An environment/collection
+    # failure persists as an EXPLICIT ERROR: outcome ``infrastructure_failure``
+    # (the established, infrastructure-class representation), with the reason
+    # prefixed ENVIRONMENT_ERROR and the cause named.  Checked BEFORE the S8
+    # contract so an unusable run can never be mistaken for ``base_pass`` /
+    # ``gold_fail`` / ``test_not_run`` -- ``test_not_run`` is SCIENTIFIC and
+    # would put a non-result into the graded denominator.
+    for label, report in (("base", base_report), ("gold", gold_report)):
+        if str(report.get("declared_result") or "") == evaluator.RESULT_ERROR:
+            cause = str(report.get("collection_error_cause") or "unknown")
+            return _infra(
+                spec, attempt, "infrastructure_failure",
+                f"{ENVIRONMENT_ERROR_PREFIX} (collection_error_cause={cause}): "
+                f"{label} established no scientific result: "
+                f"{report.get('detail') or 'no detail recorded'}",
+            )
 
     if not base_fails_gold_passes(base_report=base_report, gold_report=gold_report):
         if base_report.get("declared_result") == "pass":

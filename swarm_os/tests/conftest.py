@@ -57,7 +57,36 @@ def swarmos_qdrant_mock():
                             side_effect=_qdrant_in_memory,
                             create=True,
                         ):
-                            yield
+                            with patch(
+                                "organism_console.skills.skill_repository.QdrantClient",
+                                side_effect=_qdrant_in_memory_sync,
+                                create=True,
+                            ):
+                                with patch(
+                                    "swarm_os.upwork.learning_engine_qdrant.QdrantClient",
+                                    side_effect=_qdrant_in_memory_sync,
+                                    create=True,
+                                ):
+                                    yield
+
+
+@pytest.fixture(autouse=True)
+def swarmos_isolate_outcome_fitness(monkeypatch):
+    """Never let a swarm_os/tests test feed the REAL outcome-fitness store.
+
+    Mirrors `tests/conftest.py::isolate_outcome_fitness`, which is scoped to
+    `tests/` only. `_feed_outcome` fires whenever `SWARM_EVOLUTION == "1"`, and
+    `.env` sets that globally (loaded with `override=True` at app import), so a
+    future test in THIS tree that drives `step_agent_stream` end-to-end would
+    append rows to the production `data/evolution/fitness.jsonl` -- the store the
+    live evolution daemon scores on.
+
+    GRAY-1 of `docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md`. No test in this
+    tree currently references the fitness path, so this closes a LATENT gap
+    rather than an active leak; a test that needs the path sets
+    `SWARM_EVOLUTION=1` itself (monkeypatch re-orders, so its setenv wins).
+    """
+    monkeypatch.setenv("SWARM_EVOLUTION", "0")
 
 
 @pytest.fixture(autouse=True)
