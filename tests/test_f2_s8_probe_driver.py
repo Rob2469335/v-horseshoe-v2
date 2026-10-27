@@ -5,12 +5,19 @@ from __future__ import annotations
 import pytest
 
 from qwen_train.f2_s8_probe_driver import (
+    BuildCell,
+    BuilderContractError,
+    BuilderUnavailable,
     CleanupClassificationUnrecognized,
+    LiveBuilder,
     ProbeHalt,
     ProbeLimits,
     cleanup_probe_task,
+    main as probe_main,
+    resolve_live_builder,
     run_probe,
     select_probe_batch,
+    workspace_free_bytes,
 )
 
 FREE = lambda: 10**18  # noqa: E731 - test-only fixture
@@ -505,3 +512,132 @@ def test_probe_halts_on_unrecognized_cleanup_classification(tmp_path, monkeypatc
     assert result.stop_reason == "CLEANUP_CLASSIFICATION_UNRECOGNIZED"
     assert result.stop_reason != "PROBE_COMPLETE"
     assert calls == []
+
+
+# --- disk gate: real measurement, fail-closed, re-checked per batch ---------
+
+
+def test_probe_disk_boundary_equality_passes():
+    lim = _limits(1, disk_floor_bytes=100, per_task_disk_bytes=0)
+    ok = run_probe(
+        unknown_task_ids=["u1"], limits=lim, authorize=lambda: None,
+        builder=lambda b: {t: {"classification": "UNKNOWN"} for t in b},
+        free_bytes=lambda: 100, verify_ledgers=lambda: None, log=lambda _: None,
+    )
+    assert ok.stop_reason == "PROBE_COMPLETE"
+    low = run_probe(
+        unknown_task_ids=["u1"], limits=lim, authorize=lambda: None,
+        builder=lambda b: {t: {"classification": "UNKNOWN"} for t in b},
+        free_bytes=lambda: 99, verify_ledgers=lambda: None, log=lambda _: None,
+    )
+    assert low.stop_reason == "PROBE_DISK_LOW"
+
+
+def test_probe_disk_measurement_failure_is_fail_closed():
+    def boom():
+        raise OSError("disk unreadable")
+
+    result = run_probe(
+        unknown_task_ids=["u1"],
+        limits=_limits(1, disk_floor_bytes=0, per_task_disk_bytes=0),
+        authorize=lambda: None,
+        builder=lambda b: {t: {"classification": "UNKNOWN"} for t in b},
+        free_bytes=boom, verify_ledgers=lambda: None, log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_DISK_MEASUREMENT_FAILED"
+
+
+def test_probe_rechecks_free_space_per_batch():
+    seen_batches = []
+    values = iter([10**18, 0])  # first batch fine, second batch critically low
+
+    def free():
+        return next(values)
+
+    def builder(batch):
+        seen_batches.append(list(batch))
+        return {t: {"classification": "UNKNOWN"} for t in batch}
+
+    result = run_probe(
+        unknown_task_ids=["u1", "u2"],
+        limits=_limits(2, batch_limit=1, disk_floor_bytes=5, per_task_disk_bytes=1),
+        authorize=lambda: None, builder=builder, free_bytes=free,
+        verify_ledgers=lambda: None, log=lambda _: None,
+    )
+    assert result.stop_reason == "PROBE_DISK_LOW"
+    assert seen_batches == [["u1"]]
+
+
+def test_workspace_free_bytes_returns_int_and_fails_closed(tmp_path):
+    assert isinstance(workspace_free_bytes(tmp_path), int)
+    with pytest.raises(ProbeHalt, match="PROBE_DISK_MEASUREMENT_FAILED"):
+        workspace_free_bytes(tmp_path / "does-not-exist")
+
+
+# --- live builder composition (staged; intentionally NOT wired into main) ---
+
+
+def test_live_builder_maps_compatible_cells(tmp_path):
+    ws = tmp_path / "u1"
+    ws.mkdir()
+    b = LiveBuilder(
+        lambda tid: BuildCell(tid, "OBSERVED_COMPATIBLE", workspace=str(ws)),
+        workspace_root=tmp_path,
+    )
+    out = b(["u1"])
+    assert out["u1"].classification == "OBSERVED_COMPATIBLE"
+
+
+def test_live_builder_requires_existing_workspace_for_compatible(tmp_path):
+    b = LiveBuilder(
+        lambda tid: BuildCell(tid, "OBSERVED_COMPATIBLE", workspace=str(tmp_path / "nope")),
+        workspace_root=tmp_path,
+    )
+    with pytest.raises(BuilderContractError, match="existing workspace"):
+        b(["u1"])
+
+
+def test_live_builder_rejects_foreign_cell(tmp_path):
+    b = LiveBuilder(
+        lambda tid: BuildCell("someone-else", "UNKNOWN"), workspace_root=tmp_path
+    )
+    with pytest.raises(BuilderContractError, match="under"):
+        b(["u1"])
+
+
+def test_live_builder_executor_exception_is_fail_closed(tmp_path):
+    def boom(tid):
+        raise RuntimeError("build crashed")
+
+    b = LiveBuilder(boom, workspace_root=tmp_path)
+    with pytest.raises(BuilderContractError, match="build crashed"):
+        b(["u1"])
+
+
+def test_live_builder_propagates_builder_unavailable(tmp_path):
+    def unavailable(tid):
+        raise BuilderUnavailable("no builder")
+
+    b = LiveBuilder(unavailable, workspace_root=tmp_path)
+    with pytest.raises(BuilderUnavailable):
+        b(["u1"])
+
+
+def test_resolve_live_builder_fails_closed_without_executor(tmp_path):
+    with pytest.raises(BuilderUnavailable, match="no approved live build executor"):
+        resolve_live_builder(workspace_root=tmp_path)
+    b = resolve_live_builder(
+        build_one=lambda tid: BuildCell(tid, "UNKNOWN"), workspace_root=tmp_path
+    )
+    assert isinstance(b, LiveBuilder)
+
+
+def test_live_still_refuses(monkeypatch, capsys):
+    """The policy hard-disable must remain effective; do not weaken it."""
+    import qwen_train.f2_s8_acquisition as acq
+
+    monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    rc = probe_main(["--live"])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "PROBE_PREREQUISITES_MISSING" in err

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import sys
 from dataclasses import dataclass, field
 from typing import AbstractSet, Any, Callable, Mapping, Sequence
@@ -99,6 +100,84 @@ def _normalise_cell(task_id: str, row: object) -> BuildCell:
         f"builder returned {type(row).__name__} for task {task_id!r}; "
         "expected BuildCell or mapping"
     )
+
+
+class LiveBuilder:
+    """Compose an approved per-task build executor into the batch-builder contract.
+
+    NOT wired into :func:`main`: live execution remains fail-closed behind the
+    driver's policy refusal. Enabling live probing requires (a) an explicit
+    owner policy decision and (b) an approved per-task executor ``build_one``
+    that actually builds a task under the provisioned f2builder / offline-
+    wheelhouse / OS-isolation environment. The probe contract does not
+    establish how a task is built, so only this composition/enforcement layer
+    is implemented and tested here; no default executor exists.
+    """
+
+    def __init__(
+        self,
+        build_one: Callable[[str], object] | None,
+        *,
+        workspace_root: pathlib.Path | str,
+    ) -> None:
+        if build_one is None:
+            raise BuilderUnavailable("no approved live build executor configured")
+        self._build_one = build_one
+        self._workspace_root = pathlib.Path(workspace_root)
+
+    def __call__(self, batch: Sequence[str]) -> dict[str, BuildCell]:
+        out: dict[str, BuildCell] = {}
+        for task_id in batch:
+            try:
+                cell = self._build_one(task_id)
+            except ProbeHalt:
+                # BuilderUnavailable / BuilderContractError / ProbeHalt already
+                # carry a stable reason; never downgrade them to a success.
+                raise
+            except Exception as exc:  # noqa: BLE001 - any executor failure is fail-closed
+                raise BuilderContractError(
+                    f"build executor failed for {task_id!r}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            if not isinstance(cell, BuildCell):
+                cell = _normalise_cell(task_id, cell)
+            if cell.task_id != task_id:
+                raise BuilderContractError(
+                    f"executor returned cell for {cell.task_id!r} under {task_id!r}"
+                )
+            if cell.classification == "OBSERVED_COMPATIBLE":
+                if cell.failure:
+                    raise BuilderContractError(
+                        f"OBSERVED_COMPATIBLE carries a failure for {task_id!r}"
+                    )
+                if not cell.workspace or not pathlib.Path(cell.workspace).is_dir():
+                    raise BuilderContractError(
+                        "OBSERVED_COMPATIBLE requires an existing workspace for "
+                        f"{task_id!r}"
+                    )
+            out[task_id] = cell
+        return out
+
+
+def resolve_live_builder(
+    *,
+    build_one: Callable[[str], object] | None = None,
+    workspace_root: pathlib.Path | str,
+) -> LiveBuilder:
+    """Return a live builder only if an approved per-task executor is supplied.
+
+    There is deliberately no default executor: the probe contract does not
+    establish how a task is built, and the required f2builder identity,
+    offline wheelhouse, and OS isolation are external prerequisites. This
+    therefore fails closed until an approved executor is provided.
+    """
+    if build_one is None:
+        raise BuilderUnavailable(
+            "no approved live build executor is configured; live probing requires "
+            "an owner-approved per-task executor and the provisioned f2builder / "
+            "offline-wheelhouse / OS-isolation environment"
+        )
+    return LiveBuilder(build_one, workspace_root=workspace_root)
 
 
 #: Exactly the classification values the probe contract authorises
@@ -242,6 +321,30 @@ def select_probe_batch(unknown_task_ids: Sequence[str], *, limit: int = 50) -> l
     return list(unknown_task_ids[:limit])
 
 
+def workspace_free_bytes(path: pathlib.Path | str) -> int:
+    """Real free space (bytes) on the volume holding ``path``.
+
+    Fail-closed: an unreadable or invalid measurement raises :class:`ProbeHalt`
+    with a stable reason so the probe stops instead of assuming space exists.
+    ``run_probe`` invokes the ``free_bytes`` callable at every batch boundary,
+    so a shrinking volume is re-measured rather than trusted from one preflight.
+    """
+    try:
+        usage = shutil.disk_usage(str(path))
+    except OSError as exc:
+        raise ProbeHalt(
+            "PROBE_DISK_MEASUREMENT_FAILED",
+            f"cannot measure free space for {path!r}: {exc}",
+        ) from exc
+    free = int(usage.free)
+    if free < 0:
+        raise ProbeHalt(
+            "PROBE_DISK_MEASUREMENT_FAILED",
+            f"invalid free-space value for {path!r}: {free}",
+        )
+    return free
+
+
 def run_probe(
     *,
     unknown_task_ids: Sequence[str],
@@ -315,9 +418,20 @@ def run_probe(
                         f"task {task_id!r} not in authorized probe selection",
                     )
 
-        # Batch disk threshold check
+        # Batch disk threshold check. Re-measured here (every batch) so a
+        # shrinking volume is detected; a measurement failure is fail-closed.
         threshold = limits.disk_threshold(len(batch))
-        available = int(free_bytes())
+        try:
+            available = int(free_bytes())
+        except ProbeHalt as exc:
+            return stop(exc.reason, exc.detail)
+        except Exception as exc:  # noqa: BLE001 - fail closed
+            return stop(
+                "PROBE_DISK_MEASUREMENT_FAILED",
+                f"free-space measurement failed: {type(exc).__name__}: {exc}",
+            )
+        if available < 0:
+            return stop("PROBE_DISK_MEASUREMENT_FAILED", f"free={available}")
         if available < threshold:
             return stop(
                 "PROBE_DISK_LOW",
@@ -659,10 +773,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         verify_ledgers=_verify_ledgers,
         cleanup_after_task=_cleanup_task,
         # Explicit simulation builder: its UNKNOWN rows are dry-run output, not
-        # a live build result.  A live builder must be supplied by the future
-        # VM-contained implementation; until then live is refused above.
+        # a live build result.  A live builder (LiveBuilder via
+        # resolve_live_builder) is intentionally NOT wired here: live execution
+        # remains fail-closed behind the policy refusal above until an owner
+        # policy decision and an approved per-task executor exist.
         builder=DryRunBuilder(),
-        free_bytes=lambda: 10**18,
+        free_bytes=lambda: workspace_free_bytes(args.workspace_root),
         allowed_task_ids=set(authorized.selected_task_ids),
     )
     print(f"Dry-run probe finished: stop_reason={result.stop_reason} attempted={result.attempted}")
