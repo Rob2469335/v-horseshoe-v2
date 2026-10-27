@@ -16,6 +16,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import AbstractSet, Any, Callable, Mapping, Sequence
 
+from qwen_train.f2_authorization import AuthorizationError
+
 
 class ProbeHalt(RuntimeError):
     def __init__(self, reason: str, detail: str = "") -> None:
@@ -133,6 +135,10 @@ class LiveBuilder:
             except ProbeHalt:
                 # BuilderUnavailable / BuilderContractError / ProbeHalt already
                 # carry a stable reason; never downgrade them to a success.
+                raise
+            except AuthorizationError:
+                # An authorization failure must abort the run, not be normalized
+                # into a BuilderContractError or a per-task result.
                 raise
             except Exception as exc:  # noqa: BLE001 - any executor failure is fail-closed
                 raise BuilderContractError(
@@ -466,6 +472,15 @@ def run_probe(
         except ProbeHalt as exc:
             result.batches = batches
             return stop(exc.reason, exc.detail)
+        except AuthorizationError as exc:
+            # Mandatory authorization revalidation failed mid-run (expiration,
+            # revocation, drift, forbidden ledger mutation). Abort — do not count
+            # this batch as infrastructure-invalid and do not continue tasks.
+            result.batches = batches
+            return stop(
+                "PROBE_AUTHORIZATION_REFUSED",
+                f"authorization revalidation failed: {exc}",
+            )
         except Exception as exc:  # noqa: BLE001 - builder failure is infra
             result.batches = batches
             result.attempted += len(batch)
