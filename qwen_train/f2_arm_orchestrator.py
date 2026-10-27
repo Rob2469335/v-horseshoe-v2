@@ -218,7 +218,7 @@ def run_f2_arm(
         # happens later (right before the child spawn) via verify_and_consume,
         # which repeats the full verification, so a readiness failure never
         # burns the grant and the consume point is TOCTOU-free.
-        _auth.require_authorized(
+        auth_rec = _auth.require_authorized(
             stage=stage,
             operation=operation,
             binding={
@@ -227,6 +227,11 @@ def run_f2_arm(
                 "arm": arm,
             },
         )
+        if auth_rec.get("schema") == "f2-authorization/v2":
+            raise _auth.AuthorizationError(
+                "f2_arm_orchestrator does not support v2 authorizations; "
+                "v2 authorizations require budget reservation"
+            )
         # Fail closed BEFORE any freeze/spawn work if the workspace is not
         # explicitly declared. No fallback to ``repo_root`` (the code root is a
         # git repository and would be reset as if it were the task workspace).

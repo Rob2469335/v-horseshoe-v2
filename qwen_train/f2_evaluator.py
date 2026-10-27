@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shlex
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +72,11 @@ __all__ = [
     "EvaluationOutcome",
     "EvaluatorError",
     "nodeid_to_junit_identity",
+    "normalise_node_name",
+    "canonical_node_identity",
+    "canonicalise_enum_members",
+    "enum_member_values",
+    "ROOT_SENTINEL",
     "parse_junit_xml",
     "evaluate_execution",
     "render_report",
@@ -100,10 +107,16 @@ STATUS_FAILED = "failed"
 STATUS_ERROR = "error"
 STATUS_SKIPPED = "skipped"
 STATUS_MISSING = "missing"
-
 #: Any status in this set means "the test did not pass". SKIPPED and ERROR are
 #: explicitly not passes, matching the SWE-bench grading convention.
 NOT_PASSED = frozenset({STATUS_FAILED, STATUS_ERROR, STATUS_SKIPPED, STATUS_MISSING})
+
+#: The execution-result value meaning "no scientific result was established".
+#: Kept in step with ``qwen_train.f2_evidence.RESULT_ERROR`` (asserted by a test);
+#: ``f2_evidence.VALID_RESULTS`` already accepts it, so the governance layer can
+#: carry it without a schema change.  An ``error`` result is NOT a pass and NOT a
+#: task failure: it is an environment/infrastructure outcome.
+RESULT_ERROR = "error"
 
 
 class EvaluatorError(RuntimeError):
@@ -121,13 +134,161 @@ class JUnitIdentity:
         return f"{self.classname}::{self.name}"
 
 
-def nodeid_to_junit_identity(nodeid: str) -> JUnitIdentity:
+def normalise_node_name(name: str) -> str:
+    """Normalise filesystem-path separators inside a pytest test NAME.
+
+    A parametrisation id embeds filesystem paths (``test_x[dir/subdir]``). The
+    corpus was recorded on Linux, where pytest renders those separators as
+    ``/``; on Windows the same test collects as ``test_x[dir\\\\subdir]`` -- and
+    crucially pytest ESCAPES the backslash in an id (``ascii_escaped`` doubles
+    it), so the retained node carries TWO literal backslashes. The identity match
+    is exact, so without this a declared node is reported ``missing`` although it
+    ran and passed -- a scoring defect, not a task outcome.
+
+    Both the escaping and the separator are therefore collapsed to ``/``:
+    any run of backslashes becomes one ``/``. This cannot conflate two genuinely
+    different tests, because on any one platform ``a/b``, ``a\\b`` and the
+    escaped ``a\\\\b`` all name the same path.
+    """
+    return re.sub(r"\\+", "/", str(name))
+
+
+#: The canonical stand-in a workspace ROOT is rewritten to before comparison.
+#: A sentinel rather than a real path, so a param that legitimately contains a
+#: path string cannot collide with a mapped root.
+ROOT_SENTINEL = "<repo-root>"
+
+
+def _root_pattern(root: str) -> re.Pattern[str]:
+    """A BOUNDED pattern matching one workspace root as a complete path prefix.
+
+    ``/testbed`` must not match inside ``/testbedfoo`` (guarded lookahead) nor be
+    reached through an enclosing path (guarded lookbehind), so substituting a root
+    can never rewrite an unrelated absolute path into a match.
+    """
+    norm = re.escape(normalise_node_name(root).rstrip("/"))
+    return re.compile(r"(?<![A-Za-z0-9_./\\])" + norm + r"(?![A-Za-z0-9_.])")
+
+
+def canonical_node_identity(
+    name: str,
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> str:
+    """The canonical comparison form of one pytest node name.
+
+    Three platform/version artefacts make the SAME test compare unequal, and each
+    is repaired here so the pre-check and the scorer cannot disagree:
+
+    1. **Separators and pytest's escaping** -- see :func:`normalise_node_name`.
+    2. **Workspace ROOT.** A parametrised id may embed the directory pytest ran
+       in (``test_to_relpath[/testbed-/testbed]``, where the parameter is literally
+       ``os.getcwd()``). The corpus was recorded in the dataset's container, whose
+       repo directory is ``/testbed``; this host executes in its own checkout, so
+       the same test collects as ``[C:/f2_pilot/.../repo-...]``. Both roots are
+       rewritten to :data:`ROOT_SENTINEL`. Each root must be supplied
+       EXPLICITLY -- the dataset root from its source declaration, the execution
+       root from the build manifest -- so nothing here guesses a binding, and an
+       unsupplied root simply does not map (leaving the node unresolved, which is
+       fail-closed).
+    3. **Enum rendering.** Python 3.11 changed ``IntEnum.__str__`` to render the
+       VALUE, so a parameter that pytest id-rendered as ``TaskStatus.RUNNING``
+       under the corpus's Python now renders as ``2``. Member names are rewritten
+       to their VALUES, using a table read from the project's own source (see
+       :func:`enum_member_values`). Only names present in that table are touched,
+       so unrelated parameters and bare integers are left exactly as they were --
+       distinct members keep distinct values.
+    """
+    text = normalise_node_name(name)
+    if enum_values:
+        text = canonicalise_enum_members(text, enum_values)
+    for root in (dataset_root, execution_root):
+        if root:
+            text = _root_pattern(root).sub(ROOT_SENTINEL, text)
+    return text
+
+
+def canonicalise_enum_members(
+    text: str, enum_values: Mapping[str, Mapping[str, int]]
+) -> str:
+    """Rewrite ``Class.MEMBER`` to the member's integer value, table permitting.
+
+    The table comes from the project's own source, so a token is only rewritten
+    when the project actually defines that member. A dotted token whose class or
+    member is absent is left verbatim -- never guessed -- so an unmapped or
+    genuinely different parameter keeps its own identity.
+    """
+    def _replace(match: re.Match[str]) -> str:
+        table = enum_values.get(match.group(1))
+        if table and match.group(2) in table:
+            return str(table[match.group(2)])
+        return match.group(0)
+
+    return re.sub(r"\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b", _replace, text)
+
+
+def enum_member_values(
+    project: Path, class_names: Iterable[str]
+) -> dict[str, dict[str, int]]:
+    """Member-name to integer value, read from the project's OWN source.
+
+    Bounded and deterministic: only classes explicitly asked for are collected,
+    and only plain ``NAME = <int>`` assignments are read, so an enum's identity is
+    taken from the authoritative definition rather than assumed from a rendered
+    id. A class the project does not define yields no entry, which leaves the
+    tokens that reference it unresolved instead of fabricating a match.
+    """
+    wanted = {str(n) for n in class_names if str(n)}
+    table: dict[str, dict[str, int]] = {}
+    if not wanted:
+        return table
+    root = Path(project)
+    for path in sorted(root.rglob("*.py")):
+        if any(part in (".venv", ".venv_gold", "__pycache__") for part in path.parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in re.finditer(
+            r"^class\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:\s*$", text, re.MULTILINE
+        ):
+            name, bases = match.group(1), match.group(2)
+            if name not in wanted or "Enum" not in bases:
+                continue
+            body = text[match.end():]
+            members: dict[str, int] = {}
+            for line in body.splitlines():
+                if line and not line.startswith((" ", "\t")):
+                    break                      # end of the class body
+                assign = re.match(r"\s+([A-Za-z_]\w*)\s*=\s*(\d+)\s*(?:#.*)?$", line)
+                if assign:
+                    members[assign.group(1)] = int(assign.group(2))
+            if members:
+                table[name] = members
+    return table
+
+
+def nodeid_to_junit_identity(
+    nodeid: str,
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> JUnitIdentity:
     """Exact inverse of pytest's ``junitxml`` classname/name split.
 
     pytest writes ``classname`` as the module path with ``/`` replaced by ``.``
     and the ``.py`` suffix removed, followed by the class chain joined with
     ``.``. ``name`` is the final ``::`` segment with any parametrisation
     bracket intact.
+
+    The ``name`` is passed through :func:`canonical_node_identity`, so platform
+    and version artefacts (separators, workspace root, enum rendering) resolve the
+    same way here as in the pre-check. The bindings MUST be the same values the
+    pre-check used, or the two would disagree about the same evidence.
 
     Raises :class:`EvaluatorError` for a node id that cannot be decomposed,
     rather than guessing.
@@ -151,19 +312,32 @@ def nodeid_to_junit_identity(nodeid: str) -> JUnitIdentity:
     if not module:
         raise EvaluatorError(f"declared test node id {text!r} yields an empty module name")
     classname = ".".join([module, *rest[:-1]])
-    name = rest[-1]
+    name = canonical_node_identity(
+        rest[-1], dataset_root=dataset_root, execution_root=execution_root,
+        enum_values=enum_values,
+    )
     if not name:
         raise EvaluatorError(f"declared test node id {text!r} yields an empty test name")
     return JUnitIdentity(classname=classname, name=name)
 
 
-def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
+def parse_junit_xml(
+    data: bytes,
+    *,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
+) -> dict[JUnitIdentity, str]:
     """Parse retained JUnit XML into ``{identity: status}``.
 
     Fails closed on anything that is not well-formed, bounded, doctype-free
     JUnit XML. A duplicate ``(classname, name)`` pair is an error: pytest can
     legitimately emit two cases for one identity under ``--lf``/rerun plugins,
     and silently picking one would make the result order-dependent.
+
+    Each case ``name`` is canonicalised with the SAME bindings the declared
+    contract is canonicalised with, so an artefact of the executing platform
+    cannot make a test that ran and passed look absent.
     """
     if not isinstance(data, (bytes, bytearray)):
         raise EvaluatorError(f"junit evidence must be bytes, got {type(data).__name__}")
@@ -194,7 +368,13 @@ def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
             raise EvaluatorError(
                 "junit evidence contains a <testcase> without classname/name"
             )
-        ident = JUnitIdentity(classname=str(classname), name=str(name))
+        ident = JUnitIdentity(
+            classname=str(classname),
+            name=canonical_node_identity(
+                str(name), dataset_root=dataset_root,
+                execution_root=execution_root, enum_values=enum_values,
+            ),
+        )
         tags = {child.tag for child in case}
         if "skipped" in tags:
             status = STATUS_SKIPPED
@@ -205,15 +385,174 @@ def parse_junit_xml(data: bytes) -> dict[JUnitIdentity, str]:
         else:
             status = STATUS_PASSED
         if ident in statuses:
-            raise EvaluatorError(
-                f"junit evidence emits duplicate test identity {ident.as_text()!r}; "
-                "the retained evidence is ambiguous"
-            )
+            # A duplicate identity is AMBIGUOUS only when the repeated cases
+            # DISAGREE. If every occurrence carries the SAME status the identity
+            # is determinate and reading it is order-independent -- which is the
+            # property this guard exists to protect, not the guard itself.
+            #
+            # SOTA comparison: the SWE-bench harness builds its status map with
+            # ``test_status_map[name] = status``, so a duplicate silently takes
+            # the LAST occurrence and the grade becomes order-dependent.
+            # Accepting a duplicate only when the statuses agree is strictly
+            # stronger than that. Measured: QuantEcon.py-797 emits one identity
+            # twice with the same outcome and was refused as JUNIT_MALFORMED,
+            # which failed the whole batch's D4 audit.
+            if statuses[ident] != status:
+                _FAIL_STATUSES = {STATUS_FAILED, STATUS_ERROR}
+                if statuses[ident] in _FAIL_STATUSES and status in _FAIL_STATUSES:
+                    # Both occurrences establish failure (e.g. pytest emitted one
+                    # record for a call failure and another for a teardown error).
+                    # Order-independently retain STATUS_FAILED if either occurrence failed call.
+                    statuses[ident] = (
+                        STATUS_FAILED
+                        if (statuses[ident] == STATUS_FAILED or status == STATUS_FAILED)
+                        else STATUS_ERROR
+                    )
+                    continue
+                raise EvaluatorError(
+                    f"junit evidence emits duplicate test identity "
+                    f"{ident.as_text()!r} with DISAGREEING statuses "
+                    f"({statuses[ident]!r} vs {status!r}); the retained evidence "
+                    "is ambiguous"
+                )
+            continue
         statuses[ident] = status
 
     if cases == 0:
         raise EvaluatorError("junit evidence contains no <testcase> elements")
     return statuses
+
+
+#: pytest marks a module it could not IMPORT as
+#: ``<testcase classname="" name="<module path>"><error message="collection failure">``.
+#: Nothing in that case is a test result: the module never loaded, so none of its
+#: declared nodes could run.  Treating the resulting absent nodes as "not passed"
+#: makes an environment failure indistinguishable from a genuine
+#: base-fails-and-gold-still-fails outcome, which is how a missing dependency was
+#: recorded as a TERMINAL SCIENTIFIC ``gold_fail`` (it is never re-run).
+COLLECTION_ERROR_MESSAGE = "collection failure"
+
+#: Path prefixes that are build/layout wrappers, not importable packages.
+_LAYOUT_PREFIXES = ("src", "lib", "libs", "python")
+
+
+def changed_module_paths(patch_text: str | None) -> tuple[str, ...]:
+    """Dotted module paths the GOLD PATCH changes, from the patch itself.
+
+    Reads the unified-diff ``+++ b/<path>`` lines -- the patch's own claim about
+    what it touches, never a message string.  A leading layout wrapper
+    (``src/``, ``lib/``, ...) is stripped so ``src/pkg/newmod.py`` yields
+    ``pkg.newmod``; both forms are kept so a repo that imports the wrapper path
+    still matches.
+    """
+    if not patch_text:
+        return ()
+    out: set[str] = set()
+    for m in re.finditer(r"^\+\+\+ b/(.+?)\s*$", patch_text, re.MULTILINE):
+        p = m.group(1).strip()
+        if p in ("/dev/null",) or not p:
+            continue
+        for ext in (".py", ".pyi"):
+            if p.endswith(ext):
+                p = p[: -len(ext)]
+                break
+        parts = [x for x in p.split("/") if x not in ("", ".")]
+        if not parts:
+            continue
+        out.add(".".join(parts))
+        if parts[0] in _LAYOUT_PREFIXES and len(parts) > 1:
+            out.add(".".join(parts[1:]))
+    # ``pkg/__init__.py`` denotes the PACKAGE ``pkg``, not a module named
+    # ``pkg.__init__``.  A test that imports ``pkg.sub`` re-exported by a patched
+    # ``pkg/__init__.py`` names ``pkg.sub``; leaving the changed path as
+    # ``pkg.__init__`` made ownership fail and misclassified a project-caused
+    # collection error as an environment failure.  Strip the trailing component.
+    normalised: set[str] = set()
+    for dotted in out:
+        if dotted.endswith(".__init__"):
+            dotted = dotted[: -len(".__init__")]
+        if dotted:
+            normalised.add(dotted)
+    return tuple(sorted(normalised))
+
+
+def _error_module(error_text: str) -> str:
+    """The module a collection failure is about, or ``''`` if it names none."""
+    m = re.search(r"No module named '([\w.]+)'", error_text)
+    if m:
+        return m.group(1)
+    m = re.search(r"cannot import name '[^']+' from '([\w.]+)'", error_text)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def classify_collection_cause(
+    errors: Sequence[str],
+    *,
+    changed_modules: Sequence[str],
+) -> str:
+    """Why did collection fail: the ENVIRONMENT, the PROJECT, or UNKNOWN?
+
+    Decided from the gold patch's own changed-file list, not from the wording of
+    the message -- the wording merely names what was missing.
+
+    ``"project"``   every named module is the gold patch's own subject, so the
+                    base-side error is consistent with a genuine base failure
+                    (the standard SWE-bench shape: the test imports what the
+                    patch adds).
+    ``"environment"`` at least one named module is NOT among the patch's changed
+                    paths -- a third-party dependency was absent.
+    ``"unknown"``   no module could be extracted, or no patch evidence exists.
+                    Fail closed: the caller treats this as inconclusive.
+    """
+    named = [_error_module(e) for e in errors]
+    named = [n for n in named if n]
+    if not named:
+        return "unknown"
+    if not changed_modules:
+        return "unknown"
+    for n in named:
+        owned = any(
+            n == c or n.startswith(c + ".") or c.startswith(n + ".")
+            for c in changed_modules
+        )
+        if not owned:
+            return "environment"
+    return "project"
+
+
+def count_collection_errors(junit_bytes: bytes) -> int:
+    """Number of pytest collection-failure entries in retained JUnit evidence."""
+    return len(collection_error_texts(junit_bytes))
+
+
+def collection_error_texts(junit_bytes: bytes) -> list[str]:
+    """The ``<error>`` bodies of every collection-failure entry, in document order.
+
+    Keyed on pytest's own marker: a ``<testcase>`` with an EMPTY ``classname``
+    and an ``<error message="collection failure">`` child.  A genuine test
+    failure carries a real classname, and a genuine error carries the test's own
+    identity, so this cannot silently capture an ordinary failing test.
+
+    Fails closed: unparseable evidence raises (the caller must not treat an
+    unreadable artifact as "no collection errors").
+    """
+    if not junit_bytes:
+        raise EvaluatorError("junit evidence is empty")
+    try:
+        root = ET.fromstring(junit_bytes)
+    except ET.ParseError as exc:
+        raise EvaluatorError(f"junit evidence is not well-formed XML: {exc}") from exc
+    texts: list[str] = []
+    for case in root.iter("testcase"):
+        if (case.get("classname") or "") != "":
+            continue
+        for child in case:
+            if child.tag == "error" and COLLECTION_ERROR_MESSAGE in (child.get("message") or ""):
+                texts.append(child.text or "")
+                break
+    return texts
 
 
 @dataclass(frozen=True)
@@ -225,6 +564,15 @@ class EvaluationOutcome:
     pass_to_pass: dict[str, str]
     detail: str
     emitted_identities: int
+    #: Collection-failure entries pytest reported.  ``0`` for a clean run and for
+    #: any run whose evidence predates this field.
+    collection_errors: int = 0
+    #: Why collection failed: ``"environment"`` / ``"project"`` / ``"unknown"``.
+    #: ``"project"`` means the gold patch itself owns every module that failed to
+    #: import, so a base-side collection error is consistent with a GENUINE base
+    #: failure and the run is scored normally.  ``"unknown"`` fails closed
+    #: (inconclusive), never guessed.
+    collection_error_cause: str = "unknown"
 
     @property
     def all_fail_to_pass_passed(self) -> bool:
@@ -234,9 +582,20 @@ class EvaluationOutcome:
 
     @property
     def all_pass_to_pass_passed(self) -> bool:
+        # An ERROR run establishes nothing, so it cannot satisfy the
+        # pass-to-pass maintenance check either.  Without this guard a run whose
+        # evidence was unusable could still look "maintained" and be admitted on
+        # a technicality.
+        if self.declared_result == RESULT_ERROR:
+            return False
         return bool(self.pass_to_pass) and all(
             s == STATUS_PASSED for s in self.pass_to_pass.values()
         )
+
+    @property
+    def is_error(self) -> bool:
+        """True when the evidence establishes NO scientific result (environment)."""
+        return self.declared_result == RESULT_ERROR
 
 
 def _normalise_declaration(values: Iterable[Any] | None, label: str) -> list[str]:
@@ -257,6 +616,48 @@ def _normalise_declaration(values: Iterable[Any] | None, label: str) -> list[str
     return out
 
 
+def _assert_identities_distinct(
+    declared: Sequence[str],
+    label: str,
+    instance_id: str,
+    bindings: Mapping[str, Any],
+) -> None:
+    """Refuse a canonicalisation that MERGES two genuinely different declared ids.
+
+    Distinct declared ids must stay distinct: if two collapse together, one node
+    would be read from the other's evidence entry and could be scored as passing
+    without ever having run.
+
+    ONE redundancy is legitimate and must NOT be refused. A dataset can list the
+    same test twice in two separator renderings -- measured on
+    ``conan-io__conan-18832``, whose PASS_TO_PASS carries both
+    ``test_bazeldeps_relativize_path[/my/path/--/my/path/]`` and
+    ``...[\\\\my\\\\path\\\\--\\\\my\\\\path\\\\]``. Those are one test on any
+    single platform, so the pair is redundant rather than contradictory, and
+    refusing the whole task over it would turn a collectable task into an
+    unscoreable one. That case is detected exactly: the two raw ids are equal
+    AFTER separator normalisation.
+
+    A collision that survives separator normalisation is a real merger -- caused
+    by the root or enum bindings -- and fails closed with both ids named.
+    """
+    seen: dict[str, str] = {}
+    clashes: list[str] = []
+    for nodeid in declared:
+        canon = canonical_node_identity(nodeid, **bindings)
+        if canon not in seen:
+            seen[canon] = nodeid
+            continue
+        if normalise_node_name(seen[canon]) == normalise_node_name(nodeid):
+            continue                      # same test, two separator renderings
+        clashes.append(f"{seen[canon]!r} and {nodeid!r} -> {canon!r}")
+    if clashes:
+        raise EvaluatorError(
+            f"{label} identities collide after canonicalisation for "
+            f"{instance_id or 'this task'}: {'; '.join(clashes)}"
+        )
+
+
 def evaluate_execution(
     junit_bytes: bytes,
     *,
@@ -264,6 +665,10 @@ def evaluate_execution(
     pass_to_pass: Sequence[str] | None = None,
     instance_id: str = "",
     execution_state_identity: str = "",
+    changed_modules: Sequence[str] | None = None,
+    dataset_root: str = "",
+    execution_root: str = "",
+    enum_values: Mapping[str, Mapping[str, int]] | None = None,
 ) -> EvaluationOutcome:
     """Evaluate one execution's retained JUnit evidence against the declared contract.
 
@@ -275,6 +680,13 @@ def evaluate_execution(
     PASS_TO_PASS is evaluated and reported but never changes ``declared_result``:
     a PASS_TO_PASS regression is a separate, pre-declared exclusion reason
     handled by admission, not a substitute for the primary FAIL_TO_PASS verdict.
+
+    ``dataset_root`` / ``execution_root`` / ``enum_values`` are the identity
+    bindings (see :func:`canonical_node_identity`). They MUST be the same values
+    the pre-check used for the same task: supplying them here and not there -- or
+    different values in each -- is exactly the disagreement this parameter set
+    exists to prevent. All three default to empty, which maps nothing and leaves
+    the previous behaviour intact.
     """
     declared_f2p = _normalise_declaration(fail_to_pass, "FAIL_TO_PASS")
     declared_p2p = _normalise_declaration(pass_to_pass, "PASS_TO_PASS")
@@ -284,20 +696,53 @@ def evaluate_execution(
             "empty declared contract"
         )
 
-    statuses = parse_junit_xml(junit_bytes)
+    bindings = {
+        "dataset_root": dataset_root,
+        "execution_root": execution_root,
+        "enum_values": enum_values,
+    }
+    statuses = parse_junit_xml(junit_bytes, **bindings)
 
     resolved: dict[str, str] = {}
     for nodeid in declared_f2p:
-        ident = nodeid_to_junit_identity(nodeid)
+        ident = nodeid_to_junit_identity(nodeid, **bindings)
         resolved[nodeid] = statuses.get(ident, STATUS_MISSING)
 
     resolved_p2p: dict[str, str] = {}
     for nodeid in declared_p2p:
-        ident = nodeid_to_junit_identity(nodeid)
+        ident = nodeid_to_junit_identity(nodeid, **bindings)
         resolved_p2p[nodeid] = statuses.get(ident, STATUS_MISSING)
 
+    # Canonicalisation must never MERGE two declared ids onto one evidence
+    # identity: the second node would then inherit the first's status, which could
+    # pass a node that never ran. The enum table maps distinct members to distinct
+    # values and each root is a single prefix, so a collision means the bindings do
+    # not describe this task -- fail closed and name it rather than score it.
+    _assert_identities_distinct(declared_f2p, "FAIL_TO_PASS", instance_id, bindings)
+    _assert_identities_distinct(declared_p2p, "PASS_TO_PASS", instance_id, bindings)
+
     not_passed = {k: v for k, v in sorted(resolved.items()) if v != STATUS_PASSED}
-    if not not_passed:
+    collection_errors = count_collection_errors(junit_bytes)
+    # A declared node that is ABSENT from the evidence is only evidence of a test
+    # outcome if the test could have run.  When pytest reported a collection
+    # failure for the module that owns the node, its absence is explained by the
+    # environment, so the run establishes NO scientific result: it is "error"
+    # (infrastructure), not "fail".  The condition is deliberately narrow --
+    # collection errors present AND a declared node missing -- so a module that
+    # collected cleanly and genuinely failed still scores "fail", and a run with
+    # no collection errors is untouched.
+    missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
+    cause = classify_collection_cause(
+        collection_error_texts(junit_bytes), changed_modules=changed_modules or ())
+    if collection_errors and missing and cause != "project":
+        result = RESULT_ERROR
+        detail = (
+            f"INCONCLUSIVE ({cause}): pytest reported {collection_errors} "
+            f"collection failure(s) and {len(missing)} of {len(resolved)} declared "
+            "FAIL_TO_PASS node(s) were never collected; the environment, not the "
+            "task, prevented the target tests from running"
+        )
+    elif not not_passed:
         detail = f"all {len(resolved)} declared FAIL_TO_PASS nodes passed"
         result = "pass"
     else:
@@ -312,6 +757,8 @@ def evaluate_execution(
         pass_to_pass=resolved_p2p,
         detail=detail,
         emitted_identities=len(statuses),
+        collection_errors=collection_errors,
+        collection_error_cause=cause,
     )
     if instance_id or execution_state_identity:
         # Retained for the caller's provenance record; never affects the verdict.
@@ -321,6 +768,167 @@ def evaluate_execution(
 
 #: Marker appended to an augmented pytest command line.
 JUNIT_FLAG = "--junitxml"
+
+
+@dataclass(frozen=True)
+class EffectiveInvocation:
+    """One task's DECLARED test command, resolved for safe execution.
+
+    ``test_cmds`` from the source dataset is a LIST; ``_as_test_cmd`` joins it
+    with ``" && "`` to form the canonical, identity-bound command.  Those two
+    facts mean a bare ``" && "`` string is AMBIGUOUS: it can be a boundary
+    between two distinct source commands (each tried in turn by the dataset
+    collector) or real shell sequencing inside one command.
+
+    This type keeps the distinction explicit instead of guessing:
+
+    * ``kind`` is ``"single_pytest"`` (a plain pytest command, optionally with
+      setup), ``"multiple_distinct"`` (the source declared several pytest
+      commands -- refused, because picking one silently discards the others), or
+      ``"unsupported"``.
+    * ``workdir_rel`` comes from an explicit ``cd <rel>`` setup clause only.
+    * ``env`` carries leading ``KEY=VALUE`` assignments, which are passed through
+      the ENVIRONMENT rather than deleted from the command.
+    * ``problems`` non-empty means the caller MUST fail closed.
+    """
+
+    argv: tuple[str, ...]
+    env: tuple[tuple[str, str], ...]
+    workdir_rel: str
+    uses_uv: bool
+    kind: str
+    problems: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems
+
+
+_FORBIDDEN_SHELL = ("||", ";", "|", ">", "<", "`", "$(")
+_UV_CLOUD = ("uv", "run")
+
+
+def _is_pytest_argv(argv: Sequence[str]) -> bool:
+    """True when these tokens invoke pytest (or a runner that will).
+
+    Leading ``KEY=VALUE`` assignments are ENVIRONMENT, not the program: without
+    stripping them, ``PYTHONPATH=. pytest -rA`` was not recognised as a pytest
+    command at all, so a list entry that runs the suite under declared variables
+    could be silently omitted from the invocable set.
+    """
+    if not argv:
+        return False
+    head = list(argv)
+    while head and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", head[0]):
+        head.pop(0)
+    if not head:
+        return False
+    if head[:2] == ["uv", "run"]:
+        head = head[2:]
+    elif head[:2] in (["poetry", "run"], ["pdm", "run"]):
+        head = head[2:]
+    if head[:3] == ["python", "-m", "pytest"] or head[:2] == ["py", "-m"]:
+        return True
+    token = head[0].replace("\\", "/") if head else ""
+    return token.endswith("pytest") or token == "py.test"
+
+
+def analyze_test_invocation(
+    test_cmds: Sequence[str] | str,
+) -> EffectiveInvocation:
+    """Resolve the declared test command into ONE safe, shared interpretation.
+
+    Used by the builder (uv detection), the pre-check (argv/env/cwd) and the live
+    runner (spec command), so a task cannot pass collection under one reading and
+    be executed under another.
+
+    Deliberately conservative: anything it cannot represent exactly is reported
+    as a problem rather than approximated.
+
+    ``str`` vs ``Sequence[str]`` is NOT interchangeable and is not treated as
+    such: a joined ``" && "`` string has lost the boundary between "two distinct
+    source commands" and "real shell sequencing inside one command", so it is
+    read as ONE source command (and a chain with more than one executable clause
+    is refused). A list preserves that boundary, so several distinct pytest
+    commands are reported as ``multiple_distinct``. Both refuse; only the
+    diagnostic differs.
+    """
+    source = [test_cmds] if isinstance(test_cmds, str) else list(test_cmds or ())
+    source = [str(c).strip() for c in source if str(c).strip()]
+    if not source:
+        return EffectiveInvocation((), (), "", False, "unsupported",
+                                   ("declared test command is empty",))
+
+    invocable = [c for c in source if _is_pytest_argv(shlex.split(c, posix=False))]
+    if len(invocable) > 1:
+        # Several distinct pytest commands were declared. Choosing one silently
+        # discards the others, and we cannot prove which is authoritative.
+        return EffectiveInvocation((), (), "", False, "multiple_distinct",
+                                   (f"{len(invocable)} distinct pytest commands declared; "
+                                    "the authoritative one cannot be established",))
+    command = invocable[0] if invocable else source[-1]
+
+    clauses = [c.strip() for c in command.split(" && ") if c.strip()]
+    workdir_rel = ""
+    env: dict[str, str] = {}
+    remaining: list[str] = []
+    for clause in clauses:
+        lowered = clause.lower()
+        if lowered.startswith("cd "):
+            target = clause[3:].strip().strip("'\"")
+            if workdir_rel:
+                return EffectiveInvocation((), (), "", False, "unsupported",
+                                           ("more than one 'cd' clause",))
+            if Path(target).is_absolute() or ".." in Path(target).parts:
+                return EffectiveInvocation((), (), "", False, "unsupported",
+                                           (f"unsafe 'cd' target {target!r}",))
+            workdir_rel = target
+            continue
+        if lowered.startswith("export "):
+            for token in clause[7:].split():
+                if "=" in token:
+                    key, value = token.split("=", 1)
+                    env[key] = value
+                else:
+                    return EffectiveInvocation((), (), "", False, "unsupported",
+                                               (f"unparsable export {clause!r}",))
+            continue
+        if lowered.startswith(("source ", ". ")):
+            # Activating a virtualenv is a no-op here: the caller already binds
+            # the exact interpreter for the side, and honouring the activation
+            # would let a POSIX path override it.
+            continue
+        remaining.append(clause)
+
+    if len(remaining) != 1:
+        return EffectiveInvocation((), (), "", False, "unsupported",
+                                   (f"expected exactly one command clause, found "
+                                    f"{len(remaining)}: {remaining!r}",))
+
+    argv = shlex.split(remaining[0], posix=False)
+    # Leading KEY=VALUE assignments belong in the environment, not the argv.
+    while argv and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", argv[0]):
+        key, value = argv.pop(0).split("=", 1)
+        env[key] = value
+    if not argv:
+        return EffectiveInvocation((), (), workdir_rel, False, "unsupported",
+                                   ("no command after environment assignments",))
+
+    for token in argv:
+        if any(bad in token for bad in _FORBIDDEN_SHELL):
+            return EffectiveInvocation((), (), "", False, "unsupported",
+                                       (f"unsupported shell construct {token!r}",))
+
+    if not _is_pytest_argv(argv):
+        return EffectiveInvocation(tuple(argv), tuple(sorted(env.items())),
+                                   workdir_rel, False, "unsupported",
+                                   ("the resolved command does not invoke pytest",))
+
+    uses_uv = tuple(argv[:2]) == _UV_CLOUD or argv[0] == "uv"
+    return EffectiveInvocation(
+        tuple(argv), tuple(sorted(env.items())), workdir_rel, uses_uv,
+        "single_pytest", (),
+    )
 
 
 def augment_test_command(test_cmd: str, junit_path: str) -> str:
@@ -353,6 +961,7 @@ def produce_report(
     repository: str = "",
     base_commit: str = "",
     execution_state_identity: str = "",
+    changed_modules: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Evaluate retained JUnit evidence and WRITE the canonical report file.
 
@@ -377,6 +986,7 @@ def produce_report(
         pass_to_pass=pass_to_pass,
         instance_id=instance_id,
         execution_state_identity=execution_state_identity,
+        changed_modules=changed_modules,
     )
     blob = render_report(
         outcome,
@@ -467,6 +1077,15 @@ def render_report(
         "declared_result": outcome.declared_result,
         "detail": outcome.detail,
         "emitted_identities": outcome.emitted_identities,
+        # Carried so the AUTHORITATIVE deriver can reach the same verdict: a
+        # collection failure makes absent target nodes an ENVIRONMENT outcome,
+        # not a task failure.  Additive field; absent means 0 (clean run).
+        "collection_errors": int(getattr(outcome, "collection_errors", 0) or 0),
+        # WHY collection failed, so the AUTHORITATIVE deriver can reach the same
+        # verdict: "project" means the gold patch owns every module that failed to
+        # import, so an absent base-side node is consistent with a genuine base
+        # failure and must NOT be treated as inconclusive.
+        "collection_error_cause": str(getattr(outcome, "collection_error_cause", "unknown") or "unknown"),
         "fail_to_pass": dict(sorted(outcome.fail_to_pass.items())),
         "pass_to_pass": dict(sorted(outcome.pass_to_pass.items())),
     }
@@ -496,7 +1115,7 @@ def parse_report(data: bytes) -> dict[str, Any]:
             f"not {EVALUATOR_ID!r}"
         )
     result = payload.get("declared_result")
-    if result not in ("pass", "fail"):
+    if result not in ("pass", "fail", RESULT_ERROR):
         raise EvaluatorError(f"evaluator report declares an invalid result {result!r}")
 
     # Self-integrity: any edit to any field (including declared_result) breaks
@@ -544,6 +1163,23 @@ def verdict_from_report_payload(
     if unknown:
         return None, f"report carries unknown test statuses: {unknown}"
     not_passed = {k: v for k, v in sorted(statuses.items()) if v in NOT_PASSED}
+    # A collection failure explains an ABSENT target node, so the run establishes
+    # no scientific result: report "error" (environment), not "fail" (task).
+    # The condition is narrow -- collection errors present AND a declared node
+    # missing -- so a module that collected and genuinely failed still scores
+    # "fail".  Producer and deriver apply the SAME rule so they cannot drift.
+    _ce = int(payload.get("collection_errors") or 0)
+    _missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
+    # "project" means the GOLD PATCH owns every module that failed to import, so
+    # the absent base-side node is consistent with a genuine base failure and the
+    # run is scored normally.  Anything else (environment / unknown) is
+    # inconclusive -- fail closed, never guessed.
+    if _ce and _missing and str(payload.get("collection_error_cause") or "unknown") != "project":
+        return RESULT_ERROR, (
+            f"INCONCLUSIVE ({payload.get('collection_error_cause') or 'unknown'}): {_ce} "
+            "collection failure(s) and "
+            f"{len(_missing)} declared FAIL_TO_PASS node(s) never collected"
+        )
     if not not_passed:
         return "pass", f"all {len(statuses)} declared FAIL_TO_PASS nodes passed"
     return "fail", (
@@ -600,6 +1236,23 @@ def derive_result_protocol(
     if unknown:
         return None, f"evaluator report carries unknown statuses: {unknown}"
     not_passed = {k: v for k, v in sorted(statuses.items()) if v in NOT_PASSED}
+    # A collection failure explains an ABSENT target node, so the run establishes
+    # no scientific result: report "error" (environment), not "fail" (task).
+    # The condition is narrow -- collection errors present AND a declared node
+    # missing -- so a module that collected and genuinely failed still scores
+    # "fail".  Producer and deriver apply the SAME rule so they cannot drift.
+    _ce = int(payload.get("collection_errors") or 0)
+    _missing = {k: v for k, v in not_passed.items() if v == STATUS_MISSING}
+    # "project" means the GOLD PATCH owns every module that failed to import, so
+    # the absent base-side node is consistent with a genuine base failure and the
+    # run is scored normally.  Anything else (environment / unknown) is
+    # inconclusive -- fail closed, never guessed.
+    if _ce and _missing and str(payload.get("collection_error_cause") or "unknown") != "project":
+        return RESULT_ERROR, (
+            f"INCONCLUSIVE ({payload.get('collection_error_cause') or 'unknown'}): {_ce} "
+            "collection failure(s) and "
+            f"{len(_missing)} declared FAIL_TO_PASS node(s) never collected"
+        )
     if not not_passed:
         return "pass", f"all {len(statuses)} declared FAIL_TO_PASS nodes passed"
     return "fail", (

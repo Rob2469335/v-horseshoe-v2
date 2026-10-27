@@ -109,9 +109,19 @@ foreach ($r in $Rules) {
 Write-Output 'Applied. Reading back twice for comparison...'
 
 function Compare-AclTable($readback) {
+    # Read the table back as an ARRAY here, so a one-rule or zero-rule
+    # read-back behaves identically to a full one.
+    $rb = @($readback)
+    $intended = @($Rules)
     $mismatches = @()
-    foreach ($r in $Rules) {
-        $hit = $readback | Where-Object {
+    # An EXTRA rule is as serious as a missing one: an unexpected high-weight
+    # Allow appended to the vNIC would silently widen the boundary while every
+    # intended rule still matched. Fail closed on any count difference.
+    if ($rb.Count -ne $intended.Count) {
+        $mismatches += "rule count differs: read-back $($rb.Count), intended $($intended.Count) (an unexpected extra rule can silently widen the boundary)"
+    }
+    foreach ($r in $intended) {
+        $hit = $rb | Where-Object {
             $_.Direction -eq $r.Direction -and $_.Action -eq $r.Action -and
             [int]$_.Weight -eq [int]$r.Weight -and
             ("$($_.RemoteIPAddress)") -eq $r.Remote
@@ -129,7 +139,15 @@ function Compare-AclTable($readback) {
             }
         }
     }
-    return ,$mismatches
+    # Emit the STRINGS, not a wrapped array. Wrapping the result in a
+    # one-element array (the earlier `,` form) made the call site's @() count 1
+    # even for a perfectly correct rule set -- an empty array became one empty
+    # element -- so every successful apply was reported MISMATCH and exited 3.
+    # The call site's @() already normalises the empty case to Count 0 without
+    # the StrictMode $null.Count error, which is what the wrapper was added for;
+    # verified under PowerShell 7.6.6 with Set-StrictMode -Version Latest, and
+    # re-checkable any time with qwen_train/f2_s8_acl_harness.ps1.
+    return $mismatches
 }
 
 $rb1 = @(Get-VMNetworkAdapterExtendedAcl -VMName $VMName)
