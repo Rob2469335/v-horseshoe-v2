@@ -63,6 +63,19 @@ class BuildCell:
         }
 
 
+class ProbeAuthorizationAbort(ProbeHalt):
+    """Authorization failed mid-batch; carries the cells already completed.
+
+    Raising this (rather than the bare AuthorizationError) lets the driver
+    record the tasks that finished before the refusal so their workspaces are
+    never left orphaned and unrecorded.
+    """
+
+    def __init__(self, cells: Mapping[str, BuildCell], detail: str = "") -> None:
+        super().__init__("PROBE_AUTHORIZATION_REFUSED", detail)
+        self.cells = dict(cells)
+
+
 class DryRunBuilder:
     """Explicit simulation builder used only by the dry-run CLI.
 
@@ -136,10 +149,10 @@ class LiveBuilder:
                 # BuilderUnavailable / BuilderContractError / ProbeHalt already
                 # carry a stable reason; never downgrade them to a success.
                 raise
-            except AuthorizationError:
-                # An authorization failure must abort the run, not be normalized
-                # into a BuilderContractError or a per-task result.
-                raise
+            except AuthorizationError as exc:
+                # Abort the run, but carry the cells already completed so the
+                # caller can record them (no orphan workspace).
+                raise ProbeAuthorizationAbort(out, str(exc)) from exc
             except Exception as exc:  # noqa: BLE001 - any executor failure is fail-closed
                 raise BuilderContractError(
                     f"build executor failed for {task_id!r}: "
@@ -351,6 +364,44 @@ def workspace_free_bytes(path: pathlib.Path | str) -> int:
     return free
 
 
+def _record_partial_cells(
+    result: "ProbeResult",
+    cells: Mapping[str, "BuildCell"],
+    cleanup_after_task: Callable[[str, Mapping[str, Any]], None] | None,
+) -> tuple[str, str] | None:
+    """Record cells completed before an authorization abort (no orphans).
+
+    Mirrors the per-cell accounting/cleanup of the normal path so a task that
+    finished before the refusal is recorded, not left orphaned. Returns ``None``
+    on success, or ``(stop_reason, detail)`` if recording/cleanup fails closed.
+    """
+    for task_id, cell in cells.items():
+        classification = cell.classification
+        result.attempted += 1
+        if classification == "OBSERVED_COMPATIBLE":
+            result.compatible += 1
+            workspace = cell.workspace
+            if workspace and pathlib.Path(str(workspace)).is_dir():
+                result.built += 1
+        elif classification == "OBSERVED_INCOMPATIBLE":
+            result.incompatible += 1
+        else:
+            result.unknown += 1
+        if cell.failure:
+            result.infrastructure_invalid += 1
+        if cleanup_after_task is not None:
+            try:
+                cleanup_after_task(task_id, cell.as_row())
+            except CleanupClassificationUnrecognized as exc:
+                return ("CLEANUP_CLASSIFICATION_UNRECOGNIZED", str(exc))
+            except Exception as exc:  # noqa: BLE001 - cleanup failure is terminal
+                return (
+                    "CLEANUP_FAILED",
+                    f"cleanup_after_task({task_id}): {exc}",
+                )
+    return None
+
+
 def run_probe(
     *,
     unknown_task_ids: Sequence[str],
@@ -469,6 +520,15 @@ def run_probe(
         except BuilderContractError as exc:
             result.batches = batches
             return stop("PROBE_BUILDER_CONTRACT", str(exc))
+        except ProbeAuthorizationAbort as exc:
+            result.batches = batches
+            problem = _record_partial_cells(result, exc.cells, cleanup_after_task)
+            if problem is not None:
+                return stop(problem[0], problem[1])
+            return stop(
+                "PROBE_AUTHORIZATION_REFUSED",
+                f"authorization revalidation failed: {exc.detail}",
+            )
         except ProbeHalt as exc:
             result.batches = batches
             return stop(exc.reason, exc.detail)
