@@ -72,6 +72,10 @@ class ProbeAuthorizationAbort(ProbeHalt):
     """
 
     def __init__(self, cells: Mapping[str, BuildCell], detail: str = "") -> None:
+        if not isinstance(cells, Mapping):
+            raise BuilderContractError(
+                "authorization abort payload must be a mapping"
+            )
         super().__init__("PROBE_AUTHORIZATION_REFUSED", detail)
         self.cells = dict(cells)
 
@@ -367,16 +371,47 @@ def workspace_free_bytes(path: pathlib.Path | str) -> int:
 def _record_partial_cells(
     result: "ProbeResult",
     cells: Mapping[str, "BuildCell"],
+    batch: Sequence[str],
     cleanup_after_task: Callable[[str, Mapping[str, Any]], None] | None,
 ) -> tuple[str, str] | None:
     """Record cells completed before an authorization abort (no orphans).
 
-    Mirrors the per-cell accounting/cleanup of the normal path so a task that
-    finished before the refusal is recorded, not left orphaned. Returns ``None``
-    on success, or ``(stop_reason, detail)`` if recording/cleanup fails closed.
+    Mirrors the per-cell accounting/cleanup of the normal path. Refuses a
+    malformed or foreign-cell payload (a task id outside the batch, a
+    non-``BuildCell``, a task-identity mismatch, or an unrecognised
+    classification) so an abort cannot be abused to record arbitrary work.
+    Returns ``None`` on success, or ``(stop_reason, detail)`` if validation,
+    recording, or cleanup fails closed.
     """
+    allowed = set(batch)
     for task_id, cell in cells.items():
+        if task_id not in allowed:
+            return (
+                "PROBE_BUILDER_CONTRACT",
+                f"abort payload contains a task outside the batch: {task_id!r}",
+            )
+        if not isinstance(cell, BuildCell):
+            return (
+                "PROBE_BUILDER_CONTRACT",
+                f"abort payload cell for {task_id!r} is not a BuildCell",
+            )
+        if cell.task_id != task_id:
+            return (
+                "PROBE_BUILDER_CONTRACT",
+                f"abort payload cell task {cell.task_id!r} recorded under {task_id!r}",
+            )
         classification = cell.classification
+        if classification not in APPROVED_PROBE_CLASSIFICATIONS:
+            return (
+                "PROBE_BUILDER_CONTRACT",
+                f"abort payload has unrecognised classification {classification!r} "
+                f"for {task_id!r}",
+            )
+        if classification == "OBSERVED_COMPATIBLE" and cell.failure:
+            return (
+                "PROBE_BUILDER_CONTRACT",
+                f"abort payload marks {task_id!r} compatible with a failure",
+            )
         result.attempted += 1
         if classification == "OBSERVED_COMPATIBLE":
             result.compatible += 1
@@ -522,7 +557,9 @@ def run_probe(
             return stop("PROBE_BUILDER_CONTRACT", str(exc))
         except ProbeAuthorizationAbort as exc:
             result.batches = batches
-            problem = _record_partial_cells(result, exc.cells, cleanup_after_task)
+            problem = _record_partial_cells(
+                result, exc.cells, batch, cleanup_after_task
+            )
             if problem is not None:
                 return stop(problem[0], problem[1])
             return stop(

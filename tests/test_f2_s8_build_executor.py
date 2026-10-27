@@ -601,3 +601,82 @@ def test_mid_batch_authorization_abort_records_completed_cells(tmp_path):
     assert result.compatible == 1
     assert result.infrastructure_invalid == 0
     assert "t2" not in cleaned            # no cell/cleanup for the refused task
+
+
+# ===========================================================================
+# Regression: a malformed/foreign abort payload is refused, not recorded
+# ===========================================================================
+
+
+def _run_with_abort_payload(payload, *, batch=("t1",), task_ids=("t1",)):
+    def builder(_batch):
+        raise ProbeAuthorizationAbort(payload, "authorization failed")
+
+    cleaned = []
+    result = run_probe(
+        unknown_task_ids=list(task_ids),
+        limits=ProbeLimits(
+            max_tasks=len(task_ids),
+            disk_floor_bytes=1,
+            per_task_disk_bytes=1,
+            batch_limit=max(1, len(task_ids)),
+        ),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=lambda: 10**18,
+        verify_ledgers=lambda: None,
+        cleanup_after_task=lambda tid, row: cleaned.append(tid),
+        log=lambda _: None,
+    )
+    return result, cleaned
+
+
+def test_abort_payload_foreign_task_is_refused():
+    result, cleaned = _run_with_abort_payload(
+        {"tX": BuildCell("tX", "UNKNOWN")}, task_ids=("t1",)
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_non_buildcell_is_refused():
+    result, cleaned = _run_with_abort_payload({"t1": "not-a-cell"}, task_ids=("t1",))
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_task_identity_mismatch_is_refused():
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t2", "UNKNOWN")}, task_ids=("t1",)
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_unrecognised_classification_is_refused():
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t1", "NOT_A_CLASS")}, task_ids=("t1",)
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_compatible_with_failure_is_refused():
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t1", "OBSERVED_COMPATIBLE", failure="boom")},
+        task_ids=("t1",),
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_non_mapping_is_refused():
+    result, cleaned = _run_with_abort_payload(["not", "a", "mapping"], task_ids=("t1",))
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
