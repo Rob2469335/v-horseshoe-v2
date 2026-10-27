@@ -804,20 +804,38 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=r"C:\f2_pilot",
         help="Probe workspace root (isolation: pass a temporary root in tests)",
     )
+    ap.add_argument(
+        "--inputs",
+        default=None,
+        help="Task input records directory (required for --live)",
+    )
+    ap.add_argument(
+        "--patches",
+        default=None,
+        help="Task patch directory (required for --live)",
+    )
     args = ap.parse_args(argv)
 
-    # Live execution is refused BEFORE any grant read or budget reservation.
-    # Previously this check ran after authorize_s8_probe_run(reserve_execution=
-    # True), so a blocked --live invocation consumed a production probe-budget
-    # slot and then exited 1.  The refusal must come first.
+    # Live execution requires the batch inputs/patches and every other gate.
+    # This check runs BEFORE any grant read or budget reservation, so a blocked
+    # --live invocation consumes nothing.  (Owner authorized the host-side
+    # f2builder architecture and network egress; the identity guard above still
+    # requires a non-admin process.)
     if not args.dry_run:
-        print(
-            "PROBE_PREREQUISITES_MISSING: live candidate build-probe execution requires "
-            "owner-provisioned OS network isolation and offline wheelhouse. "
-            "Live execution is disabled by fail-closed policy.",
-            file=sys.stderr,
-        )
-        return 1
+        missing = []
+        if not args.inputs or not pathlib.Path(args.inputs).is_dir():
+            missing.append("--inputs")
+        if not args.patches or not pathlib.Path(args.patches).is_dir():
+            missing.append("--patches")
+        if missing:
+            print(
+                "PROBE_PREREQUISITES_MISSING: live build-probe execution requires "
+                + ", ".join(missing)
+                + " (and owner-provisioned isolation/offline dependencies). "
+                "No grant was consumed.",
+                file=sys.stderr,
+            )
+            return 1
 
     if not args.grant_file or not pathlib.Path(args.grant_file).is_file():
         print(
@@ -837,9 +855,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             compat_report_file=args.compat_report,
             ledger_paths=args.ledgers,
             budget_ledger_root=args.budget_root,
-            # Only dry-run reaches this point (live is refused above).  A
-            # verification/dry-run path must never reserve execution budget.
-            reserve_execution=False,
+            # Dry-run is verification only (never reserves). Live reserves the
+            # grant's task budget atomically before any build.
+            reserve_execution=not args.dry_run,
         )
     except Exception as exc:
         print(f"PROBE_NOT_AUTHORIZED: {exc}", file=sys.stderr)
@@ -878,22 +896,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_delete=not args.dry_run,
         )
 
+    if args.dry_run:
+        builder: Callable[[Sequence[str]], Mapping[str, object]] = DryRunBuilder()
+    else:
+        from qwen_train.f2_s8_build_executor import make_probe_live_builder
+
+        builder = make_probe_live_builder(
+            authorized,
+            inputs=args.inputs,
+            patches=args.patches,
+            workspace_root=args.workspace_root,
+        )
+
     result = run_probe(
         unknown_task_ids=list(authorized.selected_task_ids),
         limits=limits,
         authorize=_revalidate,
         verify_ledgers=_verify_ledgers,
         cleanup_after_task=_cleanup_task,
-        # Explicit simulation builder: its UNKNOWN rows are dry-run output, not
-        # a live build result.  A live builder (LiveBuilder via
-        # resolve_live_builder) is intentionally NOT wired here: live execution
-        # remains fail-closed behind the policy refusal above until an owner
-        # policy decision and an approved per-task executor exist.
-        builder=DryRunBuilder(),
+        builder=builder,
         free_bytes=lambda: workspace_free_bytes(args.workspace_root),
         allowed_task_ids=set(authorized.selected_task_ids),
     )
-    print(f"Dry-run probe finished: stop_reason={result.stop_reason} attempted={result.attempted}")
+    print(
+        f"Probe ({'dry-run' if args.dry_run else 'live'}) finished: "
+        f"stop_reason={result.stop_reason} attempted={result.attempted}"
+    )
     return 0 if result.stop_reason == "PROBE_COMPLETE" else 1
 
 

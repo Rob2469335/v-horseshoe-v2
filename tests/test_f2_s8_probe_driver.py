@@ -632,8 +632,8 @@ def test_resolve_live_builder_fails_closed_without_executor(tmp_path):
     assert isinstance(b, LiveBuilder)
 
 
-def test_live_still_refuses(monkeypatch, capsys):
-    """The policy hard-disable must remain effective; do not weaken it."""
+def test_live_requires_inputs_and_patches(monkeypatch, capsys):
+    """Live needs batch inputs/patches; without them it refuses before any grant."""
     import qwen_train.f2_s8_acquisition as acq
 
     monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
@@ -641,3 +641,19 @@ def test_live_still_refuses(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert rc == 1
     assert "PROBE_PREREQUISITES_MISSING" in err
+    assert "--inputs" in err and "--patches" in err
+
+
+def test_live_with_prereqs_requires_signed_grant(monkeypatch, capsys, tmp_path):
+    """With inputs/patches present, live still requires a signed grant."""
+    import qwen_train.f2_s8_acquisition as acq
+
+    monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    (tmp_path / "inputs").mkdir()
+    (tmp_path / "patches").mkdir()
+    rc = probe_main(
+        ["--live", "--inputs", str(tmp_path / "inputs"), "--patches", str(tmp_path / "patches")]
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "PROBE_NOT_AUTHORIZED" in err
