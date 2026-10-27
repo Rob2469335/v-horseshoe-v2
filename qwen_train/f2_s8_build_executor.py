@@ -42,7 +42,6 @@ called by the driver today.
 from __future__ import annotations
 
 import pathlib
-import re
 import subprocess
 from typing import Any, Callable, Iterable, Mapping
 
@@ -51,6 +50,7 @@ from qwen_train.f2_s8_probe_driver import (
     BuildCell,
     BuilderContractError,
     LiveBuilder,
+    validate_task_workspace,
 )
 
 #: Reason codes that may be treated as a deterministic *incompatibility* rather
@@ -116,49 +116,10 @@ class HostBuildExecutor:
         return self._workspace_root
 
     def _validate_workspace(self, task_id: str, workspace: object) -> str:
-        """Return the resolved workspace iff it is the task's dir inside the root.
-
-        Fails closed (``BuilderContractError``) on any escape: the root itself, a
-        foreign task, an outside-root path, a relative traversal, a symlink
-        target, an unresolvable path, or a missing directory.
-        """
-        if not isinstance(task_id, str) or not task_id:
-            raise BuilderContractError("task id is empty")
-        if task_id in (".", "..") or "/" in task_id or "\\" in task_id or not re.fullmatch(
-            r"[A-Za-z0-9_.-]+", task_id
-        ):
-            raise BuilderContractError(f"unsafe task id {task_id!r}")
-        try:
-            root = self._workspace_root_value().resolve(strict=True)
-        except (OSError, RuntimeError) as exc:
-            raise BuilderContractError(
-                f"workspace root cannot be resolved: {self._workspace_root!r} ({exc})"
-            ) from exc
-        raw = "" if workspace is None else str(workspace)
-        if not raw:
-            raise BuilderContractError("build reported success without a workspace")
-        try:
-            resolved = pathlib.Path(raw).resolve(strict=True)
-        except (OSError, RuntimeError) as exc:
-            raise BuilderContractError(
-                f"workspace path cannot be resolved: {raw!r} ({exc})"
-            ) from exc
-        if resolved == root:
-            raise BuilderContractError(
-                "workspace resolves to the designated root, not a task workspace"
-            )
-        if root not in resolved.parents:
-            raise BuilderContractError(
-                f"workspace escapes the designated root: {resolved}"
-            )
-        if not resolved.is_dir():
-            raise BuilderContractError(f"workspace is not a directory: {resolved}")
-        expected = root / task_id
-        if resolved != expected:
-            raise BuilderContractError(
-                f"workspace {resolved} is not the task-specific location {expected}"
-            )
-        return str(resolved)
+        """Delegate to the single shared containment guard."""
+        return validate_task_workspace(
+            task_id, workspace, self._workspace_root_value()
+        )
 
     def build_one(self, task_id: str) -> BuildCell:
         selected = tuple(getattr(self._authorized, "selected_task_ids", ()) or ())

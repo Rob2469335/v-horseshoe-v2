@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -368,22 +369,78 @@ def workspace_free_bytes(path: pathlib.Path | str) -> int:
     return free
 
 
+def validate_task_workspace(
+    task_id: str,
+    workspace: object,
+    workspace_root: pathlib.Path | str | None,
+) -> str:
+    """Return the resolved task workspace iff it is valid and contained.
+
+    Single containment guard reused by the build adapter and the abort-recording
+    path. Fails closed (``BuilderContractError``) on an unsafe task id, an
+    empty/missing/unresolvable path, a non-directory, a path equal to the root,
+    an outside-root path, or a foreign-task path. When ``workspace_root`` is
+    None only "non-empty existing directory" is required (the adapter's
+    containment check is authoritative there).
+    """
+    if not isinstance(task_id, str) or not task_id:
+        raise BuilderContractError("task id is empty")
+    if task_id in (".", "..") or "/" in task_id or "\\" in task_id or not re.fullmatch(
+        r"[A-Za-z0-9_.-]+", task_id
+    ):
+        raise BuilderContractError(f"unsafe task id {task_id!r}")
+    raw = "" if workspace is None else str(workspace)
+    if not raw:
+        raise BuilderContractError("OBSERVED_COMPATIBLE has no workspace")
+    try:
+        resolved = pathlib.Path(raw).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BuilderContractError(
+            f"workspace path cannot be resolved: {raw!r} ({exc})"
+        ) from exc
+    if not resolved.is_dir():
+        raise BuilderContractError(f"workspace is not a directory: {resolved}")
+    if workspace_root is None:
+        return str(resolved)
+    try:
+        root = pathlib.Path(str(workspace_root)).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BuilderContractError(
+            f"workspace root cannot be resolved: {workspace_root!r} ({exc})"
+        ) from exc
+    if resolved == root:
+        raise BuilderContractError(
+            "workspace resolves to the designated root, not a task workspace"
+        )
+    if root not in resolved.parents:
+        raise BuilderContractError(
+            f"workspace escapes the designated root: {resolved}"
+        )
+    expected = root / task_id
+    if resolved != expected:
+        raise BuilderContractError(
+            f"workspace {resolved} is not the task-specific location {expected}"
+        )
+    return str(resolved)
+
+
 def _record_partial_cells(
     result: "ProbeResult",
     cells: Mapping[str, "BuildCell"],
     batch: Sequence[str],
     cleanup_after_task: Callable[[str, Mapping[str, Any]], None] | None,
+    workspace_root: pathlib.Path | str | None = None,
 ) -> tuple[str, str] | None:
-    """Record cells completed before an authorization abort (no orphans).
+    """Validate the ENTIRE abort payload, then record it (atomic).
 
-    Mirrors the per-cell accounting/cleanup of the normal path. Refuses a
-    malformed or foreign-cell payload (a task id outside the batch, a
-    non-``BuildCell``, a task-identity mismatch, or an unrecognised
-    classification) so an abort cannot be abused to record arbitrary work.
-    Returns ``None`` on success, or ``(stop_reason, detail)`` if validation,
-    recording, or cleanup fails closed.
+    Pass 1 validates every entry without mutating counters or invoking cleanup,
+    so a later invalid entry cannot leave earlier entries recorded. Pass 2 then
+    records the validated entries exactly once. An ``OBSERVED_COMPATIBLE`` cell
+    must carry a valid, existing (and, when a root is supplied, contained) task
+    workspace. Returns ``None`` on success, or ``(stop_reason, detail)``.
     """
     allowed = set(batch)
+    validated: list[tuple[str, "BuildCell"]] = []
     for task_id, cell in cells.items():
         if task_id not in allowed:
             return (
@@ -407,17 +464,29 @@ def _record_partial_cells(
                 f"abort payload has unrecognised classification {classification!r} "
                 f"for {task_id!r}",
             )
-        if classification == "OBSERVED_COMPATIBLE" and cell.failure:
-            return (
-                "PROBE_BUILDER_CONTRACT",
-                f"abort payload marks {task_id!r} compatible with a failure",
-            )
+        if classification == "OBSERVED_COMPATIBLE":
+            if cell.failure:
+                return (
+                    "PROBE_BUILDER_CONTRACT",
+                    f"abort payload marks {task_id!r} compatible with a failure",
+                )
+            try:
+                validate_task_workspace(task_id, cell.workspace, workspace_root)
+            except BuilderContractError as exc:
+                return (
+                    "PROBE_BUILDER_CONTRACT",
+                    f"abort payload compatible cell {task_id!r} has an invalid "
+                    f"workspace: {exc}",
+                )
+        validated.append((task_id, cell))
+
+    # Pass 2: only now mutate counters / invoke cleanup.
+    for task_id, cell in validated:
+        classification = cell.classification
         result.attempted += 1
         if classification == "OBSERVED_COMPATIBLE":
             result.compatible += 1
-            workspace = cell.workspace
-            if workspace and pathlib.Path(str(workspace)).is_dir():
-                result.built += 1
+            result.built += 1  # workspace validated in pass 1
         elif classification == "OBSERVED_INCOMPATIBLE":
             result.incompatible += 1
         else:
@@ -448,6 +517,7 @@ def run_probe(
     cleanup_after_task: Callable[[str, Mapping[str, Any]], None] | None = None,
     verify_ledgers: Callable[[], None],
     log: Callable[[str], None] = print,
+    workspace_root: pathlib.Path | str | None = None,
 ) -> ProbeResult:
     """Fake-builder dry run. Never writes credits or production state.
 
@@ -558,7 +628,7 @@ def run_probe(
         except ProbeAuthorizationAbort as exc:
             result.batches = batches
             problem = _record_partial_cells(
-                result, exc.cells, batch, cleanup_after_task
+                result, exc.cells, batch, cleanup_after_task, workspace_root
             )
             if problem is not None:
                 return stop(problem[0], problem[1])
@@ -917,6 +987,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         builder=builder,
         free_bytes=lambda: workspace_free_bytes(args.workspace_root),
         allowed_task_ids=set(authorized.selected_task_ids),
+        workspace_root=args.workspace_root,
     )
     print(
         f"Probe ({'dry-run' if args.dry_run else 'live'}) finished: "

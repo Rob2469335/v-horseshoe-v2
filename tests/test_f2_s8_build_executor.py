@@ -608,7 +608,7 @@ def test_mid_batch_authorization_abort_records_completed_cells(tmp_path):
 # ===========================================================================
 
 
-def _run_with_abort_payload(payload, *, batch=("t1",), task_ids=("t1",)):
+def _run_with_abort_payload(payload, *, task_ids=("t1",), workspace_root=None):
     def builder(_batch):
         raise ProbeAuthorizationAbort(payload, "authorization failed")
 
@@ -627,6 +627,7 @@ def _run_with_abort_payload(payload, *, batch=("t1",), task_ids=("t1",)):
         verify_ledgers=lambda: None,
         cleanup_after_task=lambda tid, row: cleaned.append(tid),
         log=lambda _: None,
+        workspace_root=workspace_root,
     )
     return result, cleaned
 
@@ -680,3 +681,107 @@ def test_abort_payload_non_mapping_is_refused():
     assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
     assert result.attempted == 0
     assert cleaned == []
+
+
+# --- atomicity: the WHOLE payload is validated before any recording ---------
+
+
+def test_abort_payload_atomic_valid_then_invalid(tmp_path):
+    """A valid first cell must NOT be recorded if a later cell is invalid."""
+    ws = tmp_path / "t1"
+    ws.mkdir()
+    payload = {
+        "t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=str(ws)),
+        "t2": BuildCell("t2", "NOT_A_CLASS"),
+    }
+    result, cleaned = _run_with_abort_payload(
+        payload, task_ids=("t1", "t2"), workspace_root=tmp_path
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert result.compatible == 0
+    assert result.built == 0
+    assert cleaned == []  # no recording-side effects
+
+
+def test_abort_payload_atomic_valid_then_bad_identity(tmp_path):
+    ws = tmp_path / "t1"
+    ws.mkdir()
+    payload = {
+        "t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=str(ws)),
+        "t2": BuildCell("tX", "UNKNOWN"),  # identity mismatch for key t2
+    }
+    result, cleaned = _run_with_abort_payload(
+        payload, task_ids=("t1", "t2"), workspace_root=tmp_path
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert result.compatible == 0
+    assert cleaned == []
+
+
+# --- compatible cells require a valid, contained workspace -----------------
+
+
+def test_abort_payload_compatible_without_workspace_is_refused(tmp_path):
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=None)},
+        task_ids=("t1",),
+        workspace_root=tmp_path,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert result.compatible == 0
+    assert cleaned == []
+
+
+def test_abort_payload_compatible_nonexistent_workspace_is_refused(tmp_path):
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=str(tmp_path / "nope"))},
+        task_ids=("t1",),
+        workspace_root=tmp_path,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_compatible_outside_root_is_refused(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}_abort_outside"
+    outside.mkdir(exist_ok=True)
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=str(outside))},
+        task_ids=("t1",),
+        workspace_root=tmp_path,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_compatible_foreign_task_workspace_is_refused(tmp_path):
+    other = tmp_path / "other-task"
+    other.mkdir()
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=str(other))},
+        task_ids=("t1",),
+        workspace_root=tmp_path,
+    )
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert cleaned == []
+
+
+def test_abort_payload_valid_cell_records_once(tmp_path):
+    ws = tmp_path / "t1"
+    ws.mkdir()
+    result, cleaned = _run_with_abort_payload(
+        {"t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=str(ws))},
+        task_ids=("t1",),
+        workspace_root=tmp_path,
+    )
+    assert result.stop_reason == "PROBE_AUTHORIZATION_REFUSED"
+    assert result.attempted == 1
+    assert result.compatible == 1
+    assert result.built == 1
+    assert cleaned == ["t1"]
