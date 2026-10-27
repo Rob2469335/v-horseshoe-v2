@@ -23,6 +23,84 @@ class ProbeHalt(RuntimeError):
         super().__init__(f"{reason}: {detail}" if detail else reason)
 
 
+class BuilderUnavailable(ProbeHalt):
+    """No guest builder is configured; this is a hard prerequisite failure."""
+
+
+class BuilderContractError(ProbeHalt):
+    """The builder returned a result that violates the explicit contract."""
+
+
+@dataclass(frozen=True)
+class BuildCell:
+    """One explicit per-task build result.
+
+    ``classification`` must be one of the approved probe classifications.  A
+    missing live builder is never represented as ``UNKNOWN``; it raises
+    :class:`BuilderUnavailable` instead.
+    """
+
+    task_id: str
+    classification: str
+    workspace: str | None = None
+    failure: str = ""
+    reason_code: str = ""
+    duration_seconds: float | None = None
+    log_tail: str = ""
+
+    def as_row(self) -> dict[str, object]:
+        return {
+            "task_id": self.task_id,
+            "classification": self.classification,
+            "workspace": self.workspace,
+            "failure": self.failure,
+            "reason_code": self.reason_code,
+            "duration_seconds": self.duration_seconds,
+            "log_tail": self.log_tail,
+        }
+
+
+class DryRunBuilder:
+    """Explicit simulation builder used only by the dry-run CLI.
+
+    It is named and typed so a caller cannot mistake its ``UNKNOWN`` rows for a
+    real build result.  The live path has no builder and remains blocked.
+    """
+
+    def __call__(self, batch: Sequence[str]) -> Mapping[str, BuildCell]:
+        return {
+            task_id: BuildCell(task_id, "UNKNOWN")
+            for task_id in batch
+        }
+
+
+def _normalise_cell(task_id: str, row: object) -> BuildCell:
+    if isinstance(row, BuildCell):
+        if row.task_id != task_id:
+            raise BuilderContractError(
+                f"builder returned cell for {row.task_id!r} under key {task_id!r}"
+            )
+        return row
+    if isinstance(row, Mapping):
+        return BuildCell(
+            task_id=task_id,
+            classification=str(row.get("classification") or ""),
+            workspace=(str(row["workspace"]) if row.get("workspace") is not None else None),
+            failure=str(row.get("failure") or ""),
+            reason_code=str(row.get("reason_code") or ""),
+            duration_seconds=(
+                float(row["duration_seconds"])
+                if isinstance(row.get("duration_seconds"), (int, float))
+                else None
+            ),
+            log_tail=str(row.get("log_tail") or ""),
+        )
+    raise BuilderContractError(
+        f"builder returned {type(row).__name__} for task {task_id!r}; "
+        "expected BuildCell or mapping"
+    )
+
+
 #: Exactly the classification values the probe contract authorises
 #: (Trust §12.4: OBSERVED_COMPATIBLE / OBSERVED_INCOMPATIBLE / UNKNOWN) plus the
 #: two explicit build-failure spellings the cleanup path already recognised.
@@ -65,10 +143,19 @@ class ProbeLimits:
     per_task_time_seconds: int = 3600
     batch_limit: int = 10
     max_infra_rate: float = 0.10
+    #: Stop after a batch once this many compatible workspaces exist. 0 = no
+    #: target. This is an operational stopping rule, not a scientific estimate.
+    target_compatible: int = 0
+    #: Maximum number of builder invocations (batches). 0 = no cap.
+    max_executions: int = 0
 
     def __post_init__(self) -> None:
         if self.batch_limit > 50:
             raise ValueError(f"batch_limit exceeds hard ceiling of 50: {self.batch_limit}")
+        if self.target_compatible < 0:
+            raise ValueError("target_compatible must be non-negative")
+        if self.max_executions < 0:
+            raise ValueError("max_executions must be non-negative")
 
     def disk_threshold(self, batch_size: int) -> int:
         # Fail-closed resource model: reserves disk floor plus defensible per-task reservation
@@ -160,7 +247,7 @@ def run_probe(
     unknown_task_ids: Sequence[str],
     limits: ProbeLimits,
     authorize: Callable[[], None],
-    builder: Callable[[Sequence[str]], Mapping[str, Mapping[str, object]]],
+    builder: Callable[[Sequence[str]], Mapping[str, object]] | None,
     free_bytes: Callable[[], int],
     allowed_task_ids: AbstractSet[str] | Sequence[str] | None = None,
     cleanup_after_task: Callable[[str, Mapping[str, Any]], None] | None = None,
@@ -191,6 +278,12 @@ def run_probe(
         return stop(exc.reason, exc.detail)
     except Exception as exc:  # noqa: BLE001 - fail closed
         return stop("PROBE_AUTHORIZATION_REFUSED", str(exc))
+
+    if builder is None:
+        return stop(
+            "PROBE_BUILDER_UNAVAILABLE",
+            "no guest builder is configured; live builds remain blocked",
+        )
 
     while pending:
         if result.attempted >= limits.max_tasks:
@@ -244,7 +337,18 @@ def run_probe(
         result.log.append(line)
         log(line)
         try:
-            outcome = dict(builder(batch))
+            raw_outcome = builder(batch)
+            if not isinstance(raw_outcome, Mapping):
+                raise BuilderContractError(
+                    f"builder returned {type(raw_outcome).__name__}, expected a mapping"
+                )
+            outcome = dict(raw_outcome)
+        except BuilderUnavailable as exc:
+            result.batches = batches
+            return stop("PROBE_BUILDER_UNAVAILABLE", str(exc))
+        except BuilderContractError as exc:
+            result.batches = batches
+            return stop("PROBE_BUILDER_CONTRACT", str(exc))
         except ProbeHalt as exc:
             result.batches = batches
             return stop(exc.reason, exc.detail)
@@ -255,10 +359,29 @@ def run_probe(
             pending = pending[len(batch):]
             return stop("PROBE_INFRA_FAILURE_RATE", f"builder failed: {exc}")
 
+        outside = sorted(set(outcome) - set(batch))
+        if outside:
+            result.batches = batches
+            return stop(
+                "PROBE_BUILDER_CONTRACT",
+                f"builder returned task(s) outside the batch: {outside[:3]}",
+            )
+        missing = [task_id for task_id in batch if task_id not in outcome]
+        if missing:
+            result.batches = batches
+            return stop(
+                "PROBE_BUILDER_CONTRACT",
+                f"builder omitted task(s): {missing[:3]}",
+            )
+
         infra = 0
         for task_id in batch:
-            row = outcome.get(task_id) or {}
-            raw_classification = row.get("classification")
+            try:
+                cell = _normalise_cell(task_id, outcome[task_id])
+            except BuilderContractError as exc:
+                result.batches = batches
+                return stop("PROBE_BUILDER_CONTRACT", str(exc))
+            raw_classification = cell.classification
             if not isinstance(raw_classification, str) or not raw_classification.strip():
                 result.batches = batches
                 return stop(
@@ -272,7 +395,7 @@ def run_probe(
                     "CLEANUP_CLASSIFICATION_UNRECOGNIZED",
                     f"task {task_id!r} classification {classification!r}",
                 )
-            if classification == "OBSERVED_COMPATIBLE" and row.get("failure"):
+            if classification == "OBSERVED_COMPATIBLE" and cell.failure:
                 result.batches = batches
                 return stop(
                     "CLEANUP_CLASSIFICATION_UNRECOGNIZED",
@@ -281,18 +404,18 @@ def run_probe(
             result.attempted += 1
             if classification == "OBSERVED_COMPATIBLE":
                 result.compatible += 1
-                workspace = row.get("workspace")
+                workspace = cell.workspace
                 if workspace and pathlib.Path(str(workspace)).is_dir():
                     result.built += 1
             elif classification == "OBSERVED_INCOMPATIBLE":
                 result.incompatible += 1
             else:
                 result.unknown += 1
-            if row.get("failure"):
+            if cell.failure:
                 infra += 1
             if cleanup_after_task is not None:
                 try:
-                    cleanup_after_task(task_id, row)
+                    cleanup_after_task(task_id, cell.as_row())
                 except CleanupClassificationUnrecognized as exc:
                     # An unrecognised classification is a security refusal, not
                     # a warning: no cleanup ran and the probe must not report
@@ -323,6 +446,16 @@ def run_probe(
             return stop(
                 "PROBE_INFRA_FAILURE_RATE",
                 f"infrastructure_invalid={infra}/{len(batch)}",
+            )
+        if limits.target_compatible and result.built >= limits.target_compatible:
+            return stop(
+                "PROBE_TARGET_REACHED",
+                f"built={result.built} target={limits.target_compatible}",
+            )
+        if limits.max_executions and result.batches >= limits.max_executions:
+            return stop(
+                "PROBE_EXECUTION_CAP",
+                f"executions={result.batches}",
             )
     return stop("PROBE_COMPLETE", f"tasks={result.attempted}")
 
@@ -415,21 +548,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Run in live mode (requires prerequisites)",
     )
     ap.add_argument("--output-dir", default=r"C:\Users\rober\F2_SCRATCH\probe_output")
-    ap.add_argument("--compat-report", default="data/f2_s8_plugin_compat_report.json")
+    ap.add_argument(
+        "--compat-report",
+        default=r"data\f2_population\plugin_compat\plugin_compat_report.json",
+    )
     ap.add_argument(
         "--registration-file",
-        default="data/f2_population/registration/full_ordered_metadata.json",
+        default=r"C:\Users\rober\F2_EVIDENCE\s8\registration\registered_tasks.json",
     )
     ap.add_argument(
         "--registration-manifest",
-        default="data/f2_population/registration/registration_manifest.json",
+        default=r"C:\Users\rober\F2_EVIDENCE\s8\registration\registered_tasks.provenance.json",
     )
     ap.add_argument(
         "--ledgers",
         nargs="*",
         default=[
-            "data/f2_s8_Restrictive/s8_pilot_ledger.jsonl",
-            "data/f2_s8_Restrictive/s8_pilot_ledger_corrected.jsonl",
+            r"C:\Users\rober\F2_EVIDENCE\s8\trusted_store\s8_pilot_ledger.jsonl",
+            r"C:\Users\rober\F2_EVIDENCE\s8\trusted_store\s8_pilot_ledger_corrected.jsonl",
         ],
     )
     ap.add_argument(
@@ -488,6 +624,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         disk_floor_bytes=authorized.disk_floor_bytes,
         per_task_disk_bytes=authorized.per_task_disk_bytes,
         batch_limit=authorized.batch_limit,
+        target_compatible=authorized.target_compatible,
     )
     def _revalidate():
         from qwen_train.f2_s8_v2_gate import check_probe_grant_still_valid
@@ -521,7 +658,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         authorize=_revalidate,
         verify_ledgers=_verify_ledgers,
         cleanup_after_task=_cleanup_task,
-        builder=lambda batch: {t: {"classification": "UNKNOWN"} for t in batch},
+        # Explicit simulation builder: its UNKNOWN rows are dry-run output, not
+        # a live build result.  A live builder must be supplied by the future
+        # VM-contained implementation; until then live is refused above.
+        builder=DryRunBuilder(),
         free_bytes=lambda: 10**18,
         allowed_task_ids=set(authorized.selected_task_ids),
     )

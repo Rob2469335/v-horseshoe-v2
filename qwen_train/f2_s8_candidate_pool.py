@@ -41,6 +41,7 @@ import re
 from typing import Any, Iterable, Mapping, Sequence
 
 POOL_SCHEMA = "f2-s8-candidate-pool/v1"
+EXCLUSION_POLICY_SCHEMA = "f2-s8-exclusion-policy/v1"
 
 #: Instance IDs are ASCII repository slugs; anything else cannot be a task.
 _ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -48,6 +49,68 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
 class PoolError(ValueError):
     """The pool or the manifest does not satisfy the membership contract."""
+
+
+def load_exclusion_policy(
+    path: pathlib.Path | str,
+    *,
+    expected_digest: str | None = None,
+) -> tuple[dict[str, Any], set[str], str]:
+    """Load and validate an EXCLUDE-185 policy artifact.
+
+    Returns ``(policy_dict, excluded_task_ids_set, file_sha256)``.
+    Refuses non-canonical bytes, duplicate/unsorted/malformed task IDs, or a
+    digest mismatch.
+    """
+    p = pathlib.Path(path)
+    if not p.is_file():
+        raise PoolError(f"exclusion policy file missing: {p}")
+    raw = p.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        policy = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise PoolError(f"exclusion policy is not valid UTF-8 JSON: {exc}") from exc
+    if not isinstance(policy, Mapping):
+        raise PoolError("exclusion policy is not a JSON object")
+    if policy.get("schema") != EXCLUSION_POLICY_SCHEMA:
+        raise PoolError(
+            f"unsupported exclusion policy schema: {policy.get('schema')!r}"
+        )
+    ids = policy.get("excluded_task_ids")
+    if not isinstance(ids, list) or not ids:
+        raise PoolError("exclusion policy carries no excluded_task_ids list")
+    if ids != sorted(ids):
+        raise PoolError("exclusion policy excluded_task_ids are not sorted")
+    if len(set(ids)) != len(ids):
+        raise PoolError("exclusion policy excluded_task_ids contain duplicates")
+    for tid in ids:
+        if not isinstance(tid, str) or not _ID_RE.match(tid):
+            raise PoolError(f"malformed task id in exclusion policy: {tid!r}")
+    declared_count = policy.get("count")
+    if declared_count is not None and (
+        isinstance(declared_count, bool)
+        or not isinstance(declared_count, int)
+        or declared_count != len(ids)
+    ):
+        raise PoolError(
+            f"exclusion policy count {declared_count!r} does not match {len(ids)}"
+        )
+    canonical_list = json.dumps(
+        ids, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    computed_list_sha = hashlib.sha256(canonical_list).hexdigest()
+    declared_list_sha = policy.get("excluded_task_ids_sha256")
+    if declared_list_sha is not None and declared_list_sha != computed_list_sha:
+        raise PoolError(
+            "exclusion policy excluded_task_ids_sha256 mismatch: "
+            f"declared={declared_list_sha} computed={computed_list_sha}"
+        )
+    if expected_digest is not None and digest != expected_digest:
+        raise PoolError(
+            f"exclusion policy digest mismatch: file={digest} expected={expected_digest}"
+        )
+    return dict(policy), set(ids), digest
 
 
 def _validate_canonical_value(value: Any, path: str = "$") -> None:
@@ -107,6 +170,7 @@ def build_pool(
     registration_sha256: str,
     excluded: Sequence[Mapping[str, str]] = (),
     provenance: Mapping[str, Any] | None = None,
+    forbidden_task_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Build a validated pool object. Refuses duplicates and malformed IDs."""
     if not isinstance(registration_sha256, str) or not re.fullmatch(
@@ -114,15 +178,21 @@ def build_pool(
     ):
         raise PoolError("registration_sha256 must be a 64-hex digest")
 
+    forbidden = {str(t) for t in forbidden_task_ids}
     seen: set[str] = set()
     for tid in task_ids:
         if not isinstance(tid, str) or not _ID_RE.match(tid):
             raise PoolError(f"malformed task id: {tid!r}")
         if tid in seen:
             raise PoolError(f"duplicate task id: {tid!r}")
+        if tid in forbidden:
+            raise PoolError(
+                f"forbidden/excluded task {tid!r} cannot be included in task_ids"
+            )
         seen.add(tid)
 
     exclusions = []
+    excluded_seen: set[str] = set()
     for item in excluded:
         tid = str(item.get("task_id", ""))
         reason = str(item.get("reason", ""))
@@ -138,7 +208,15 @@ def build_pool(
             # it is explicitly declared as absent; otherwise it signals a
             # generation defect and must be surfaced.
             raise PoolError(f"excluded task {tid!r} is not in the pool")
+        excluded_seen.add(tid)
         exclusions.append({"task_id": tid, "reason": reason})
+
+    missing_forbidden = sorted(forbidden - excluded_seen)
+    if missing_forbidden:
+        raise PoolError(
+            f"{len(missing_forbidden)} required forbidden task(s) are missing from "
+            f"pool.excluded: {missing_forbidden[:5]}"
+        )
 
     return {
         "schema": POOL_SCHEMA,

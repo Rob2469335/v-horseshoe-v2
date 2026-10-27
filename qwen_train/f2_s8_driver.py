@@ -53,9 +53,18 @@ class DriverResult:
 
 
 def plugin_classes(report: Mapping[str, object]) -> dict[str, str]:
+    raw_conflicts = report.get("resolved_by_source_priority") or []
+    conflict_ids = (
+        {str(x) for x in raw_conflicts}
+        if isinstance(raw_conflicts, (list, tuple, set))
+        else set()
+    )
     return {
         str(row["task_id"]): str(row["classification"])
         for row in report.get("results", [])  # type: ignore[union-attr]
+        if isinstance(row, Mapping)
+        and row.get("task_id")
+        and str(row["task_id"]) not in conflict_ids
     }
 
 
@@ -65,17 +74,19 @@ def select_batch(
     build_manifest: Mapping[str, Mapping[str, object]],
     *,
     terminal_tasks: Iterable[str] = (),
+    excluded_tasks: Iterable[str] = (),
     limit: int = 50,
 ) -> list[str]:
-    """Select <=limit tasks that are COMPATIBLE, built, and not terminal."""
+    """Select <=limit tasks that are COMPATIBLE, built, not excluded, and not terminal."""
     if limit < 1 or limit > 50:
         raise ValueError("batch limit must be 1..50")
     terminal = set(terminal_tasks)
+    excluded = set(excluded_tasks)
     selected: list[str] = []
     for task_id in pool_task_ids:
         if len(selected) >= limit:
             break
-        if task_id in terminal:
+        if task_id in terminal or task_id in excluded:
             continue
         if classes.get(task_id) != "OBSERVED_COMPATIBLE":
             continue
@@ -120,11 +131,13 @@ def run_driver(
     refresh_terminal: Callable[[], Iterable[str]] | None = None,
     cleanup_after_batch: Callable[[Sequence[str], Mapping[str, object]], None] | None = None,
     terminal: Iterable[str] = (),
+    excluded_tasks: Iterable[str] = (),
     log: Callable[[str], None] = print,
 ) -> DriverResult:
     """Run batches until a named halt. Never retries around a refusal."""
     result = DriverResult(stop_reason="")
     terminal_set = set(terminal)
+    excluded_set = set(excluded_tasks)
     batches = 0
     tasks_started = 0
     credited = 0
@@ -169,6 +182,7 @@ def run_driver(
             classes,
             build_manifest,
             terminal_tasks=terminal_set,
+            excluded_tasks=excluded_set,
             limit=min(50, limits.batch_limit),
         )
         if not batch:
