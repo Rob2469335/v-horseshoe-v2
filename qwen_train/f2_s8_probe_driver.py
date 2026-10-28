@@ -917,6 +917,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from qwen_train.f2_s8_v2_gate import authorize_s8_probe_run
 
+    # 1. Verify (never reserves) to obtain the authorized selection.
     try:
         authorized = authorize_s8_probe_run(
             grant_path=args.grant_file,
@@ -925,13 +926,50 @@ def main(argv: Sequence[str] | None = None) -> int:
             compat_report_file=args.compat_report,
             ledger_paths=args.ledgers,
             budget_ledger_root=args.budget_root,
-            # Dry-run is verification only (never reserves). Live reserves the
-            # grant's task budget atomically before any build.
-            reserve_execution=not args.dry_run,
+            reserve_execution=False,
         )
     except Exception as exc:
         print(f"PROBE_NOT_AUTHORIZED: {exc}", file=sys.stderr)
         return 1
+
+    # 2. Construct the builder BEFORE any reservation, so a construction
+    #    failure cannot consume budget. Dry-run never builds the live builder.
+    if args.dry_run:
+        builder: Callable[[Sequence[str]], Mapping[str, object]] = DryRunBuilder()
+    else:
+        from qwen_train.f2_s8_build_executor import make_probe_live_builder
+
+        try:
+            builder = make_probe_live_builder(
+                authorized,
+                inputs=args.inputs,
+                patches=args.patches,
+                workspace_root=args.workspace_root,
+            )
+        except Exception as exc:
+            print(
+                "PROBE_PREREQUISITES_MISSING: live builder unavailable: "
+                f"{exc}. No grant was consumed.",
+                file=sys.stderr,
+            )
+            return 1
+
+    # 3. Reserve the grant's task budget only after the builder exists.
+    if not args.dry_run:
+        try:
+            authorized = authorize_s8_probe_run(
+                grant_path=args.grant_file,
+                registration_file=args.registration_file,
+                registration_manifest_file=args.registration_manifest,
+                compat_report_file=args.compat_report,
+                ledger_paths=args.ledgers,
+                budget_ledger_root=args.budget_root,
+                reserve_execution=True,
+                execution_id=authorized.execution_id,
+            )
+        except Exception as exc:
+            print(f"PROBE_NOT_AUTHORIZED: {exc}", file=sys.stderr)
+            return 1
 
     limits = ProbeLimits(
         max_tasks=authorized.budget_limits.get("max_total_tasks", 50),
@@ -964,18 +1002,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=args.output_dir,
             manifest_path=pathlib.Path(args.output_dir) / "cleanup_manifest.jsonl",
             allow_delete=not args.dry_run,
-        )
-
-    if args.dry_run:
-        builder: Callable[[Sequence[str]], Mapping[str, object]] = DryRunBuilder()
-    else:
-        from qwen_train.f2_s8_build_executor import make_probe_live_builder
-
-        builder = make_probe_live_builder(
-            authorized,
-            inputs=args.inputs,
-            patches=args.patches,
-            workspace_root=args.workspace_root,
         )
 
     result = run_probe(

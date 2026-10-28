@@ -785,3 +785,181 @@ def test_abort_payload_valid_cell_records_once(tmp_path):
     assert result.compatible == 1
     assert result.built == 1
     assert cleaned == ["t1"]
+
+
+# --- Task 1: builder construction must precede the reservation -------------
+
+
+def test_builder_construction_failure_does_not_reserve(monkeypatch, capsys, tmp_path):
+    """If builder construction fails, verify runs but reserve never does."""
+    import qwen_train.f2_s8_acquisition as acq
+    import qwen_train.f2_s8_build_executor as be
+    import qwen_train.f2_s8_v2_gate as gate
+    from qwen_train.f2_s8_probe_driver import main as probe_main
+
+    monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    calls = {"verify": 0, "reserve": 0}
+
+    class _Stub:
+        execution_id = "probe-test"
+
+    def fake_authorize(**kw):
+        if kw.get("reserve_execution"):
+            calls["reserve"] += 1
+            raise AssertionError("reserve must not run when builder construction fails")
+        calls["verify"] += 1
+        return _Stub()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("builder construct failed")
+
+    monkeypatch.setattr(gate, "authorize_s8_probe_run", fake_authorize)
+    monkeypatch.setattr(be, "make_probe_live_builder", boom)
+    grant = tmp_path / "grant.json"
+    grant.write_text("{}", "utf-8")
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    patches = tmp_path / "patches"
+    patches.mkdir()
+    budget = tmp_path / "budget"
+    rc = probe_main(
+        [
+            "--live",
+            "--grant-file",
+            str(grant),
+            "--inputs",
+            str(inputs),
+            "--patches",
+            str(patches),
+            "--budget-root",
+            str(budget),
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert calls == {"verify": 1, "reserve": 0}
+    assert "PROBE_PREREQUISITES_MISSING" in err
+    assert not budget.exists()  # no reservation store created -> unconsumed
+
+
+# --- Task 2: existing-file workspace (not a directory) ----------------------
+
+
+def test_workspace_existing_file_is_rejected(tmp_path):
+    f = tmp_path / TASK
+    f.write_text("x", "utf-8")  # a regular file, not a directory
+    ex = _executor(
+        tmp_path,
+        build_fn=lambda t, u, **k: {"task_id": t, "workspace": str(f)},
+    )
+    with pytest.raises(BuilderContractError, match="not a directory"):
+        ex.build_one(TASK)
+
+
+# --- Task 3: atomicity across four invalid-second-entry shapes --------------
+
+
+def _atomic_helper(tmp_path, second_cell):
+    ws = tmp_path / "t1"
+    ws.mkdir()
+    payload = {
+        "t1": BuildCell("t1", "OBSERVED_COMPATIBLE", workspace=str(ws)),
+        "t2": second_cell,
+    }
+    return _run_with_abort_payload(
+        payload, task_ids=("t1", "t2"), workspace_root=tmp_path
+    )
+
+
+def _assert_contract_no_effects(result, cleaned):
+    assert result.stop_reason == "PROBE_BUILDER_CONTRACT"
+    assert result.attempted == 0
+    assert result.compatible == 0
+    assert result.built == 0
+    assert cleaned == []
+
+
+def test_atomic_valid_then_bad_workspace(tmp_path):
+    _assert_contract_no_effects(
+        *_atomic_helper(tmp_path, BuildCell("t2", "OBSERVED_COMPATIBLE", workspace=None))
+    )
+
+
+def test_atomic_valid_then_not_a_buildcell(tmp_path):
+    _assert_contract_no_effects(*_atomic_helper(tmp_path, "not-a-cell"))
+
+
+def test_atomic_valid_then_task_not_in_allowed_set(tmp_path):
+    result, cleaned = _run_with_abort_payload(
+        {
+            "t1": BuildCell(
+                "t1", "OBSERVED_COMPATIBLE", workspace=str(_mkdir(tmp_path, "t1"))
+            ),
+            "t3": BuildCell("t3", "UNKNOWN"),  # not in task_ids
+        },
+        task_ids=("t1", "t2"),
+        workspace_root=tmp_path,
+    )
+    _assert_contract_no_effects(result, cleaned)
+
+
+def test_atomic_valid_then_compatible_with_failure(tmp_path):
+    _assert_contract_no_effects(
+        *_atomic_helper(
+            tmp_path,
+            BuildCell("t2", "OBSERVED_COMPATIBLE", failure="boom"),
+        )
+    )
+
+
+def _mkdir(tmp_path, name):
+    d = tmp_path / name
+    d.mkdir(exist_ok=True)
+    return d
+
+
+# --- Task 3 note: cleanup raising midway through pass 2 --------------------
+
+
+def test_abort_payload_cleanup_failure_mid_pass2(tmp_path):
+    """A valid payload is recorded in order; a cleanup exception is terminal.
+
+    Pass 1 passed, so pass 2 records t1 (counters + cleanup) then t2 (counters)
+    before t2's cleanup raises. The function returns CLEANUP_FAILED; earlier
+    recorded counters are **not** rolled back (cleanup is a terminal side
+    effect). This is tested here.
+    """
+    _mkdir(tmp_path, "t1")
+    _mkdir(tmp_path, "t2")
+    payload = {
+        "t1": BuildCell(
+            "t1", "OBSERVED_COMPATIBLE", workspace=str(tmp_path / "t1")
+        ),
+        "t2": BuildCell("t2", "UNKNOWN"),
+    }
+    seen = []
+
+    def cleanup(task_id, row):
+        seen.append(task_id)
+        if task_id == "t2":
+            raise RuntimeError("cleanup blew up")
+
+    def builder(_batch):
+        raise ProbeAuthorizationAbort(payload, "authorization failed")
+
+    result = run_probe(
+        unknown_task_ids=["t1", "t2"],
+        limits=ProbeLimits(
+            max_tasks=2, disk_floor_bytes=1, per_task_disk_bytes=1, batch_limit=2
+        ),
+        authorize=lambda: None,
+        builder=builder,
+        free_bytes=lambda: 10**18,
+        verify_ledgers=lambda: None,
+        cleanup_after_task=cleanup,
+        log=lambda _: None,
+        workspace_root=tmp_path,
+    )
+    assert result.stop_reason == "CLEANUP_FAILED"
+    assert result.attempted == 2
+    assert seen == ["t1", "t2"]
