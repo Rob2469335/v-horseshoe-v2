@@ -842,6 +842,169 @@ def test_builder_construction_failure_does_not_reserve(monkeypatch, capsys, tmp_
     assert not budget.exists()  # no reservation store created -> unconsumed
 
 
+def test_real_authorizer_builder_failure_never_reserves(monkeypatch, capsys, tmp_path):
+    """Real authorizer verification: if builder construction raises, no budget
+    reservation file or ledger row is ever created."""
+    import getpass
+    import qwen_train.f2_s8_acquisition as acq
+    import qwen_train.f2_s8_build_executor as be
+    from qwen_train.f2_s8_probe_driver import main as probe_main
+    from tests.test_f2_s8_probe_authz import _setup_probe_env
+
+    monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+
+    env = _setup_probe_env(
+        tmp_path / "env",
+        monkeypatch,
+        task_ids=("acme__widget-1",),
+        allowed_identities=("f2_s8_builder", getpass.getuser()),
+    )
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    patches = tmp_path / "patches"
+    patches.mkdir()
+    budget_root = tmp_path / "budget_root"
+    ledger_file = tmp_path / "ledger.jsonl"
+    ledger_file.write_text("", encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("simulated builder construction failure")
+
+    monkeypatch.setattr(be, "make_probe_live_builder", boom)
+
+    rc = probe_main(
+        [
+            "--live",
+            "--grant-file", str(env["grant_file"]),
+            "--inputs", str(inputs),
+            "--patches", str(patches),
+            "--budget-root", str(budget_root),
+            "--registration-file", str(env["reg_file"]),
+            "--registration-manifest", str(env["manifest_file"]),
+            "--compat-report", str(env["compat_file"]),
+            "--ledgers", str(ledger_file),
+        ]
+    )
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "PROBE_PREREQUISITES_MISSING" in err
+    assert "simulated builder construction failure" in err
+    # Confirm no reservation files (.lock in exec/ or json in tasks/) exist in the budget root
+    if budget_root.exists():
+        assert list(budget_root.glob("*/exec/*.lock")) == []
+        assert list(budget_root.glob("*/tasks/*.json")) == []
+        assert list(budget_root.glob("*/*.json")) == []
+    # Confirm ledger was not modified
+    assert ledger_file.read_text(encoding="utf-8").strip() == ""
+
+
+def test_real_authorizer_normal_live_run_reserves_after_builder(monkeypatch, tmp_path):
+    """On a normal live run, reservation happens exactly once, AFTER builder construction,
+    with the exact same execution_id obtained during verify."""
+    from typing import Any
+    import getpass
+    import json
+    import qwen_train.f2_s8_acquisition as acq
+    import qwen_train.f2_s8_build_executor as be
+    import qwen_train.f2_s8_probe_driver as driver
+    import qwen_train.f2_s8_v2_gate as gate
+    from qwen_train.f2_s8_probe_driver import ProbeResult, main as probe_main
+    from tests.test_f2_s8_probe_authz import _setup_probe_env
+
+    monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+
+    env = _setup_probe_env(
+        tmp_path / "env",
+        monkeypatch,
+        task_ids=("acme__widget-1",),
+        allowed_identities=("f2_s8_builder", getpass.getuser()),
+    )
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    patches = tmp_path / "patches"
+    patches.mkdir()
+    budget_root = tmp_path / "budget_root"
+    ledger_file = tmp_path / "ledger.jsonl"
+    ledger_file.write_text("", encoding="utf-8")
+
+    events: list[tuple[str, Any]] = []
+    real_authorize = gate.authorize_s8_probe_run
+
+    def spy_authorize(**kwargs):
+        res = real_authorize(**kwargs)
+        events.append((
+            "authorize",
+            {
+                "reserve_execution": kwargs.get("reserve_execution"),
+                "execution_id": res.execution_id,
+            },
+        ))
+        return res
+
+    monkeypatch.setattr(gate, "authorize_s8_probe_run", spy_authorize)
+
+    class DummyLiveBuilder:
+        def __call__(self, batch):
+            return {}
+
+    def spy_make_builder(*args, **kwargs):
+        events.append(("make_builder", None))
+        return DummyLiveBuilder()
+
+    monkeypatch.setattr(be, "make_probe_live_builder", spy_make_builder)
+
+    def stub_run_probe(*args, **kwargs):
+        events.append(("run_probe", None))
+        return ProbeResult(
+            stop_reason="PROBE_COMPLETE",
+            attempted=1,
+            compatible=1,
+            incompatible=0,
+            unknown=0,
+        )
+
+    monkeypatch.setattr(driver, "run_probe", stub_run_probe)
+
+    rc = probe_main(
+        [
+            "--live",
+            "--grant-file", str(env["grant_file"]),
+            "--inputs", str(inputs),
+            "--patches", str(patches),
+            "--budget-root", str(budget_root),
+            "--registration-file", str(env["reg_file"]),
+            "--registration-manifest", str(env["manifest_file"]),
+            "--compat-report", str(env["compat_file"]),
+            "--ledgers", str(ledger_file),
+            "--workspace-root", str(tmp_path / "ws"),
+        ]
+    )
+    assert rc == 0
+
+    # 1. Authorize was called first with reserve_execution=False
+    assert events[0][0] == "authorize"
+    assert events[0][1]["reserve_execution"] is False
+    verify_exec_id = events[0][1]["execution_id"]
+    assert verify_exec_id
+
+    # 2. Builder was constructed AFTER verify and BEFORE reservation
+    assert events[1][0] == "make_builder"
+
+    # 3. Reservation happened AFTER builder construction, exactly once, with the same execution_id
+    assert events[2][0] == "authorize"
+    assert events[2][1]["reserve_execution"] is True
+    reserve_exec_id = events[2][1]["execution_id"]
+    assert reserve_exec_id == verify_exec_id
+
+    assert events[3][0] == "run_probe"
+
+    # 4. Check the budget root: exactly one reservation lock file exists in exec/ and matches execution_id
+    exec_locks = list(budget_root.glob("*/exec/*.lock"))
+    assert len(exec_locks) == 1
+    lock_data = json.loads(exec_locks[0].read_text("utf-8"))
+    assert lock_data["execution_id"] == verify_exec_id
+
+
 # --- Task 2: existing-file workspace (not a directory) ----------------------
 
 
