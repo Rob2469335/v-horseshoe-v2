@@ -1460,3 +1460,33 @@ def test_module_entry_point_publishes_the_canonical_module_name():
     assert marker in src
     assert src.index(marker) < src.index("raise SystemExit(main())")
 
+
+def test_build_passes_its_root_to_workspace_preservation(tmp_path, monkeypatch):
+    """A build under a custom root must not be refused by the preservation guard,
+    which defaults its containment root to the fixed pilot root."""
+    inputs = tmp_path / "inputs"
+    _input_record(inputs, "acme__widget-1", {"base_commit": "deadbeef"})
+    seen: dict[str, object] = {}
+
+    def fake_preserve(ws, **kw):
+        seen["ws"] = ws
+        seen["root"] = kw.get("root")
+        return None
+
+    def bomb(*_a, **_k):
+        raise RuntimeError("stop-after-preservation")
+
+    monkeypatch.setattr(pb, "_stub_build_permitted", lambda: True)
+    monkeypatch.setattr(pb, "require_ratified_pytest_admissibility",
+                        lambda *a, **k: None)
+    monkeypatch.setattr(pb, "preserve_previous_workspace", fake_preserve)
+    monkeypatch.setattr(pb, "run", bomb)
+    root = tmp_path / "wsroot"
+    with pytest.raises(RuntimeError, match="stop-after-preservation"):
+        pb.build("acme__widget-1", "https://example.com/x.git",
+                 inputs=inputs, patches=tmp_path, declared_python_minor="3.10",
+                 root=root)
+    assert seen["ws"] == root / "acme__widget-1"
+    assert pathlib.Path(seen["root"]) == root
+
+

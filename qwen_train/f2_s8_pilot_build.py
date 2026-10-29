@@ -1155,7 +1155,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
 
     # Preserve, do not delete: a retry must not overwrite the evidence that
     # explains the previous attempt (R1-D).
-    preserved = preserve_previous_workspace(ws)
+    preserved = preserve_previous_workspace(ws, root=root)
     ws.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
