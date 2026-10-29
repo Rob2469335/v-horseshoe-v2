@@ -1,9 +1,18 @@
 """Tests for the F2-S8-VM1 ACL script (qwen_train/f2_s8_acl.ps1).
 
-These tests are non-executing: they parse the script and assert that the rule
-table it contains is exactly the operator-approved table, that the protocol
-requirement discovered by bounded probe is satisfied, and that applying the
-rules is impossible without -Apply.
+Most of these tests are non-executing: they parse the script and assert that
+the rule table it contains is exactly the operator-approved table, that the
+protocol requirement discovered by bounded probe is satisfied, and that
+applying the rules is impossible without -Apply.
+
+`TestComparatorHarness` covers the part that text assertions cannot: the
+comparator's real behaviour. Two of its defects -- a correct rule set reported
+as MISMATCH, and an unexpected extra rule passing verification -- were only
+visible in execution. The behavioural check lives in
+`qwen_train/f2_s8_acl_harness.ps1` so it can be run by hand under any pwsh; it
+is not driven from pytest because the suite's autouse subprocess guard
+guarantees no process ever starts there, and that guarantee is not weakened to
+obtain a green.
 """
 from __future__ import annotations
 
@@ -166,14 +175,26 @@ class TestNonMutatingByDefault:
 class TestMismatchHandling:
     """Regression coverage for the empty-mismatch defect.
 
-    `Compare-AclTable` returned an empty array; PowerShell unrolled it to $null,
-    and `$null.Count` threw under `Set-StrictMode -Version Latest`, so a
-    SUCCESSFUL apply exited 1. These static assertions fail against the previous
-    revision and pin both the zero-mismatch and the mismatch paths.
+    `Compare-AclTable` returned an empty array; PowerShell unrolled it to $null
+    and `$null.Count` throws under `Set-StrictMode -Version Latest`, so a bare
+    `$m = Compare-AclTable ...` made a SUCCESSFUL apply exit non-zero. The
+    call site was fixed with `@(...)` -- which does normalise an empty result
+    to Count 0 -- but the function was ALSO changed to `return ,$mismatches`,
+    wrapping the result in a one-element array.
+
+    That wrapper was the wrong half of the fix, and it was measured, not
+    reasoned: with it, an exact-match read-back counts `mismatches: 1` (the
+    wrapper array), the script prints `RESULT: MISMATCH` and exits 3 on a
+    perfectly correct rule set. PowerShell 7.6.6, `Set-StrictMode -Version
+    Latest`: `@(f)` over a function emitting nothing is Count 0 and never
+    touches `$null.Count`. These static assertions fail against BOTH defective
+    revisions and pin the corrected shape.
     """
 
-    def test_mismatch_result_is_not_unrolled(self):
-        assert "return ,$mismatches" in _text()
+    def test_mismatch_result_is_not_wrapped_in_a_one_element_array(self):
+        text = _text()
+        assert "return ,$mismatches" not in text
+        assert "return $mismatches" in text
 
     def test_call_site_normalises_to_an_array(self):
         text = _text()
@@ -208,16 +229,80 @@ class TestMismatchHandling:
         assert "stateful mismatch" in text
         assert "protocol mismatch" in text
 
+    def test_the_rule_count_is_compared(self):
+        """An EXTRA rule must fail the verification, not pass it.
+
+        Without a count comparison every intended rule could match while an
+        unexpected high-weight Allow sat on the same vNIC -- a fail-open hole
+        in exactly the control the S8 boundary rests on.
+        """
+        assert "rule count differs" in _text()
+
 
 class TestPowerShellSyntax:
-    """PowerShell syntax/dry-run were verified by hand this session under
-    PowerShell 7.6.6 (ParseFile returned zero errors; the dry run printed the
-    11-rule plan and exited 0 with no ACL applied). Re-run those by hand when the
-    script changes; they are not automated here because driving pwsh from the
-    pytest harness proved environment-brittle and a flaky green would be worse.
+    """The script's own syntax and dry-run properties.
+
+    Full-script automation (dry run + Hyper-V cmdlets) is still a hand check:
+    it needs a host with the Hyper-V module and a non-mutating target. The
+    comparator function, which needs neither, IS automated in
+    `TestComparatorBehaviour` below -- driving pwsh around the pure function
+    proved reliable, where driving the whole script did not.
     """
 
     def test_manual_verification_is_recorded_here(self):
         text = _text()
         assert "[CmdletBinding()]" in text
         assert "Set-StrictMode -Version Latest" in text
+
+
+HARNESS = Path(__file__).resolve().parents[1] / "qwen_train" / "f2_s8_acl_harness.ps1"
+
+
+class TestComparatorHarness:
+    """The behavioural check exists as a RUNNABLE ARTIFACT, not as a pytest run.
+
+    `qwen_train/f2_s8_acl_harness.ps1` drives the script's own
+    `Compare-AclTable` (extracted by AST, never the mutating path) against
+    fabricated read-back objects. It is deliberately not executed from pytest:
+    `tests/conftest.py`'s autouse `global_subprocess_mock` guarantees that no
+    subprocess ever starts inside the suite, and bypassing that guarantee
+    REQUIRES AUTHORIZATION. The suite therefore pins the harness's existence
+    and coverage here; the behaviour itself is verified by running the file.
+
+    Measured 2026-10-14 under PowerShell 7.6.6, against the real script:
+    PASS. Against a copy with the array wrapper re-introduced -> FAILS
+    "exact match reports zero mismatches". Against a copy with the rule-count
+    check removed -> FAILS "an EXTRA rule is reported".
+    """
+
+    def test_the_harness_exists_and_targets_the_comparator(self):
+        assert HARNESS.is_file() and HARNESS.stat().st_size > 0
+        text = HARNESS.read_text(encoding="utf-8")
+        assert "Compare-AclTable" in text
+        assert "'$Rules'" in text
+
+    def test_the_harness_covers_every_comparator_property(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        for name in (
+            "exact match reports zero mismatches",
+            "a fully missing rule set is reported per rule plus a count "
+            "difference",
+            "an EXTRA rule is reported",
+            "a stateful flip is reported",
+            "a protocol change is reported",
+            "a weight change is reported",
+        ):
+            assert name in text, name
+
+    def test_the_harness_is_read_only(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        for forbidden in (
+            "Add-VMNetworkAdapterExtendedAcl", "Remove-VMNetworkAdapterExtendedAcl",
+            "Start-VM", "Stop-VM", "Set-VM ", "New-VM ", "New-VMSwitch", "New-NetNat",
+        ):
+            assert forbidden not in text, forbidden
+
+    def test_the_harness_records_why_it_is_not_run_from_pytest(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        assert "global_subprocess_mock" in text
+        assert "REQUIRES AUTHORIZATION" in text

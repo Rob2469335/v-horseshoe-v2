@@ -530,9 +530,21 @@ def _check_no_egress(supplied: Mapping[str, Any]):
             return False, f"isolation attestation cannot be verified: {exc}", (
                 "Restore qwen_train/f2_isolation.py"
             )
+        # The HOST-supplied enforcement capture, exactly as
+        # verify_isolation_attestation documents it: a silently-dropping
+        # control (a Hyper-V extended ACL drops in the vSwitch) produces a
+        # timeout the observer cannot distinguish from a blackhole, so without
+        # the capture this gate could never accept the S8 architecture's own
+        # enforcement. Passing it through changes nothing about the contract --
+    # the capture must still hash to the digest the attestation claims, its
+        # effective rule must still derive an explicit Deny, and the negative
+        # control must still be observed permitted.
+        capture = supplied.get("no_egress_enforcement_capture")
         try:
             verdict = verify_isolation_attestation(
-                att, required_services=tuple(supplied.get("required_local_services") or ())
+                att,
+                required_services=tuple(supplied.get("required_local_services") or ()),
+                enforcement_capture=capture,
             )
         except Exception as exc:  # noqa: BLE001 - fail closed
             return False, f"isolation attestation is malformed: {exc}", (

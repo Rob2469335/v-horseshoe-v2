@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +67,28 @@ INFRASTRUCTURE_OUTCOMES = ("timeout", "build_failure", "infrastructure_failure")
 ALL_OUTCOMES = SCIENTIFIC_OUTCOMES + INFRASTRUCTURE_OUTCOMES
 
 _SAFE_ARTIFACT_BAD = set('<>:"|?*;&') | {"/", "\\"}
+
+#: The evidence artifacts an admitted pair must bind.  ``test_output`` is the
+#: authoritative evaluator report per side, ``run_log`` the actual execution log
+#: per side, the evaluator implementation is the exact code that graded it, and
+#: the per-side PERSISTED EvidenceRecord is the durable record of the pair.
+REQUIRED_EVIDENCE_ROLES = (
+    "base_report", "gold_report", "base_run_log", "gold_run_log",
+    "evaluator_implementation", "base_evidence_record", "gold_evidence_record",
+)
+
+_ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def _is_sha256(value: Any) -> bool:
+    s = str(value or "")
+    return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
+
+
+def _is_commit_revision(value: Any) -> bool:
+    """A git commit id: 40 lowercase hex characters (SHA-1 object name)."""
+    s = str(value or "")
+    return len(s) == 40 and all(c in "0123456789abcdef" for c in s)
 
 
 class FactoryError(Exception):
@@ -131,6 +154,16 @@ class ExecutionResult:
     evaluator: Mapping[str, str] = field(default_factory=dict)
     reason: str = ""
     ts: str = ""
+    # --- prospective evidence-binding identities (Decision 3).  Required for an
+    # --- admitted outcome; ``run_once`` refuses an admission that omits them.
+    evidence_record_digest: str = ""
+    environment_identity: str = ""
+    execution_state_digest: str = ""
+    base_state_digest: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    repository_revision: str = ""
+    artifacts: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
     @property
     def outcome_class(self) -> str:
@@ -241,6 +274,7 @@ class RunPlan:
     policy: RetryPolicy
     runnable: tuple[str, ...]
     skipped_admitted: tuple[str, ...]
+    skipped_terminal: tuple[str, ...]
     skipped_exhausted: tuple[str, ...]
     skipped_running: tuple[str, ...]
     counts: Mapping[str, int]
@@ -252,6 +286,7 @@ class RunPlan:
             "policy": self.policy.as_dict(),
             "runnable": list(self.runnable),
             "skipped_admitted": list(self.skipped_admitted),
+            "skipped_terminal": list(self.skipped_terminal),
             "skipped_exhausted": list(self.skipped_exhausted),
             "skipped_running": list(self.skipped_running),
             "counts": dict(self.counts),
@@ -274,9 +309,13 @@ def plan_run(
 ) -> RunPlan:
     """Select the next tasks deterministically, honoring the retry cap.
 
-    Tasks are considered in registered order.  A task is skipped when it is
-    admitted, when its retry cap is exhausted, or when it is already in flight
-    (concurrency guard).  A registration-digest mismatch raises before anything
+    Tasks are considered in registered order.  A task is skipped when it holds
+    any terminal scientific record (reported as *admitted* for
+    ``base_fail_gold_pass`` and as *terminal* for every other scientific
+    outcome), when its retry cap is exhausted, or when it is already in flight
+    (concurrency guard).  Because a terminal scientific record is never re-run,
+    the plan can never hand the ledger a task whose append the append-only
+    guard would refuse.  A registration-digest mismatch raises before anything
     is selected, so a different population can never be run by accident.
     """
     if registration_sha256 != expected_registration_sha256:
@@ -289,11 +328,15 @@ def plan_run(
 
     runnable: list[str] = []
     admitted: list[str] = []
+    terminal: list[str] = []
     exhausted: list[str] = []
     skipped_running: list[str] = []
     for task_id in ordered_task_ids:
         if ledger.admitted(task_id) is not None:
             admitted.append(task_id)
+            continue
+        if ledger.terminal_scientific(task_id) is not None:
+            terminal.append(task_id)
             continue
         if str(task_id) in running:
             skipped_running.append(task_id)
@@ -310,6 +353,7 @@ def plan_run(
         policy=policy,
         runnable=tuple(runnable),
         skipped_admitted=tuple(admitted),
+        skipped_terminal=tuple(terminal),
         skipped_exhausted=tuple(exhausted),
         skipped_running=tuple(skipped_running),
         counts={
@@ -338,12 +382,20 @@ def run_once(
 ) -> dict[str, Any]:
     """Run exactly one attempt through the injected ``runner`` and record it.
 
-    The module performs no execution itself.  Evidence identity is validated
+    The module performs no execution itself.  A task that already holds a
+    terminal scientific record is refused *before* the runner is invoked, so a
+    caller can never spend an execution the append-only guard would reject.
+    Evidence identity is validated
     before the record is written; a task whose evidence is missing is recorded
     as ``test_not_run`` rather than admitted, and an infrastructure outcome is
     recorded as infrastructure, never as a task rejection.
     """
     policy = policy or RetryPolicy()
+    if ledger.terminal_scientific(task_id) is not None:
+        raise LedgerError(
+            f"task {task_id!r} already has a terminal scientific record; "
+            "append-only history may not be rewritten"
+        )
     attempt = _attempts_used(ledger, task_id) + 1
     if attempt > policy.max_attempts:
         raise FactoryError(f"task {task_id!r} exceeded max_attempts={policy.max_attempts}")
@@ -371,6 +423,60 @@ def run_once(
         for key in ("evaluator_id", "version", "implementation_digest", "procedure_id"):
             if not str(result.evaluator.get(key) or ""):
                 raise FactoryError(f"admitted outcome is missing evaluator.{key}")
+        # PROSPECTIVE EVIDENCE CONTRACT (Decision 3): an admission must bind the
+        # durable evidence-record digest AND the environment/execution-state/run
+        # identities into the ledger record.  A pair that cannot carry them is
+        # NOT admitted -- fail closed rather than record a half-bound admission.
+        if not _is_sha256(result.evidence_record_digest):
+            raise FactoryError(
+                "an admitted outcome requires the digest of the persisted evidence "
+                "record (64-hex); a pair without a durable record is not admitted")
+        if not str(result.environment_identity or "").strip():
+            raise FactoryError(
+                "an admitted outcome requires the execution environment identity")
+        if not _is_sha256(result.execution_state_digest):
+            raise FactoryError(
+                "an admitted outcome requires the gold execution-state digest (64-hex)")
+        if not _is_sha256(result.base_state_digest):
+            raise FactoryError(
+                "an admitted outcome requires the base execution-state digest (64-hex)")
+        if result.base_state_digest == result.execution_state_digest:
+            raise FactoryError(
+                "base and gold execution-state digests are identical; they cannot "
+                "describe two distinct states")
+        if not _is_commit_revision(result.repository_revision):
+            raise FactoryError(
+                "an admitted outcome requires a 40-character lowercase hex commit "
+                f"SHA for repository_revision ({result.repository_revision!r} is not)")
+        for label, value in (("started_at", result.started_at),
+                             ("finished_at", result.finished_at)):
+            if not _ISO_UTC.match(str(value or "")):
+                raise FactoryError(
+                    f"an admitted outcome requires a real ISO-8601 UTC {label} "
+                    f"({value!r} is not)")
+        missing_roles = [r for r in REQUIRED_EVIDENCE_ROLES
+                         if r not in (result.artifacts or {})]
+        if missing_roles:
+            raise FactoryError(
+                f"an admitted outcome is missing required evidence artifacts: "
+                f"{missing_roles}")
+        for role, ref in (result.artifacts or {}).items():
+            if not _is_sha256(str((ref or {}).get("sha256") or "")):
+                raise FactoryError(
+                    f"evidence artifact {role!r} has no 64-hex SHA-256")
+            size = (ref or {}).get("size_bytes")
+            if not isinstance(size, int) or size < 0:
+                raise FactoryError(
+                    f"evidence artifact {role!r} has no non-negative size_bytes")
+        # The bound gold report must BE the declared evidence: a bundle whose
+        # artifact ref disagrees with the row's evidence identity is refused.
+        gold_ref = (result.artifacts or {}).get("gold_report") or {}
+        if (str(gold_ref.get("name") or "") != result.evidence_name
+                or str(gold_ref.get("sha256") or "") != result.evidence_sha256
+                or int(gold_ref.get("size_bytes") or -1) != int(result.evidence_size)):
+            raise FactoryError(
+                "the bound gold_report artifact does not match the declared "
+                "evidence identity (name/digest/size must agree)")
 
     record = {
         "schema_version": SCHEMA_VERSION,
@@ -396,6 +502,20 @@ def run_once(
         "evaluator": dict(result.evaluator or evaluator),
         "reason": result.reason,
     }
+    if admitted:
+        # The bound evidence bundle: every identity the canonical verifiers and the
+        # counting rule need, attached to THIS hash-chained record.
+        record["evidence_record_digest"] = result.evidence_record_digest
+        record["evidence_bundle"] = {
+            "environment_identity": result.environment_identity,
+            "execution_state_digest": result.execution_state_digest,
+            "gold_state_digest": result.execution_state_digest,
+            "base_state_digest": result.base_state_digest,
+            "started_at": result.started_at,
+            "finished_at": result.finished_at,
+            "repository_revision": result.repository_revision,
+            "artifacts": {k: dict(v) for k, v in (result.artifacts or {}).items()},
+        }
     return ledger.append(record)
 
 

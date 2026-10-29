@@ -94,6 +94,16 @@ repository standard (AGENTS.md §3.8).
 
 **This section is a proposal. It governs nothing until authorized (§6, Q1–Q4).**
 
+> **D1 CLARIFICATION (2026-10-11).** This section is **PROPOSED and NONBINDING**
+> as *scientific* design. Separately, the repository implements and tests a
+> **code-enforced minimum sample-size floor** `n = max(300, required_pairs(...))`
+> (see §2.4). That floor is an *implementation invariant*, **not** an approved
+> confirmatory design; the phrase "the frozen rule" in §2.4 refers only to that
+> code-enforced floor and must not be read as scientific authorization of this
+> SAP. Scientific authorization of the SAP (test, α, power, δ, π_d, n) remains
+> **REQUIRES AUTHORIZATION** (owner; §6). See
+> `docs/EXPERIMENT_J_F2_AUTHORIZATION_PROPOSAL.md` (POP-001 / EXPL-001 / CONF-001, **PENDING**).
+
 ### 2.1 Estimand (unchanged from F0)
 
 > The **paired risk difference** in the probability of a qualifying
@@ -169,8 +179,9 @@ One-sided comparison at δ = 0.20: `π_d = 0.30 → 42`, `π_d = 0.50 → 74`.
 > `exact_power` and are pinned by
 > `tests/test_f2_statistics.py::TestRequiredPairsInterpretation`.
 >
-> **Consequence for `n`: none.** The frozen rule is
-> `n = max(300, required_pairs(...))`, and `required_pairs` returns **below 300
+> **Consequence for `n`: none.** The code-enforced floor is
+> `n = max(300, required_pairs(...))` (a repository invariant pinned by tests —
+> **not** a scientific authorization; see the D1 clarification at §2), and `required_pairs` returns **below 300
 > at every point of the authorized π_d range** (28 / 66 / **116** / 191 / 261 for
 > π_d = 0.20 / 0.30 / 0.50 / 0.75 / 1.00), so `n = 300` regardless of π_d. The
 > invariant `max(300, required) == 300` is pinned by
@@ -1068,3 +1079,19 @@ population/`n`/`δ`/test, or modify F0 or any frozen document. It records what t
 code enforces and what the operator still has to decide.
 
 *Engineering frozen at `cea3c1d1`. Scientific authorization NOT GRANTED.* (Updated 2026-10-05; this line previously read `1dd07120`.)
+---
+
+## Appendix — π_d planning-vs-empirical clarification (2026-10-11)
+
+**Smallest supported clarification; no scientific assumption changed.**
+`F2-IMPL-AUTH-013` records `π_d = 0.50` **as a planning assumption** for its
+`n = max(300, required_pairs(...))` sizing rationale. It is **not** an empirical
+observation and does **not** establish confirmatory statistical sufficiency.
+Evidence (live code): `qwen_train/f2_statistics.py:393,398,408` require
+`discordance` as a caller-supplied **empirical** input ("both must be supplied,
+because both are empirical"); the `0.5` literals in `f2_statistics.py:169,174,222,224`
+and `f2_analysis.py:670` are the **McNemar null**, not π_d. Empirical `π_d`
+therefore remains **NOT ESTABLISHED** (`F2-IMPL-AUTH-024`) until measured under
+authority. **Formalising this distinction inside AUTH-013's own clause is an
+OWNER DECISION (GOVERNANCE GAP; Appendix H.1)** — this note records the current
+code behaviour and does not amend the scientific clause.
