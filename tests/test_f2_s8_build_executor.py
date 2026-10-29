@@ -14,6 +14,7 @@ import pytest
 
 from qwen_train import f2_s8_build_executor as be
 from qwen_train import f2_s8_pilot_build as pb
+from qwen_train import f2_s8_probe_driver as pd
 from qwen_train.f2_authorization import AuthorizationError
 from qwen_train.f2_s8_acquisition import (
     PREFERRED_PYTHON_MINORS,
@@ -1446,3 +1447,16 @@ def test_executor_forwards_its_workspace_root_to_the_builder(tmp_path):
     ex = _default_executor(tmp_path, build_fn=build_fn, inputs=inputs)
     ex.build_one(TASK)
     assert seen["root"] == str(tmp_path)
+
+
+def test_module_entry_point_publishes_the_canonical_module_name():
+    """``python -m`` runs the driver as ``__main__``; the build adapter imports
+    the canonical module, which used to load a SECOND copy with a different
+    ``BuildCell`` class, so the live builder failed its own isinstance contract.
+    The entry point must publish the canonical name before main() runs."""
+    src = inspect.getsource(pd)
+    marker = ('sys.modules.setdefault("qwen_train.f2_s8_probe_driver", '
+              'sys.modules[__name__])')
+    assert marker in src
+    assert src.index(marker) < src.index("raise SystemExit(main())")
+

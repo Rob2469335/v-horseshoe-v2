@@ -1023,4 +1023,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI only
+    # ``python -m qwen_train.f2_s8_probe_driver`` executes this file as
+    # ``__main__``.  The build adapter later does ``from
+    # qwen_train.f2_s8_probe_driver import BuildCell, ...``, which without this
+    # alias loads a SECOND copy of the module and a different ``BuildCell``
+    # class -- the live builder then fails its own isinstance contract
+    # (observed: "builder returned BuildCell ... expected BuildCell or
+    # mapping").  Publish the canonical name before main() can import it.
+    sys.modules.setdefault("qwen_train.f2_s8_probe_driver", sys.modules[__name__])
     raise SystemExit(main())
