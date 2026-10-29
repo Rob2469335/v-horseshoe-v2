@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
 import os
 import pathlib
 import subprocess
@@ -9,7 +12,13 @@ import types
 
 import pytest
 
+from qwen_train import f2_s8_build_executor as be
+from qwen_train import f2_s8_pilot_build as pb
 from qwen_train.f2_authorization import AuthorizationError
+from qwen_train.f2_s8_acquisition import (
+    PREFERRED_PYTHON_MINORS,
+    discover_interpreters,
+)
 from qwen_train.f2_s8_build_executor import (
     DEFAULT_DETERMINISTIC_INCOMPATIBILITY_CODES,
     HostBuildExecutor,
@@ -1126,3 +1135,273 @@ def test_abort_payload_cleanup_failure_mid_pass2(tmp_path):
     assert result.stop_reason == "CLEANUP_FAILED"
     assert result.attempted == 2
     assert seen == ["t1", "t2"]
+
+
+# ===========================================================================
+# Regression: the live probe must resolve the DECLARED Python minor from the
+# RATIFIED sidecar.  The production default used to be pb._declare_from_input,
+# which reads only the materialised input record -- and f2_s8_materialise's
+# field whitelist never writes a declaration, so every real task raised
+# DeclaredInterpreterError and counted as infrastructure.
+# ===========================================================================
+
+#: The 18 real first-batch input records.  Overridable for CI/machines without
+#: the local materialisation; tests skip with an explicit reason when absent.
+_MATERIALISED = pathlib.Path(os.environ.get(
+    "F2_S8_MATERIALISED_INPUTS",
+    r"C:\Users\rober\F2_SCRATCH\v2_stageA_probe_2026-10-26\materialised_first18\inputs",
+))
+
+_SIDECAR_SCHEMA = "f2-s8-declared-environments/v2"
+_PROVENANCE_SCHEMA = "f2-s8-declared-environments-provenance/v2"
+
+#: Real Popen captured at import time, before tests/conftest's autouse
+#: ``global_subprocess_mock`` replaces subprocess.Popen for each test.
+_REAL_POPEN = subprocess.Popen
+
+
+def _sha256_file(path) -> str:
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+
+def _ratified(minor: str = "3.10") -> dict:
+    return {
+        "status": "ratified",
+        "ratified_by": "Rob",
+        "ratified_at": "2026-10-28",
+        "declared_python_minor": minor,
+        "requires_python_compatibility": "OK",
+    }
+
+
+def _sidecar_bundle(root, declarations: dict):
+    """Write a valid sidecar+provenance bundle that satisfies every loader rule."""
+    root = pathlib.Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+
+    def dump(name: str, obj) -> pathlib.Path:
+        p = root / name
+        p.write_text(json.dumps(obj, indent=1, sort_keys=True) + "\n",
+                     encoding="utf-8", newline="\n")
+        return p
+
+    old = dump("old_sidecar.json", {"schema": _SIDECAR_SCHEMA, "declarations": {}})
+    policy = dump("policy_evidence.json",
+                  {"schema": "f2-s8-declared-environment-evidence/v2", "tasks": []})
+    side = dump("sidecar.json", {"schema": _SIDECAR_SCHEMA, "ratified_by": "Rob",
+                                 "declarations": declarations})
+    prov = dump("provenance.json", {
+        "schema": _PROVENANCE_SCHEMA,
+        "ratified_by": "Rob",
+        "ratified_at": "2026-10-28",
+        "sidecar": {"path": str(side), "sha256": _sha256_file(side),
+                    "schema": _SIDECAR_SCHEMA},
+        "source_old_sidecar": {"path": str(old), "sha256": _sha256_file(old),
+                               "schema": _SIDECAR_SCHEMA},
+        "policy_evidence": {"path": str(policy), "sha256": _sha256_file(policy),
+                            "schema": "f2-s8-declared-environment-evidence/v2"},
+    })
+    return side, prov
+
+
+def _point_loader_at(monkeypatch, side, prov) -> None:
+    # The loader resolves these module globals at call time (they are computed
+    # from the environment at import time, so setenv alone would not work).
+    monkeypatch.setattr(pb, "DECLARED_ENVIRONMENTS_SIDECAR", pathlib.Path(side))
+    monkeypatch.setattr(pb, "DECLARED_ENVIRONMENTS_PROVENANCE", pathlib.Path(prov))
+
+
+def _default_executor(tmp_path, *, auth=(), build_fn=None, inputs=None, patches=None):
+    """A HostBuildExecutor built through the PRODUCTION default path.
+
+    ``declared_minor_fn`` is deliberately omitted: the default under test.
+    Only the build itself is stubbed, so nothing is cloned or installed.
+    """
+    inputs = pathlib.Path(inputs or (tmp_path / "inputs"))
+    patches = pathlib.Path(patches or (tmp_path / "patches"))
+    inputs.mkdir(parents=True, exist_ok=True)
+    patches.mkdir(parents=True, exist_ok=True)
+    return HostBuildExecutor(
+        types.SimpleNamespace(selected_task_ids=tuple(auth)),
+        inputs=inputs,
+        patches=patches,
+        workspace_root=tmp_path,
+        build_fn=build_fn or (lambda task_id, url, **kw: {}),
+        classify_fn=pb.classify_build_failure,
+        resolve_url_fn=lambda task_id, inputs_dir: "https://example.com/x.git",
+    )
+
+
+def _input_record(path, task, record: dict) -> pathlib.Path:
+    path = pathlib.Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    p = path / f"{task}.json"
+    p.write_text(json.dumps(record) + "\n", encoding="utf-8", newline="\n")
+    return p
+
+
+def test_default_declared_minor_fn_is_the_ratified_sidecar(tmp_path):
+    ex = _default_executor(tmp_path)
+    assert ex._declared_minor is pb._declared_minor_for
+
+
+def test_default_path_resolves_every_real_input_through_the_sidecar(tmp_path, monkeypatch):
+    if not _MATERIALISED.is_dir():
+        pytest.skip(f"materialised first-batch inputs absent: {_MATERIALISED}")
+    tasks = sorted(p.stem for p in _MATERIALISED.glob("*.json"))
+    assert len(tasks) == 18, f"expected the 18 materialised inputs, found {len(tasks)}"
+    minors = ("3.9", "3.10", "3.11")
+    side, prov = _sidecar_bundle(
+        tmp_path / "bundle",
+        {t: _ratified(minors[i % len(minors)]) for i, t in enumerate(tasks)},
+    )
+    _point_loader_at(monkeypatch, side, prov)
+
+    handed: dict[str, object] = {}
+
+    def build_fn(task_id, url, **kw):
+        handed[task_id] = kw["declared_python_minor"]
+        ws = tmp_path / task_id
+        ws.mkdir(exist_ok=True)
+        return {"task_id": task_id, "workspace": str(ws), "elapsed_s": 0.0}
+
+    ex = _default_executor(tmp_path, build_fn=build_fn, inputs=_MATERIALISED)
+    for task in tasks:
+        expected = pb._declared_minor_for(task, _MATERIALISED)
+        assert expected is not None, task
+        cell = ex.build_one(task)
+        assert cell.classification == "OBSERVED_COMPATIBLE", (task, cell)
+        assert handed[task] == expected, task
+    assert len(handed) == 18
+
+
+def test_absent_task_is_not_silently_defaulted(tmp_path, monkeypatch):
+    if not _MATERIALISED.is_dir():
+        pytest.skip(f"materialised first-batch inputs absent: {_MATERIALISED}")
+    side, prov = _sidecar_bundle(tmp_path / "bundle",
+                                 {"some__other-task-1": _ratified("3.11")})
+    _point_loader_at(monkeypatch, side, prov)
+    task = "a2aproject__a2a-python-443"
+    seen: dict[str, object] = {}
+
+    def build_fn(task_id, url, **kw):
+        seen["declared"] = kw["declared_python_minor"]
+        raise pb.DeclaredInterpreterError(
+            f"declared Python minor is missing or unparseable: "
+            f"{kw['declared_python_minor']!r}; refusing to assume a policy value")
+
+    ex = _default_executor(tmp_path, build_fn=build_fn, inputs=_MATERIALISED)
+    cell = ex.build_one(task)
+    expected_code = pb.classify_build_failure(pb.DeclaredInterpreterError(
+        "declared Python minor is missing or unparseable: None; "
+        "refusing to assume a policy value"))
+    assert seen["declared"] is None
+    assert cell.classification == "BUILD_FAILURE"
+    assert cell.reason_code == expected_code
+    assert "declared Python minor" in (cell.failure or "")
+
+
+def test_blocked_conflict_yields_no_minor(tmp_path, monkeypatch):
+    side, prov = _sidecar_bundle(tmp_path / "bundle", {TASK: {
+        "status": "blocked_conflict",
+        "declared_python_minor": None,
+        "evidence_basis": "NOT ESTABLISHED",
+    }})
+    _point_loader_at(monkeypatch, side, prov)
+    inputs = tmp_path / "inputs"
+    _input_record(inputs, TASK, {"base_commit": "deadbeef"})
+    seen: dict[str, object] = {}
+
+    def build_fn(task_id, url, **kw):
+        seen["declared"] = kw["declared_python_minor"]
+        ws = tmp_path / task_id
+        ws.mkdir(exist_ok=True)
+        return {"task_id": task_id, "workspace": str(ws), "elapsed_s": 0.0}
+
+    ex = _default_executor(tmp_path, build_fn=build_fn, inputs=inputs)
+    cell = ex.build_one(TASK)
+    assert seen["declared"] is None          # blocked: no usable declaration
+    assert cell.classification == "OBSERVED_COMPATIBLE"
+
+
+def test_proposed_declaration_is_never_used(tmp_path, monkeypatch):
+    side, prov = _sidecar_bundle(tmp_path / "bundle", {TASK: {
+        **_ratified("3.11"), "status": "proposed"}})
+    _point_loader_at(monkeypatch, side, prov)
+    inputs = tmp_path / "inputs"
+    _input_record(inputs, TASK, {"base_commit": "deadbeef"})
+    called: list[object] = []
+
+    def build_fn(task_id, url, **kw):
+        called.append(task_id)
+        return {"task_id": task_id, "workspace": str(tmp_path / task_id)}
+
+    ex = _default_executor(tmp_path, build_fn=build_fn, inputs=inputs)
+    cell = ex.build_one(TASK)
+    assert called == []                       # never built under a proposed record
+    assert cell.classification == "BUILD_FAILURE"
+    assert "not ratified" in (cell.failure or "")
+
+
+def test_input_sidecar_conflict_fails_closed_before_build(tmp_path, monkeypatch):
+    side, prov = _sidecar_bundle(tmp_path / "bundle", {TASK: _ratified("3.11")})
+    _point_loader_at(monkeypatch, side, prov)
+    inputs = tmp_path / "inputs"
+    _input_record(inputs, TASK, {"base_commit": "deadbeef",
+                                 "install_config": {"base_image_name": "python_base_310"}})
+    called: list[object] = []
+
+    def build_fn(task_id, url, **kw):
+        called.append(task_id)
+        return {"task_id": task_id, "workspace": str(tmp_path / task_id)}
+
+    ex = _default_executor(tmp_path, build_fn=build_fn, inputs=inputs)
+    cell = ex.build_one(TASK)
+    assert called == []
+    assert cell.classification == "BUILD_FAILURE"
+    assert "input declares" in (cell.failure or "")
+
+
+def test_no_production_default_uses_input_only_declaration():
+    init_src = inspect.getsource(be.HostBuildExecutor.__init__)
+    assert "declared_minor_fn = declared_minor_fn or pb._declared_minor_for" in init_src
+    assert "_declare_from_input" not in init_src
+    # The composition point must not re-inject an override that bypasses the
+    # production default (the driver passes no declared_minor_fn).
+    assert "declared_minor_fn" not in inspect.getsource(be.make_probe_live_builder)
+
+
+@pytest.mark.skipif(
+    not pathlib.Path(r"C:\Users\rober\F2_SCRATCH\s8_resolve_out\interp").is_dir(),
+    reason="F2 isolated interpreter root is not present on this machine",
+)
+def test_declared_minors_visible_in_f2builder_search_roots(tmp_path, monkeypatch):
+    """The f2builder view is C:\\ plus the interp folder -- never %APPDATA%."""
+    from unittest.mock import patch
+    # tests/conftest.py installs an autouse subprocess.Popen mock; interpreter
+    # discovery must actually execute each candidate, so restore the real one.
+    interp = pathlib.Path(r"C:\Users\rober\F2_SCRATCH\s8_resolve_out\interp")
+    with patch("subprocess.Popen", _REAL_POPEN):
+        found = discover_interpreters(version_of=pb._version_of,
+                                      roots=[r"C:\\", interp],
+                                      prefer=PREFERRED_PYTHON_MINORS)
+        by_minor: dict[tuple[int, int], str] = {}
+        for path in found:
+            by_minor.setdefault(pb._version_of(path), path)
+        for minor in ((3, 7), (3, 8), (3, 9), (3, 10), (3, 11), (3, 13)):
+            assert minor in by_minor, f"f2builder-visible roots lack {minor}"
+        assert (3, 12) not in by_minor, "3.12 must not be discovered in these roots"
+
+        def available(prefer=None):
+            wanted = prefer if prefer is not None else PREFERRED_PYTHON_MINORS
+            return [by_minor[m] for m in wanted if m in by_minor]
+
+        monkeypatch.setattr(pb, "available_interpreters", available)
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "x"\nversion = "0"\nrequires-python = ">=3.7,<99"\n',
+            encoding="utf-8")
+        assert pb.resolve_declared_interpreter(project, "3.13") == by_minor[(3, 13)]
+        with pytest.raises(pb.DeclaredInterpreterError, match="3.12"):
+            pb.resolve_declared_interpreter(project, "3.12")

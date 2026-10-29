@@ -102,7 +102,7 @@ class HostBuildExecutor:
             build_fn = build_fn or pb.build
             classify_fn = classify_fn or pb.classify_build_failure
             resolve_url_fn = resolve_url_fn or pb.resolve_repo_url
-            declared_minor_fn = declared_minor_fn or pb._declare_from_input
+            declared_minor_fn = declared_minor_fn or pb._declared_minor_for
         self._build = build_fn
         self._classify = classify_fn
         self._resolve_url = resolve_url_fn
