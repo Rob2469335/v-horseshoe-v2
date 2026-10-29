@@ -72,6 +72,33 @@ HOST_PYTHON = r"C:\Users\rober\Projects\v-horseshoe-v2\.venv\Scripts\python.exe"
 ROOT = Path(r"C:\f2_pilot")
 
 
+#: Per-invocation git configuration for the Windows MAX_PATH limit.  This is
+#: git's documented switch; it never writes the user's configuration.
+_GIT_LONG_PATHS = ("-c", "core.longpaths=true")
+
+
+def _git_command(*args: str) -> list[str]:
+    """A git invocation that survives long paths on Windows."""
+    return [GIT, *_GIT_LONG_PATHS, *args]
+
+
+def _requirement_project(raw: str) -> str:
+    match = re.match(r"\s*([A-Za-z0-9_.-]+)", str(raw or ""))
+    return match.group(1).lower().replace("_", "-") if match else ""
+
+
+def _without_pytest(entries) -> list[str]:
+    """Drop declared ``pytest`` entries: the approved pin governs pytest.
+
+    pip refuses the same project twice in one command ("Double requirement
+    given"), which is how SDV-2658 failed with a declared
+    ``pytest==8.3.5,>=3.4.2`` beside the pin.  ``select_pytest_version`` has
+    already intersected the project's declarations, so the declared entry is
+    redundant at install time.
+    """
+    return [e for e in entries or () if _requirement_project(e) != "pytest"]
+
+
 def workspace_path(root: Path | str | None, task_id: str) -> Path:
     """The task workspace under ``root`` (default :data:`ROOT`).
 
@@ -444,17 +471,31 @@ def approved_pytest_requirement(selection: Mapping[str, Any]) -> str:
 def installed_pytest_version(python: str | Path, *, timeout: int = 300) -> str:
     """The version of the pytest distribution INSTALLED in ``python``'s env.
 
-    Read through ``importlib.metadata`` (the installed-distribution database),
-    not by parsing ``pip list`` text and not from the requirement that was
-    requested: a plugin or the project itself can upgrade pytest after the
-    approved pin was installed, and only the installed metadata shows that.
+    Read through the installed-distribution database, not by parsing ``pip list``
+    text and not from the requirement that was requested: a plugin or the project
+    itself can upgrade pytest after the approved pin was installed, and only the
+    installed metadata shows that.  ``importlib.metadata`` exists only on 3.8+;
+    3.7 tasks (conan-18842) need the backport or ``pkg_resources``.
     """
     code = (
-        "import importlib.metadata as m\n"
+        "import sys\n"
+        "version = None\n"
         "try:\n"
-        "    print(m.version('pytest'))\n"
-        "except m.PackageNotFoundError:\n"
-        "    raise SystemExit(3)\n"
+        "    import importlib.metadata as _md\n"
+        "    version = _md.version('pytest')\n"
+        "except ImportError:\n"
+        "    try:\n"
+        "        import importlib_metadata as _md\n"
+        "        version = _md.version('pytest')\n"
+        "    except ImportError:\n"
+        "        try:\n"
+        "            import pkg_resources\n"
+        "            version = pkg_resources.get_distribution('pytest').version\n"
+        "        except Exception:\n"
+        "            sys.exit(3)\n"
+        "except Exception:\n"
+        "    sys.exit(3)\n"
+        "print(version)\n"
     )
     proc = subprocess.run([str(python), "-c", code],
                           capture_output=True, text=True, timeout=timeout)
@@ -1159,9 +1200,9 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     ws.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
-    run([GIT, "clone", "--filter=blob:none", "--quiet", url, str(repo)])
-    run([GIT, "checkout", "--quiet", base_commit], cwd=repo)
-    run([GIT, "apply", str(Path(patches) / f"{task_id}.test_patch")], cwd=repo)
+    run(_git_command("clone", "--filter=blob:none", "--quiet", url, str(repo)))
+    run(_git_command("checkout", "--quiet", base_commit), cwd=repo)
+    run(_git_command("apply", str(Path(patches) / f"{task_id}.test_patch")), cwd=repo)
 
     # Python layout differs per repository. A monorepo's installable project is
     # often NOT the repo root (awslabs/mcp keeps 58 subprojects under src/,
@@ -1185,7 +1226,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # environment that is about to be built for it).
     shutil.copytree(repo, gold_repo, symlinks=True,
                     ignore=shutil.ignore_patterns(".venv", ".venvuv", "__pycache__"))
-    run([GIT, "apply", str(Path(patches) / f"{task_id}.gold_patch")], cwd=gold_repo)
+    run(_git_command("apply", str(Path(patches) / f"{task_id}.gold_patch")), cwd=gold_repo)
 
     # Fail closed at the UNTRUSTED boundary itself, not only in main(): a direct
     # call to build() must not be able to pip-install a task (and so run its
@@ -1314,7 +1355,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
                 # the approved release or fails on an impossible intersection.
                 run([str(vpy), "-m", "pip", "install", "--quiet",
                      "--disable-pip-version-check", pin,
-                     *plan["plugin_requirements"]],
+                     *_without_pytest(plan["plugin_requirements"])],
                     timeout=3600)
             # Declared test dependencies go in beside the plugins, BEFORE the
             # editable install, which is the pairing the PyPA dependency-groups
@@ -1328,7 +1369,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
                     constraint_args.extend(["-c", str(constraint_file)])
                 run([str(vpy), "-m", "pip", "install", "--quiet",
                      "--disable-pip-version-check", *constraint_args, pin,
-                     *plan["test_requirements"]],
+                     *_without_pytest(plan["test_requirements"])],
                     timeout=3600)
             run([str(vpy), "-m", "pip", "install", "--quiet",
                  "--disable-pip-version-check", pin, "-e", str(proj)],
