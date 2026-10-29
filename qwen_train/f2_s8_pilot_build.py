@@ -174,7 +174,7 @@ PYTEST_PIN = DEFAULT_PYTEST_PIN
 #: The builder account (f2builder) must use this directory rather than depending
 #: on unauthorized ACL grants in the owner's personal profile (C:\Users\rober\.local\bin).
 DEFAULT_UV_PATH = Path(r"C:\f2_pilot\tools\uv.exe")
-UV_APPROVED_SHA256 = "92fcafc6f7512ec3a0fb42bf6bf84730737252c6d3d7cae4f6f97678d746da3a"
+UV_APPROVED_SHA256 = "81ea623608f8c17720c62efd0a380a8ead380c4d365ba6968e9d279a2319c674"
 
 
 def _is_ephemeral_fixture_path(p_posix: str) -> bool:
