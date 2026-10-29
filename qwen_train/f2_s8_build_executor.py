@@ -153,6 +153,7 @@ class HostBuildExecutor:
                 patches=self._patches,
                 declared_python_minor=declared,
                 authorized_run=self._authorized,
+                root=str(self._workspace_root_value()),
             )
         except AuthorizationError:
             # Expiration, revocation, invalid authorization, artifact drift,

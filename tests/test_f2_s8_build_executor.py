@@ -1405,3 +1405,44 @@ def test_declared_minors_visible_in_f2builder_search_roots(tmp_path, monkeypatch
         assert pb.resolve_declared_interpreter(project, "3.13") == by_minor[(3, 13)]
         with pytest.raises(pb.DeclaredInterpreterError, match="3.12"):
             pb.resolve_declared_interpreter(project, "3.12")
+
+
+# ===========================================================================
+# Regression: HostBuildExecutor advertises workspace_root but the builder wrote
+# to the hardcoded ROOT, so any non-default workspace_root produced a
+# BuilderContractError after a real build (and a rehearsal could not avoid
+# writing into C:\f2_pilot).  The root must be threaded through.
+# ===========================================================================
+
+
+def test_workspace_path_defaults_to_the_fixed_pilot_root():
+    assert pb.workspace_path(None, "acme__widget-1") == pb.ROOT / "acme__widget-1"
+
+
+def test_workspace_path_honours_an_explicit_root(tmp_path):
+    assert pb.workspace_path(tmp_path, "acme__widget-1") == tmp_path / "acme__widget-1"
+
+
+def test_build_uses_workspace_path_with_the_root_argument():
+    params = inspect.signature(pb.build).parameters
+    assert "root" in params
+    assert params["root"].default is None
+    src = inspect.getsource(pb.build)
+    assert "workspace_path(root" in src
+    assert "ws = ROOT / task_id" not in src
+
+
+def test_executor_forwards_its_workspace_root_to_the_builder(tmp_path):
+    inputs = tmp_path / "inputs"
+    _input_record(inputs, TASK, {"base_commit": "deadbeef"})
+    seen: dict[str, object] = {}
+
+    def build_fn(task_id, url, **kw):
+        seen["root"] = kw.get("root")
+        ws = tmp_path / task_id
+        ws.mkdir(exist_ok=True)
+        return {"task_id": task_id, "workspace": str(ws), "elapsed_s": 0.0}
+
+    ex = _default_executor(tmp_path, build_fn=build_fn, inputs=inputs)
+    ex.build_one(TASK)
+    assert seen["root"] == str(tmp_path)

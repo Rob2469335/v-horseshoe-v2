@@ -71,6 +71,16 @@ PATCHES = Path(r"C:\Users\rober\F2_EVIDENCE\s8\pilot_build\patches")
 HOST_PYTHON = r"C:\Users\rober\Projects\v-horseshoe-v2\.venv\Scripts\python.exe"
 ROOT = Path(r"C:\f2_pilot")
 
+
+def workspace_path(root: Path | str | None, task_id: str) -> Path:
+    """The task workspace under ``root`` (default :data:`ROOT`).
+
+    The builder writes into ``<root>/<task_id>``; the *only* place that rule
+    lives.  Callers that own a different workspace root (a rehearsal, a test)
+    pass it explicitly instead of relying on the fixed pilot path.
+    """
+    return Path(root if root is not None else ROOT) / task_id
+
 #: Interpreters available on the acquisition host, in PREFERENCE order.
 #:
 #: Order is a deliberate policy, not an accident of installation. Newer is not
@@ -1103,10 +1113,11 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
           authorized_run: Any | None = None,
           manifest_file: Path | str | None = None,
           registration_file: Path | str | None = None,
-          registration_manifest_file: Path | str | None = None) -> dict:
+          registration_manifest_file: Path | str | None = None,
+          root: Path | str | None = None) -> dict:
     rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
     base_commit = rec["base_commit"]
-    ws = ROOT / task_id
+    ws = workspace_path(root, task_id)
     repo = ws / "repo"
     gold_repo = ws / "repo_gold"
 
