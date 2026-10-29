@@ -471,16 +471,126 @@ def _literal_requirement_strings(
     return None
 
 
+class _SetupPyFileResolver:
+    """Resolve the two common STATIC file-read declaration shapes.
+
+    ``NAME = get_requires("requirements.txt")`` (a local helper that reads its
+    argument with ``open``) and ``NAME = open("requirements.txt").readlines()``
+    are pure data flow over plain files inside the project.  They are resolved
+    here so a project that keeps its requirements in a file is not refused as
+    "dynamic"; every other shape still returns ``None`` (blocking).
+    """
+
+    def __init__(self, setup_py: Path, tree: ast.AST) -> None:
+        self._root = Path(setup_py).parent.resolve()
+        self._readers = self._reader_functions(tree)
+        self._bindings = self._bindings_from(tree)
+
+    @staticmethod
+    def _reader_functions(tree: ast.AST) -> set[str]:
+        readers: set[str] = set()
+        for node in getattr(tree, "body", []):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.args.args:
+                continue
+            arg = node.args.args[0].arg
+            for child in ast.walk(node):
+                if (isinstance(child, ast.Call)
+                        and isinstance(child.func, ast.Name)
+                        and child.func.id == "open"
+                        and child.args
+                        and isinstance(child.args[0], ast.Name)
+                        and child.args[0].id == arg):
+                    readers.add(node.name)
+                    break
+        return readers
+
+    def _path(self, literal: Any) -> Path | None:
+        if not isinstance(literal, str) or not literal.strip():
+            return None
+        candidate = (self._root / literal).resolve()
+        if candidate != self._root and self._root not in candidate.parents:
+            return None          # outside the project: never read
+        return candidate
+
+    @staticmethod
+    def _lines(path: Path) -> list[str] | None:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        out = []
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                out.append(line)
+        return out
+
+    @staticmethod
+    def _open_literal(node: ast.AST) -> str | None:
+        """``open("p")`` or a method chain over it (read/readlines/split...)."""
+        current = node
+        while True:
+            if isinstance(current, ast.Attribute):
+                current = current.value
+                continue
+            if isinstance(current, ast.Call):
+                func = current.func
+                if isinstance(func, ast.Name) and func.id == "open":
+                    if (current.args and isinstance(current.args[0], ast.Constant)
+                            and isinstance(current.args[0].value, str)):
+                        return current.args[0].value
+                    return None
+                if isinstance(func, ast.Attribute):
+                    current = func.value
+                    continue
+                return None
+            return None
+
+    def _resolve(self, node: ast.AST, bindings: Mapping[str, list[str]]):
+        if isinstance(node, ast.Name):
+            return bindings.get(node.id)
+        if isinstance(node, ast.Call):
+            func = node.func
+            if (isinstance(func, ast.Name) and func.id in self._readers
+                    and node.args and isinstance(node.args[0], ast.Constant)):
+                path = self._path(node.args[0].value)
+                return self._lines(path) if path is not None else None
+            literal = self._open_literal(node)
+            if literal is not None:
+                path = self._path(literal)
+                return self._lines(path) if path is not None else None
+        return None
+
+    def _bindings_from(self, tree: ast.AST) -> dict[str, list[str]]:
+        bindings: dict[str, list[str]] = {}
+        for node in getattr(tree, "body", []):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)):
+                resolved = self._resolve(node.value, bindings)
+                if resolved is not None:
+                    # A later non-resolvable rebinding (e.g. a strip loop) does
+                    # not erase the file it was derived from.
+                    bindings[node.targets[0].id] = resolved
+        return bindings
+
+    def entries(self, node: ast.AST) -> list[str] | None:
+        return self._resolve(node, self._bindings)
+
+
 def _setup_py_declarations(
     path: Path,
 ) -> tuple[list[tuple[str, str, str]], list[dict[str, str]]]:
     """Statically analysable ``setup()`` declarations -- never executed.
 
     ``install_requires``, ``extras_require``, ``tests_require`` and
-    ``setup_requires`` are read when their value is a literal.  A ``**kwargs``
-    expansion or a non-literal value means the declaration is produced by code,
-    which this layer refuses to evaluate: it is reported as BLOCKING so the
-    caller cannot pretend the project declared nothing.
+    ``setup_requires`` are read when their value is a literal, or when it is a
+    plain file read (``open(...).readlines()`` / a local ``get_requires``
+    helper).  A ``**kwargs`` expansion or any other non-literal value means the
+    declaration is produced by code, which this layer refuses to evaluate: it is
+    reported as BLOCKING so the caller cannot pretend the project declared
+    nothing.
     """
     try:
         tree = ast.parse(Path(path).read_text(encoding="utf-8", errors="replace"))
@@ -490,6 +600,7 @@ def _setup_py_declarations(
     found: list[tuple[str, str, str]] = []
     problems: list[dict[str, str]] = []
     saw_setup = False
+    resolver = _SetupPyFileResolver(path, tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -509,6 +620,8 @@ def _setup_py_declarations(
                                    "tests_require", "setup_requires"):
                 continue
             entries = _literal_requirement_strings(keyword.value)
+            if entries is None:
+                entries = resolver.entries(keyword.value)
             if entries is None:
                 # ``extras_require`` is a dict, which literal_eval CAN read.
                 if keyword.arg == "extras_require":
