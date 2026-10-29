@@ -32,6 +32,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from swarm_os.services.experiment_model_identity import (  # noqa: E402
+    EXPECTED_GGUF_RELATIVE_PATH,
     EXPECTED_GGUF_SHA256,
     EXPECTED_GGUF_SIZE_BYTES,
     EXPECTED_MODEL_ALIAS,
@@ -133,8 +134,8 @@ class TestModelIdentity:
         be hashed -- otherwise the SHA would attest to a model never served.
         """
         mod, path, _ = identity
-        remote = "/workspace/runtime/robs4b_q4km.gguf"
-        local_copy = tmp_path / "qwen_train" / "robs4b_q4km.gguf"
+        remote = "/workspace/runtime/robs4b_q4km_reconverted.gguf"
+        local_copy = tmp_path / "qwen_train" / "robs4b_q4km_reconverted.gguf"
         local_copy.parent.mkdir(parents=True, exist_ok=True)
         local_copy.write_bytes(b"NOT-A-REAL-GGUF-" + b"x" * 512)
 
@@ -148,7 +149,7 @@ class TestModelIdentity:
         finally:
             mod.sha256_file = real_sha
         assert local_copy not in calls, "local GGUF was hashed as a substitute"
-        assert not any(str(c).endswith("qwen_train/robs4b_q4km.gguf") for c in calls)
+        assert not any(str(c).endswith("qwen_train/robs4b_q4km_reconverted.gguf") for c in calls)
 
     def test_wrong_fingerprint_fails_closed(self, identity):
         mod, path, _ = identity
@@ -221,10 +222,12 @@ class TestProvenance:
 class TestPreregistration:
     def test_expected_values_are_the_authorized_ones(self):
         assert EXPECTED_MODEL_ALIAS == "robs4b"
+        # Option B (2026-10-14): adopted the witnessed reconversion.
         assert EXPECTED_GGUF_SHA256 == (
-            "65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41"
+            "3e5ba031f0b50e98450d1575aa19780bc5b4b13f48bf3eca38f3c915a442a337"
         )
-        assert EXPECTED_GGUF_SIZE_BYTES == 2708803840
+        assert EXPECTED_GGUF_SIZE_BYTES == 2708804032
+        assert EXPECTED_GGUF_RELATIVE_PATH == "qwen_train/robs4b_q4km_reconverted.gguf"
 
     def test_props_fingerprint_is_deterministic(self):
         p = {"build_info": "b", "model_path": "m", "total_slots": 1,

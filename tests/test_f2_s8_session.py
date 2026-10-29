@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from qwen_train.f2_s8_factory import ADMITTED_OUTCOME, AppendOnlyLedger, ExecutionResult
+from qwen_train.f2_s8_factory import (
+    ADMITTED_OUTCOME, REQUIRED_EVIDENCE_ROLES, AppendOnlyLedger, ExecutionResult,
+)
 from qwen_train.f2_s8_session import (
     REQUIRED_GATES,
     FakeVMAdapter,
@@ -49,6 +51,15 @@ def _result(spec, outcome=ADMITTED_OUTCOME, attempt=1):
         task_id=spec.task_id, outcome=outcome, attempt=attempt,
         attempt_id=f"{spec.task_id}#{attempt}", evidence_name=f"{spec.task_id}.xml",
         evidence_sha256="c" * 64, evidence_size=10, evaluator=dict(EVAL),
+        # Decision 3: the binding identities an admission must carry.
+        evidence_record_digest="d" * 64, environment_identity="test-env",
+        execution_state_digest="e" * 64, base_state_digest="b" * 64,
+        started_at="2026-10-16T00:00:00Z", finished_at="2026-10-16T00:00:01Z",
+        repository_revision="a" * 40,
+        artifacts={r: {"name": f"{r}.bin", "sha256": "f" * 64, "size_bytes": 1}
+                   for r in REQUIRED_EVIDENCE_ROLES}
+        | {"gold_report": {"name": f"{spec.task_id}.xml", "sha256": "c" * 64,
+                           "size_bytes": 10}},
     )
 
 

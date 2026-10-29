@@ -142,3 +142,50 @@ class TestAcceptedSeparations:
             q5_q6_adjudicator="dave",
         )
         assert verify_separation_of_duties(rec)[0] is True
+
+class TestRunAuthorityMayNotBeTheSoleJudge:
+    """REGRESSION (2026-10-14): the governing rule is about the RUN AUTHORIZER,
+    not the operator.
+
+    ``EXPERIMENT_J_F2_OPERATOR_HANDOFF.md:658-660`` -- "the person authorizing the
+    run must not also be the sole judge of that run's exclusions" -- and
+    ``EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md`` -- "refuses a governance
+    record whose exclusion adjudicator is identical to its run authorizer". The
+    earlier verifier checked only ``operator == adjudicator``, so a record whose
+    RUN AUTHORIZER adjudicated its own exclusions passed. That is the exact
+    substance the rule exists to forbid, so the check is added (fail-closed).
+    """
+
+    def test_run_authorizer_as_adjudicator_is_refused(self):
+        rec = SeparationOfDuties(
+            run_authority="rob",
+            operator="alice",
+            exclusion_adjudicator="rob",
+            independent_regrade="carol",
+            q5_q6_adjudicator="dave",
+        )
+        ok, detail = verify_separation_of_duties(rec)
+        assert ok is False
+        assert "run authorizer" in detail
+
+    def test_run_authorizer_may_adjudicate_when_rules_are_mechanical(self):
+        rec = SeparationOfDuties(
+            run_authority="rob",
+            operator="alice",
+            exclusion_adjudicator="rob",
+            independent_regrade="carol",
+            q5_q6_adjudicator="dave",
+            mechanical_exclusion_rules=True,
+        )
+        assert verify_separation_of_duties(rec)[0] is True
+
+    def test_authorizer_operator_distinct_from_adjudicator_passes(self):
+        rec = SeparationOfDuties(
+            run_authority="rob",
+            operator="rob",
+            exclusion_adjudicator="mechanical:F2-IMPL-AUTH-018-Q5",
+            independent_regrade="carol",
+            q5_q6_adjudicator="dave",
+            mechanical_exclusion_rules=True,
+        )
+        assert verify_separation_of_duties(rec)[0] is True
