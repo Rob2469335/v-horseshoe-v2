@@ -33,6 +33,35 @@ LEDGERS = [STORE / "s8_pilot_ledger.jsonl", STORE / "s8_pilot_ledger_corrected.j
 _have_ledgers = all(p.is_file() for p in LEDGERS)
 
 
+
+def _ledger_derivation():
+    """Expected accounting derived from the ledger rows this file reads.
+
+    Independent recomputation of the owner counting rule: a task is credited iff
+    at least one chain records `admitted is True`; the operative figure is the
+    first chain's admitted set; the corrective figure is the remainder of the
+    union.  No fixed count is asserted, so an append-only chain cannot make the
+    test stale.
+    """
+    chains = []
+    for p in LEDGERS:
+        admitted = set()
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                row = json.loads(line)
+                if row.get("admitted") is True:
+                    admitted.add(str(row.get("task_id")))
+        chains.append(admitted)
+    operative = len(chains[0]) if chains else 0
+    union = len(set().union(*chains)) if chains else 0
+    return {
+        "operative": operative,
+        "corrective": max(0, union - operative),
+        "union": union,
+        "remaining": max(0, 300 - union),
+    }
+
+
 def _by(report):
     return {f["id"]: f for f in report["findings"]}
 
@@ -58,14 +87,14 @@ class TestD1PreflightEvidenceSources:
         })
         rep = pf.run_preflight(ledgers=LEDGERS, registered_tasks=tasks)
         adm = _by(rep)["population.admission"]
-        # The counting-rule union over the CURRENT chains (append-only; the r4
-        # batch added three admissions). Read from the reconciler, not asserted
-        # from a literal that predates the ledger's growth.
-        assert "credited union 9" in adm["detail"]
-        assert "remaining to 300 = 291" in adm["detail"]
-        # 6 < 300, so the gate is honestly still insufficient -- not satisfied.
-        assert adm["status"] == "insufficient"
-        assert rep["result"] == "BLOCKED"
+        # Derive the expectation from the ledgers this test just read, so an
+        # append-only chain cannot make the assertion stale.
+        exp = _ledger_derivation()
+        assert f"credited union {exp['union']}" in adm["detail"]
+        assert f"remaining to 300 = {exp['remaining']}" in adm["detail"]
+        # The gate is satisfied only when the derived union reaches the target.
+        assert adm["status"] == ("insufficient" if exp["remaining"] else "satisfied")
+        assert rep["result"] == ("BLOCKED" if exp["remaining"] else rep["result"])
 
     @pytest.mark.skipif(not _have_ledgers, reason="registered chains absent")
     def test_a_ledger_count_does_not_establish_base_gold_provenance(self):
@@ -136,12 +165,13 @@ class TestD2CapacityAdmissionAccounting:
 
     @pytest.mark.skipif(not _have_ledgers, reason="registered chains absent")
     def test_six_concepts_are_reported_separately(self):
+        exp = _ledger_derivation()
         a = self._accounting(0)
         assert a["census_admitted"] == 0
-        assert a["operative_ledger_admissions"] == 8
-        assert a["corrective_ledger_admissions"] == 1
-        assert a["credited_admission_union"] == 9
-        assert a["remaining_to_target"] == 291
+        assert a["operative_ledger_admissions"] == exp["operative"]
+        assert a["corrective_ledger_admissions"] == exp["corrective"]
+        assert a["credited_admission_union"] == exp["union"]
+        assert a["remaining_to_target"] == exp["remaining"]
         assert a["target"] == 300
         assert a["basis"] == "docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md"
 
