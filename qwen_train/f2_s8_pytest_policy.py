@@ -575,6 +575,22 @@ class _SetupPyFileResolver:
                     bindings[node.targets[0].id] = resolved
         return bindings
 
+    def mapping(self, node: ast.AST) -> dict[str, list[str]] | None:
+        """``{"extra": <literal or resolvable file read>}``, or ``None``."""
+        if not isinstance(node, ast.Dict):
+            return None
+        out: dict[str, list[str]] = {}
+        for key, value in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                return None
+            members = _literal_requirement_strings(value)
+            if members is None:
+                members = self._resolve(value, self._bindings)
+            if members is None:
+                return None
+            out[key.value] = members
+        return out
+
     def entries(self, node: ast.AST) -> list[str] | None:
         return self._resolve(node, self._bindings)
 
@@ -629,6 +645,8 @@ def _setup_py_declarations(
                         mapping = ast.literal_eval(keyword.value)
                     except (ValueError, SyntaxError):
                         mapping = None
+                    if not isinstance(mapping, Mapping):
+                        mapping = resolver.mapping(keyword.value)
                     if isinstance(mapping, Mapping):
                         for extra, members in mapping.items():
                             for member in members or ():

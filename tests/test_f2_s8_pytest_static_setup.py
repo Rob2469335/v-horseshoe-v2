@@ -40,7 +40,9 @@ def get_requires(filename):
 
 
 project_requirements = get_requires("conans/requirements.txt")
-setup(name="conan", install_requires=project_requirements)
+runner_requirements = get_requires("conans/requirements_runner.txt")
+setup(name="conan", install_requires=project_requirements,
+      extras_require={"runners": runner_requirements})
 '''
 
 CIRQ_SHAPE = '''
@@ -48,7 +50,9 @@ from setuptools import setup
 
 requirements = open("requirements.txt").readlines()
 requirements = [r.strip() for r in requirements]
-setup(name="cirq-core", install_requires=requirements)
+contrib_requirements = open("cirq/contrib/requirements.txt").readlines()
+setup(name="cirq-core", install_requires=requirements,
+      extras_require={"contrib": contrib_requirements})
 '''
 
 
@@ -58,7 +62,7 @@ def _blocking(result):
 
 def test_get_requires_file_is_resolved_statically(tmp_path):
     project = _project(tmp_path, CONAN_SHAPE,
-                       {"conans/requirements.txt": "# comment\nrequests>=2.25\npytest==7.4.4\n"})
+                       {"conans/requirements.txt": "# comment\nrequests>=2.25\npytest==7.4.4\n", "conans/requirements_runner.txt": "pytest-xdist\n"})
     result = collect_pytest_declarations(project=project)
     assert _blocking(result) == [], _blocking(result)
     raw = [d["raw"] for d in result["declarations"]]
@@ -67,7 +71,7 @@ def test_get_requires_file_is_resolved_statically(tmp_path):
 
 def test_open_readlines_file_is_resolved_statically(tmp_path):
     project = _project(tmp_path, CIRQ_SHAPE,
-                       {"requirements.txt": "attrs>=21.3\npytest==8.3.5\n"})
+                       {"requirements.txt": "attrs>=21.3\npytest==8.3.5\n", "cirq/contrib/requirements.txt": "pytest==8.3.5\n"})
     result = collect_pytest_declarations(project=project)
     assert _blocking(result) == [], _blocking(result)
     raw = [d["raw"] for d in result["declarations"]]
@@ -104,3 +108,4 @@ setup(name="x", install_requires=reqs)
     result = collect_pytest_declarations(project=project)
     codes = [p["code"] for p in _blocking(result)]
     assert "setup_py_dynamic_declaration" in codes, codes
+
