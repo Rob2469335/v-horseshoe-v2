@@ -9,12 +9,27 @@ from __future__ import annotations
 
 import hashlib
 import pathlib
+import subprocess
 
 import pytest
 
-from qwen_train.f2_s8_pilot_build import resolve_and_verify_uv
+from qwen_train.f2_s8_pilot_build import (
+    _is_within,
+    _resolved_norm,
+    resolve_and_verify_uv,
+)
 
 PROFILE = pathlib.Path(r"C:\Users\rober")
+
+#: Captured at import time, before the suite's autouse Popen mock is installed.
+_REAL_POPEN = subprocess.Popen
+
+
+@pytest.fixture
+def real_subprocess(monkeypatch):
+    """Allow the real ``cmd`` binary (junction creation) for one test."""
+    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
+
 
 
 @pytest.mark.parametrize("rel", [
@@ -67,3 +82,86 @@ def test_intermediate_component_outside_the_fixture_root_is_rejected(tmp_path):
     with pytest.raises(RuntimeError, match="PROFILE_ISOLATION_VIOLATION"):
         resolve_and_verify_uv(custom_path=other, expected_sha256="0" * 64,
                               fixture_root=tmp_path / "approved")
+
+
+# ---------------------------------------------------------------------------
+# Windows alternate path spellings must canonicalise to the same identity
+# ---------------------------------------------------------------------------
+
+SPELLINGS = [
+    pytest.param(lambda p: "\\\\?\\" + str(p), id="extended-length"),
+    pytest.param(lambda p: "\\\\?\\UNC\\localhost\\C$" + str(p)[2:], id="extended-unc"),
+    pytest.param(lambda p: "\\\\localhost\\C$" + str(p)[2:], id="unc-admin-share"),
+    pytest.param(lambda p: "\\\\.\\" + str(p), id="device-namespace"),
+    pytest.param(lambda p: str(p).replace("\\", "/"), id="forward-slashes"),
+    pytest.param(lambda p: str(p).upper(), id="upper-case"),
+    pytest.param(lambda p: str(p) + ".", id="trailing-dot"),
+    pytest.param(lambda p: str(p) + "::$DATA", id="alternate-data-stream"),
+]
+
+
+@pytest.mark.parametrize("spelling", SPELLINGS)
+def test_alternate_windows_spellings_of_a_profile_path_are_rejected(tmp_path, spelling):
+    stub = tmp_path / "uv.exe"
+    stub.write_bytes(b"fixture-uv")
+    digest = hashlib.sha256(stub.read_bytes()).hexdigest()
+    attempt = spelling(stub)
+    with pytest.raises(RuntimeError, match="PROFILE_ISOLATION_VIOLATION"):
+        resolve_and_verify_uv(custom_path=attempt, expected_sha256=digest)
+
+
+@pytest.mark.parametrize("spelling", SPELLINGS)
+def test_all_spellings_canonicalise_to_one_identity(tmp_path, spelling):
+    target = tmp_path / "uv.exe"
+    target.write_bytes(b"fixture-uv")
+    key = _resolved_norm(target)
+    assert key is not None
+    assert _resolved_norm(spelling(target)) == key
+
+
+def test_junction_escape_is_rejected(tmp_path, real_subprocess):
+    """A junction inside the fixture root that points at the profile must fail.
+
+    Resolution happens before containment, so the escape target (not the link
+    spelling) decides.  If this host cannot create a junction the test reports
+    the capability gap instead of pretending to pass.
+    """
+    link = tmp_path / "escape_link"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(PROFILE / ".local")],
+        capture_output=True, text=True,
+    )
+    if created.returncode != 0:
+        pytest.skip(
+            "junction creation unavailable on this host: "
+            f"{created.returncode} {created.stderr.strip()[:120]}"
+        )
+    for kwargs in ({}, {"fixture_root": tmp_path}):
+        with pytest.raises(RuntimeError, match="PROFILE_ISOLATION_VIOLATION"):
+            resolve_and_verify_uv(custom_path=link / "uv.exe",
+                                  expected_sha256="0" * 64, **kwargs)
+
+
+def test_nonexistent_profile_path_is_rejected(tmp_path):
+    missing = PROFILE / ".local" / "bin" / "definitely-not-here-audit.exe"
+    with pytest.raises(RuntimeError, match="PROFILE_ISOLATION_VIOLATION"):
+        resolve_and_verify_uv(custom_path=missing, expected_sha256="0" * 64)
+
+
+def test_lookalike_temp_directory_outside_the_fixture_root_is_rejected(tmp_path):
+    approved = tmp_path / "approved"
+    approved.mkdir()
+    lookalike = tmp_path / "f2_pytest" / "uv.exe"
+    lookalike.parent.mkdir()
+    lookalike.write_bytes(b"fixture-uv")
+    digest = hashlib.sha256(lookalike.read_bytes()).hexdigest()
+    with pytest.raises(RuntimeError, match="PROFILE_ISOLATION_VIOLATION"):
+        resolve_and_verify_uv(custom_path=lookalike, expected_sha256=digest,
+                              fixture_root=approved)
+
+
+def test_production_tool_path_is_outside_the_profile():
+    assert _is_within(r"C:\f2_pilot\tools\uv.exe", PROFILE) is False
+    assert _is_within(r"\\?\C:\f2_pilot\tools\uv.exe", PROFILE) is False
+    assert _is_within(r"C:\f2_pilot", PROFILE) is False
+

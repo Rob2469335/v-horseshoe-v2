@@ -21,9 +21,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import time
@@ -204,12 +206,67 @@ DEFAULT_UV_PATH = Path(r"C:\f2_pilot\tools\uv.exe")
 UV_APPROVED_SHA256 = "81ea623608f8c17720c62efd0a380a8ead380c4d365ba6968e9d279a2319c674"
 
 
+_WINDOWS_DEVICE_PREFIXES = ("\\\\?\\", "\\\\.\\")
+
+
+def _strip_device_prefix(text: str) -> str:
+    """Flatten ``\\\\?\\``/``\\\\.\\`` spellings into ordinary Windows paths.
+
+    ``Path.resolve()`` (and ``os.path.realpath``) preserves these prefixes, so a
+    device-spelled path to the owner profile would otherwise compare unequal to
+    ``C:\\Users\\<owner>`` and slip past the profile guard.  ``\\\\?\\UNC\\`` is
+    the device spelling of a UNC path.
+    """
+    for prefix in _WINDOWS_DEVICE_PREFIXES:
+        if text.startswith(prefix):
+            rest = text[len(prefix):]
+            if rest[:4].upper() == "UNC\\":
+                return "\\\\" + rest[4:]
+            return rest
+    return text
+
+
+def _local_host_names() -> frozenset[str]:
+    names = {"localhost", "127.0.0.1"}
+    for name in (os.environ.get("COMPUTERNAME"), socket.gethostname()):
+        if name:
+            names.add(name.lower())
+    return frozenset(names)
+
+
+def _map_local_admin_share(text: str) -> str:
+    """Map ``\\\\<local host>\\C$\\...`` to ``C:\\...``.
+
+    The administrative share of the LOCAL machine addresses the same files as
+    the drive path, so leaving it unmapped would let ``\\\\localhost\\C$\\Users\\
+    <owner>\\...`` bypass the profile guard.  Shares on other hosts are left
+    alone: they are not this machine's profile.
+    """
+    if os.name != "nt" or not text.startswith("\\\\"):
+        return text
+    drive, rest = ntpath.splitdrive(text)
+    host, _, share = drive.lstrip("\\").partition("\\")
+    if not share or not re.fullmatch(r"[A-Za-z]\$", share):
+        return text
+    if host.lower() not in _local_host_names():
+        return text
+    return f"{share[0].upper()}:{rest}"
+
+
 def _resolved_norm(path: Path | str) -> str | None:
-    """Absolute, case-folded form of ``path``; ``None`` when unresolvable."""
+    """Canonical, case-folded identity of ``path``; ``None`` when unresolvable.
+
+    Canonicalisation, in order: resolve symlinks/junctions and 8.3 short names
+    (``os.path.realpath``), flatten ``\\\\?\\`` / ``\\\\.\\`` device prefixes,
+    map the local administrative UNC share to its drive path, then case-fold and
+    normalise separators (``os.path.normcase``).  Two spellings of the same file
+    therefore compare equal, and an alternate spelling cannot dodge containment.
+    """
     try:
-        return os.path.normcase(str(Path(path).resolve()))
-    except (OSError, RuntimeError):
+        resolved = os.path.realpath(str(path), strict=False)
+    except (OSError, RuntimeError, ValueError):
         return None
+    return os.path.normcase(_map_local_admin_share(_strip_device_prefix(resolved)))
 
 
 def _is_within(path: Path | str, root: Path | str) -> bool:
