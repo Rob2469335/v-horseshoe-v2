@@ -160,6 +160,14 @@ def verify_separation_of_duties(
             ),
         )
 
+    if rec.run_authority == rec.exclusion_adjudicator and not rec.mechanical_exclusion_rules:
+        return False, (
+            "separation of duties VIOLATED -- the run authorizer is also the sole "
+            "exclusion adjudicator and exclusions are not decided by the pre-specified "
+            "mechanical rule set (F2-IMPL-AUTH-018 Q5); "
+            "EXPERIMENT_J_F2_OPERATOR_HANDOFF.md:658-660 (\"the person authorizing the "
+            "run must not also be the sole judge of that run's exclusions\")"
+        )
     if rec.operator == rec.exclusion_adjudicator and not rec.mechanical_exclusion_rules:
         return False, (
             "separation of duties VIOLATED -- the operator is also the sole exclusion "

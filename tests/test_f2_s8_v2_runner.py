@@ -1,0 +1,1059 @@
+"""Real-``main()`` tests for the v2 gate wiring in the live S8 runner.
+
+Every fixture is synthetic and temporary: ephemeral ed25519 key, temporary
+trust root, temporary consumption ledger, temporary budget root, temporary
+registration/pool/manifest. No production grant, key, ledger, budget root or
+task is touched, and no build, precheck, staging or VM operation runs.
+
+The integration contract under test:
+
+    authoritative grant verification -> v2_preflight -> verify_and_consume once
+        -> task runner
+
+and, for every refusal, that NOTHING of that happens: no consumption row, no
+task call, no run directory, no budget claim.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import inspect
+import json
+import pathlib
+from types import SimpleNamespace
+
+import pytest
+
+from qwen_train import f2_authorization as A
+from qwen_train import f2_authz_budget as BUDGET
+from qwen_train import f2_s8_pilot_live as RUNNER
+from qwen_train.f2_authz_ledger import AuthorizationLedger
+from qwen_train.f2_s8_candidate_pool import build_pool, canonical_bytes, pool_digest
+from qwen_train.f2_s8_factory import ADMITTED_OUTCOME, AppendOnlyLedger
+from qwen_train.f2_s8_pilot import PilotTaskResult
+from tests.f2_authz_testkit import (
+    apply_repo_identity,
+    keypair,
+    now,
+    signed_record,
+    use_test_ledger,
+    write_record,
+    write_trust_root,
+)
+
+CONTENT = "c" * 64
+TASK = "acme__widget-1"
+OTHER = "acme__gadget-2"
+REG_BYTES = json.dumps([TASK, OTHER]).encode("utf-8")
+
+GATES = {
+    "authority_current": True,
+    "d4_budget_approved": True,
+    "d4_storage_cap_approved": True,
+    "approved_subnet": True,
+    "d5_credential_available": True,
+    "evaluator_identity_named": True,
+    "isolation_verified": True,
+    "pilot_authorized": True,
+}
+
+
+# ---------------------------------------------------------------------------
+# fixtures
+# ---------------------------------------------------------------------------
+
+
+class FakeChannel:
+    """No-op guest channel: proves no real transport is opened."""
+
+    def __init__(self) -> None:
+        self.puts: list[tuple[str, str]] = []
+
+    def put(self, local, remote: str) -> None:
+        self.puts.append((str(local), remote))
+
+    def get(self, remote: str, local) -> None:  # pragma: no cover - never reached
+        raise AssertionError("no guest read is expected in these tests")
+
+    def run(self, command: str, *, timeout: int = 5400):  # pragma: no cover
+        raise AssertionError("no guest command is expected in these tests")
+
+
+def _governance() -> SimpleNamespace:
+    return SimpleNamespace(
+        environment_identity={"environment_id": "test-only"},
+        evaluator=SimpleNamespace(
+            evaluator_id="test-evaluator",
+            version="0",
+            implementation_digest="d" * 64,
+            procedure_id="test-procedure",
+        ),
+    )
+
+
+def _task_record(task_id: str) -> dict:
+    return {
+        "instance_id": task_id,
+        "repo": "acme/widget",
+        "base_commit": "a" * 40,
+        "test_cmds": ["pytest -q tests/test_widget.py"],
+        "FAIL_TO_PASS": ["tests/test_widget.py::test_widget"],
+        "PASS_TO_PASS": [],
+        "patch": "",
+    }
+
+
+def _pool(tmp_path, *, ids=(TASK, OTHER), excluded=(), anchor: str | None = None,
+          content: str = CONTENT) -> tuple[dict, pathlib.Path]:
+    pool = build_pool(
+        task_ids=list(ids),
+        registration_sha256=content,
+        excluded=list(excluded),
+        provenance={"registration_file_sha256": anchor or hashlib.sha256(REG_BYTES).hexdigest()},
+    )
+    path = tmp_path / "candidate_pool.json"
+    path.write_bytes(canonical_bytes(pool))
+    return pool, path
+
+
+class World:
+    """One fully synthetic v2 run, plus helpers to mutate exactly one thing."""
+
+    def __init__(self, tmp_path: pathlib.Path, monkeypatch) -> None:
+        self.tmp = tmp_path
+        self.monkeypatch = monkeypatch
+        apply_repo_identity(monkeypatch)
+        self.ledger_root = use_test_ledger(monkeypatch, tmp_path)
+        # A directory the runner must never touch. The PRODUCTION root stays None.
+        self.budget_root = tmp_path / "v2_budget_root"
+        self.budget_root.mkdir()
+        # The target gate is exercised by its own tests; default the synthetic
+        # world to zero credited so unrelated tests do not need real ledgers.
+        monkeypatch.setattr(RUNNER, "_credited_count", lambda *a, **k: 0)
+
+        self.registration_file = tmp_path / "registered_tasks.json"
+        self.registration_file.write_bytes(REG_BYTES)
+        self.registration_provenance = tmp_path / "registered_tasks.provenance.json"
+        self._write_provenance(hashlib.sha256(REG_BYTES).hexdigest())
+
+        self.pool, self.pool_file = _pool(tmp_path)
+
+        self.manifest_path = tmp_path / "manifest.json"
+        self.manifest = {
+            TASK: {
+                "status": "built",
+                "workspace": str(tmp_path / "ws"),
+                "project_subdir": "",
+            }
+        }
+        self.write_manifest()
+
+        self.inputs_dir = tmp_path / "inputs"
+        self.inputs_dir.mkdir()
+        (self.inputs_dir / f"{TASK}.json").write_text(
+            json.dumps(_task_record(TASK)), encoding="utf-8"
+        )
+
+        self.gates_path = tmp_path / "gates.json"
+        self.gates_path.write_text(json.dumps(GATES), encoding="utf-8")
+
+        self.out_dir = tmp_path / "out"
+        self.staging_dir = tmp_path / "staging"
+
+        self.priv, pub = keypair()
+        self.trust_root = write_trust_root(tmp_path, {"owner": (self.priv, pub)})
+        monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT", str(self.trust_root))
+        monkeypatch.setenv(
+            "F2_AUTHORIZATION_TRUST_ROOT_SHA256", A.trust_root_digest(self.trust_root)
+        )
+
+        self.record = signed_record(
+            stage="S8-001",
+            ops=("base_gold_production",),
+            schema=RUNNER.V2_SCHEMA if hasattr(RUNNER, "V2_SCHEMA") else "f2-authorization/v2",
+            candidate_manifest_digest=self.manifest_digest,
+            registration_sha256=CONTENT,
+            candidate_pool_digest=pool_digest(self.pool),
+            registration_manifest_sha256=hashlib.sha256(REG_BYTES).hexdigest(),
+        )
+        self.record_path = write_record(tmp_path, self.record, self.priv)
+        monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(self.record_path))
+
+    # -- helpers --------------------------------------------------------- #
+    def _write_provenance(self, tasks_sha256: str, content: str = CONTENT) -> None:
+        self.registration_provenance.write_text(
+            json.dumps(
+                {
+                    "tasks_sha256": tasks_sha256,
+                    "registration_content_sha256": content,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def add_input(self, task_id: str) -> None:
+        (self.inputs_dir / f"{task_id}.json").write_text(
+            json.dumps(_task_record(task_id)), encoding="utf-8"
+        )
+
+    def write_manifest(self) -> None:
+        self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+
+    @property
+    def manifest_digest(self) -> str:
+        return hashlib.sha256(self.manifest_path.read_bytes()).hexdigest()
+
+    def reissue(self, **overrides) -> None:
+        """Re-sign the record with overrides (keeps the same trust root)."""
+        record = dict(self.record)
+        record.update(overrides)
+        if "candidate_manifest_digest" not in overrides:
+            record["candidate_manifest_digest"] = self.manifest_digest
+        self.record = record
+        self.record_path = write_record(self.tmp, record, self.priv)
+
+    def rebuild_pool(self, **kwargs) -> None:
+        _, self.pool_file = _pool(self.tmp, **kwargs)
+        self.pool = json.loads(self.pool_file.read_text(encoding="utf-8"))
+        self.reissue(candidate_pool_digest=pool_digest(self.pool))
+
+    def argv(self, **overrides) -> list[str]:
+        values = {
+            "--manifest": str(self.manifest_path),
+            "--inputs": str(self.inputs_dir),
+            "--registration-id": "REG-TEST",
+            "--registration-sha256": CONTENT,
+            "--registration-file": str(self.registration_file),
+            "--candidate-pool-file": str(self.pool_file),
+            "--ledger": str(self.tmp / "factory_ledger.jsonl"),
+            "--staging": str(self.staging_dir),
+            "--out": str(self.out_dir),
+            "--gates": str(self.gates_path),
+        }
+        values.update({k: v for k, v in overrides.items()})
+        argv: list[str] = []
+        for key, value in values.items():
+            if value is None:
+                continue
+            argv.extend([key, str(value)])
+        return argv
+
+
+@pytest.fixture
+def world(tmp_path, monkeypatch):
+    assert BUDGET.PRODUCTION_BUDGET_ROOT == pathlib.Path(
+        r"C:\Users\rober\F2_AUTHZ\budget_v2"
+    ), "the production v2 budget root is a fixed code constant"
+    return World(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def order(monkeypatch) -> list[str]:
+    """Record the REAL call order of grant verification, gate and consumption."""
+    from qwen_train import f2_s8_v2_gate as G
+
+    recorded: list[str] = []
+
+    real_require = A.require_authorized
+
+    def require(**kwargs):
+        recorded.append("grant_verify")
+        return real_require(**kwargs)
+
+    real_consume = A.verify_and_consume
+
+    def consume(**kwargs):
+        recorded.append("consume")
+        return real_consume(**kwargs)
+
+    real_reserve = A.verify_and_reserve
+
+    def reserve(**kwargs):
+        # Recorded only AFTER a reservation actually succeeded: "reserve" in the
+        # order list means budget was really spent. (The legacy consumer is not
+        # part of the live path, so "consume" must never appear.)
+        result = real_reserve(**kwargs)
+        recorded.append("reserve")
+        return result
+
+    real_preflight = G.v2_preflight
+
+    def preflight(**kwargs):
+        recorded.append("preflight")
+        return real_preflight(**kwargs)
+
+    monkeypatch.setattr(A, "require_authorized", require)
+    monkeypatch.setattr(A, "verify_and_consume", consume)
+    monkeypatch.setattr(A, "verify_and_reserve", reserve)
+    monkeypatch.setattr(G, "v2_preflight", preflight)
+    return recorded
+
+
+# ---------------------------------------------------------------------------
+# zero-side-effect assertions
+# ---------------------------------------------------------------------------
+
+
+def _snapshot(root: pathlib.Path) -> dict[str, str]:
+    if not root.exists():
+        return {}
+    return {
+        p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(root.rglob("*"))
+        if p.is_file()
+    }
+
+
+class Recorder:
+    """Counts every task invocation and returns a harmless synthetic result."""
+
+    def __init__(self, order: list[str] | None = None) -> None:
+        self.calls: list[str] = []
+        self.order = order
+
+    def __call__(self, **kwargs) -> PilotTaskResult:
+        spec = kwargs["spec"]
+        self.calls.append(spec.task_id)
+        if self.order is not None:
+            self.order.append(f"task:{spec.task_id}")
+        return PilotTaskResult(
+            task_id=spec.task_id,
+            admitted=True,
+            outcome=ADMITTED_OUTCOME,
+            outcome_class="scientific",
+            failure_class=None,
+            reason_code="",
+            detail="test-only synthetic result",
+        )
+
+
+def _assert_refused(world: World, argv, expected_code: str, order, recorder):
+    budget_before = _snapshot(world.budget_root)
+    ledger_before = _snapshot(world.ledger_root)
+    tmp_before = _snapshot(world.tmp)
+
+    with pytest.raises(SystemExit) as caught:
+        RUNNER.main(
+            argv,
+            task_runner=recorder,
+            channel=FakeChannel(),
+            governance_loader=_governance,
+            budget_ledger_root=world.budget_root,
+        )
+
+    message = str(caught.value)
+    assert f"code={expected_code}" in message, message
+    assert recorder.calls == [], "a refused invocation executed a task"
+    assert "consume" not in order, "a refused invocation consumed the grant"
+    assert "reserve" not in order, "a refused invocation reserved budget"
+    assert "task:" not in " ".join(order)
+
+    # No consumption row, no reservation, no claim, no run artifact.
+    assert AuthorizationLedger(world.ledger_root).find(
+        record_digest=A.record_digest(world.record)
+    ) is None
+    assert not world.out_dir.exists(), "a refused invocation created the run directory"
+    assert not world.staging_dir.exists()
+
+    assert _snapshot(world.budget_root) == budget_before, "the budget root changed"
+    assert _snapshot(world.ledger_root) == ledger_before, "the ledger changed"
+    assert _snapshot(world.tmp) == tmp_before, "the working tree of the run changed"
+    assert BUDGET.PRODUCTION_BUDGET_ROOT == pathlib.Path(
+        r"C:\Users\rober\F2_AUTHZ\budget_v2"
+    )
+
+
+def _run(world: World, argv, order, recorder=None):
+    recorder = recorder or Recorder(order)
+    return RUNNER.main(
+        argv,
+        task_runner=recorder,
+        channel=FakeChannel(),
+        governance_loader=_governance,
+        budget_ledger_root=world.budget_root,
+    ), recorder
+
+
+# ---------------------------------------------------------------------------
+# success ordering
+# ---------------------------------------------------------------------------
+
+
+def test_success_order_is_verify_gate_consume_then_task(world, order, monkeypatch):
+    recorder = Recorder(order)
+
+    # Count reads of the two gated artifacts from here on: the gate must read
+    # each exactly once and the runner must never reopen either.
+    real_read = pathlib.Path.read_bytes
+    reads = {str(world.registration_file): 0, str(world.pool_file): 0}
+
+    def counting(self):
+        key = str(self)
+        if key in reads:
+            reads[key] += 1
+        return real_read(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", counting)
+
+    rc, recorder = _run(world, world.argv(), order, recorder)
+
+    assert recorder.calls == [TASK], "the fake task runner was not reached exactly once"
+    assert order[0] == "grant_verify"
+    assert order.count("preflight") == 1
+    assert order.count("reserve") == 1
+    assert order.index("preflight") < order.index("reserve")
+    assert order.index("reserve") < order.index(f"task:{TASK}")
+
+    # The reservation really happened, exactly once, in budget_root.
+    entry = BUDGET.audit(A.record_digest(world.record), ledger_root=world.budget_root)
+    assert entry["slots"] == 1
+    assert entry["tasks"] == 1
+
+    # Read-once end to end: no reopen after the gate.
+    assert reads[str(world.registration_file)] == 1
+    assert reads[str(world.pool_file)] == 1
+
+    # The report carries the gate's frozen evidence, not a re-read.
+    payload = json.loads((world.out_dir / "pilot_results.json").read_text("utf-8"))
+    evidence = payload["v2_preflight"]
+    assert evidence["task_ids"] == [TASK]
+    assert evidence["registration_file_sha256"] == hashlib.sha256(REG_BYTES).hexdigest()
+    assert evidence["candidate_pool_digest"] == pool_digest(world.pool)
+    assert payload["manifest_digest"] == world.manifest_digest
+    # The post-batch audit needs real guest evidence, which a synthetic run has
+    # none of: main() reports that honestly (1) instead of claiming acceptance.
+    assert rc in (0, 1)
+
+
+def test_second_run_with_the_same_grant_is_denied(world, order):
+    _run(world, world.argv(), order)
+    second = Recorder(order)
+    budget_before = _snapshot(world.budget_root)
+    with pytest.raises(SystemExit) as caught:
+        RUNNER.main(
+            world.argv(),
+            task_runner=second,
+            channel=FakeChannel(),
+            governance_loader=_governance,
+            budget_ledger_root=world.budget_root,
+        )
+    assert "code=AUTHORIZATION_REFUSED" in str(caught.value)
+    assert second.calls == []
+    assert _snapshot(world.budget_root) == budget_before
+
+
+# ---------------------------------------------------------------------------
+# gate refusals (all before consumption)
+# ---------------------------------------------------------------------------
+
+
+
+def test_unknown_schema_refused(world, order, monkeypatch):
+    """Dispatch guard: a verified record naming no supported schema refuses."""
+    monkeypatch.setattr(
+        A, "require_authorized", lambda **kwargs: {"schema": "f2-authorization/v9"}
+    )
+    _assert_refused(world, world.argv(), "UNKNOWN_SCHEMA", order, Recorder(order))
+
+
+def test_unsigned_grant_refused(world, order):
+    payload = json.loads(world.record_path.read_text("utf-8"))
+    payload["signature"]["sig"] = "A" * 88
+    world.record_path.write_text(json.dumps(payload), encoding="utf-8")
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_grant_from_an_untrusted_signer_refused(world, order):
+    other_priv, _ = keypair()
+    world.record_path = write_record(world.tmp, world.record, other_priv, name="other.json")
+    world.monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(world.record_path))
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_wrong_stage_refused(world, order):
+    world.reissue(stage="EXPL-001")
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_wrong_operation_refused(world, order):
+    world.reissue(operations=["acquire"])
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_revoked_grant_refused(world, order):
+    trust = json.loads(world.trust_root.read_text("utf-8"))
+    trust["revoked_record_ids"] = [world.record["id"]]
+    world.trust_root.write_text(json.dumps(trust), encoding="utf-8")
+    world.monkeypatch.setenv(
+        "F2_AUTHORIZATION_TRUST_ROOT_SHA256", A.trust_root_digest(world.trust_root)
+    )
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_expired_grant_refused(world, order):
+    past = now()
+    world.reissue(
+        not_before=(past.replace(year=past.year - 2)).isoformat(),
+        not_after=(past.replace(year=past.year - 1)).isoformat(),
+    )
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_not_yet_valid_grant_refused(world, order):
+    future = now()
+    world.reissue(
+        not_before=(future.replace(year=future.year + 1)).isoformat(),
+        not_after=(future.replace(year=future.year + 2)).isoformat(),
+    )
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_malformed_timestamp_refused(world, order):
+    world.reissue(not_before="not-a-date")
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_manifest_binding_mismatch_refused(world, order):
+    world.reissue(candidate_manifest_digest="f" * 64)
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_missing_candidate_pool_argument_refused(world, order):
+    _assert_refused(
+        world, world.argv(**{"--candidate-pool-file": None}),
+        "V2_MISSING_POOL_ARG", order, Recorder(order),
+    )
+
+
+def test_missing_registration_argument_refused(world, order):
+    _assert_refused(
+        world, world.argv(**{"--registration-file": None}),
+        "V2_MISSING_REGISTRATION_ARG", order, Recorder(order),
+    )
+
+
+def test_missing_registration_file_refused(world, order):
+    world.registration_file.unlink()
+    _assert_refused(world, world.argv(), "MISSING_ARTIFACT", order, Recorder(order))
+
+
+def test_missing_provenance_refused(world, order):
+    world.registration_provenance.unlink()
+    _assert_refused(world, world.argv(), "MISSING_ARTIFACT", order, Recorder(order))
+
+
+def test_invalid_provenance_refused(world, order):
+    world.registration_provenance.write_bytes(b"{not json")
+    _assert_refused(world, world.argv(), "PROVENANCE_INVALID", order, Recorder(order))
+
+
+def test_missing_pool_file_refused(world, order):
+    world.pool_file.unlink()
+    _assert_refused(world, world.argv(), "MISSING_ARTIFACT", order, Recorder(order))
+
+
+def test_invalid_pool_schema_refused(world, order):
+    world.pool_file.write_bytes(b'{"schema":"nope"}')
+    _assert_refused(world, world.argv(), "POOL_INVALID", order, Recorder(order))
+
+
+def test_pool_digest_mismatch_refused(world, order):
+    pool = json.loads(world.pool_file.read_text("utf-8"))
+    pool["task_ids"] = sorted(pool["task_ids"] + ["evil__x-9"])
+    world.pool_file.write_bytes(canonical_bytes(pool))
+    _assert_refused(world, world.argv(), "POOL_BYTES_CHANGED", order, Recorder(order))
+
+
+def test_pool_registration_binding_mismatch_refused(world, order):
+    world.rebuild_pool(content="e" * 64)
+    _assert_refused(world, world.argv(), "POOL_BINDING_MISMATCH", order, Recorder(order))
+
+
+def test_registration_bytes_modified_refused(world, order):
+    world.registration_file.write_bytes(b'["acme__widget-1","acme__gadget-2","evil__x-9"]')
+    # The runner hashes the real registration bytes for the grant binding, so
+    # tampering is refused before the gate's later provenance check.
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_grant_registration_digest_mismatch_refused(world, order):
+    """A grant binding a DIFFERENT registration than the provenance declares.
+
+    The CLI value is set to the same wrong digest so the runner's own binding
+    check passes and the GATE is what refuses -- proving the gate, not the
+    loader, is the layer that compares the signed content digest.
+    """
+    world.reissue(registration_sha256="d" * 64)
+    _assert_refused(
+        world,
+        world.argv(**{"--registration-sha256": "d" * 64}),
+        "PROVENANCE_DIGEST_MISMATCH",
+        order,
+        Recorder(order),
+    )
+
+
+def test_coordinated_registration_provenance_tamper_refused(world, order):
+    """The attack the provenance chain alone could not see.
+
+    Registration rewritten + ``tasks_sha256`` updated + content digest and grant
+    untouched. Refused because the SIGNED pool also binds the registration's
+    raw-byte digest.
+    """
+    tampered = b'["acme__widget-1","acme__gadget-2","evil__x-9"]'
+    world.registration_file.write_bytes(tampered)
+    world._write_provenance(hashlib.sha256(tampered).hexdigest())
+    # The runner hashes the real registration bytes for the grant binding, so
+    # tampering is refused before the gate's later provenance check.
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_pool_with_a_different_registration_anchor_refused(world, order):
+    world.rebuild_pool(anchor="0" * 64)
+    # A different anchor is a bytes-changed refusal, not a missing one.
+    _assert_refused(world, world.argv(), "REGISTRATION_BYTES_CHANGED", order, Recorder(order))
+
+
+def test_out_of_pool_task_refused(world, order):
+    world.add_input("evil__x-9")
+    world.manifest = {"evil__x-9": dict(world.manifest[TASK])}
+    world.write_manifest()
+    world.reissue()
+    _assert_refused(world, world.argv(), "OUT_OF_POOL", order, Recorder(order))
+
+
+def test_excluded_task_refused(world, order):
+    world.add_input(OTHER)
+    world.rebuild_pool(
+        ids=(TASK,),
+        excluded=[{"task_id": OTHER, "reason": "terminal", "must_be_absent": True}],
+    )
+    world.manifest = {OTHER: dict(world.manifest[TASK])}
+    world.write_manifest()
+    world.reissue()
+    _assert_refused(world, world.argv(), "EXCLUDED_TASK", order, Recorder(order))
+
+
+def test_excluded_and_out_of_pool_prefers_the_exclusion(world, order):
+    world.add_input(OTHER)
+    world.rebuild_pool(
+        ids=(TASK,),
+        excluded=[{"task_id": OTHER, "reason": "terminal", "must_be_absent": True}],
+    )
+    world.manifest = {OTHER: dict(world.manifest[TASK])}
+    world.write_manifest()
+    world.reissue()
+    _assert_refused(world, world.argv(), "EXCLUDED_TASK", order, Recorder(order))
+
+
+def test_manifest_metadata_keys_are_not_treated_as_tasks(world, order):
+    """``_``-prefixed keys and ``digest_policy`` are manifest metadata.
+
+    A real manifest carries them; the gate must validate the runnable set, not
+    the raw key set, or every real run would be refused as out-of-pool.
+    """
+    world.manifest["_meta"] = {"purpose": "test"}
+    world.write_manifest()
+    world.reissue()
+    rc, recorder = _run(world, world.argv(), order)
+    assert recorder.calls == [TASK]
+    assert "preflight" in order
+
+
+
+def test_credited_task_refused(world, order):
+    AppendOnlyLedger(world.tmp / "factory_ledger.jsonl").append(
+        {"task_id": TASK, "outcome": ADMITTED_OUTCOME, "outcome_class": "scientific"}
+    )
+    _assert_refused(world, world.argv(), "CREDITED_TASK", order, Recorder(order))
+
+
+def test_terminal_task_refused(world, order):
+    AppendOnlyLedger(world.tmp / "factory_ledger.jsonl").append(
+        {"task_id": TASK, "outcome": "rejected", "outcome_class": "scientific"}
+    )
+    _assert_refused(world, world.argv(), "TERMINAL_TASK", order, Recorder(order))
+
+
+def test_invalid_ledger_evidence_refused(world, order):
+    (world.tmp / "factory_ledger.jsonl").write_text('{"seq": 9}\n', encoding="utf-8")
+    _assert_refused(world, world.argv(), "LEDGER_INVALID", order, Recorder(order))
+
+
+# ---------------------------------------------------------------------------
+# v1 compatibility and v2 non-fallthrough
+# ---------------------------------------------------------------------------
+
+
+def _v1_world(world: World) -> None:
+    rec = dict(world.record)
+    rec.pop("budget", None)
+    rec.pop("candidate_pool_digest", None)
+    rec.pop("registration_manifest_sha256", None)
+    rec["schema"] = "f2-authorization/v1"
+    world.record = rec
+    world.record_path = write_record(world.tmp, rec, world.priv)
+    world.monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(world.record_path))
+    (world.tmp / "v1_marker").write_text("v1", encoding="utf-8")
+
+
+def test_v1_grant_rejected_for_live_execution(world, order):
+    """Under owner policy OD-2, a v1 grant is prohibited from live execution."""
+    _v1_world(world)
+    recorder = Recorder(order)
+    with pytest.raises(SystemExit) as caught:
+        RUNNER.main(
+            world.argv(**{"--candidate-pool-file": None, "--registration-file": None}),
+            task_runner=recorder,
+            channel=FakeChannel(),
+            governance_loader=_governance,
+            budget_ledger_root=world.budget_root,
+        )
+    assert "code=V1_LIVE_EXECUTION_PROHIBITED" in str(caught.value)
+    assert recorder.calls == []
+    assert "preflight" not in order
+    assert "consume" not in order
+
+
+def test_v2_grant_cannot_fall_through_to_the_v1_path(world, order):
+    """Without the artifacts, a v2 grant refuses instead of running like v1."""
+    _assert_refused(
+        world,
+        world.argv(**{"--candidate-pool-file": None, "--registration-file": None}),
+        "V2_MISSING_POOL_ARG",
+        order,
+        Recorder(order),
+    )
+
+
+def test_v2_gate_failure_never_falls_back_to_v1(world, order):
+    world.add_input("evil__x-9")
+    world.manifest = {"evil__x-9": dict(world.manifest[TASK])}
+    world.write_manifest()
+    world.reissue()
+    _assert_refused(world, world.argv(), "OUT_OF_POOL", order, Recorder(order))
+    assert "preflight" in order
+    assert "consume" not in order
+
+
+def test_production_budget_root_is_fixed_code_constant(world):
+    """The production root is provisioned in code, outside the ledger."""
+    expected = pathlib.Path(r"C:\Users\rober\F2_AUTHZ\budget_v2")
+    assert BUDGET.PRODUCTION_BUDGET_ROOT == expected
+    assert BUDGET.budget_root(None) == expected
+    assert list(world.budget_root.iterdir()) == []
+
+
+def test_production_defaults_do_not_carry_the_test_seam():
+    params = inspect.signature(RUNNER.main).parameters
+    for name in ("task_runner", "channel", "governance_loader", "budget_ledger_root"):
+        assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert params[name].default is None
+    argv_default = params["argv"].default
+    assert argv_default is None
+    # No CLI option exposes the seam.
+    source = inspect.getsource(RUNNER.main)
+    assert "--task-runner" not in source
+    assert "--fake" not in source
+    assert "--budget-ledger" not in source
+
+
+
+# ---------------------------------------------------------------------------
+# registration_manifest_sha256 binding + readiness-before-reservation
+# ---------------------------------------------------------------------------
+
+
+def test_registration_manifest_digest_mismatch_refused(world, order):
+    """A signed registration_manifest_sha256 that differs from the registration
+    bytes the gate actually read must refuse BEFORE any reservation or task."""
+    world.reissue(registration_manifest_sha256="e" * 64)
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_malformed_registration_manifest_digest_refused(world, order):
+    world.reissue(registration_manifest_sha256="not-a-sha")
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_missing_registration_manifest_digest_refused(world, order):
+    """A v2 authorization missing registration_manifest_sha256 is rejected fail-closed."""
+    del world.record["registration_manifest_sha256"]
+    world.record_path = write_record(world.tmp, world.record, world.priv, name="no_reg_manifest.json")
+    world.monkeypatch.setenv("F2_AUTHORIZATION_RECORD", str(world.record_path))
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_byte_level_change_in_registration_manifest_invalidates_binding(world, order):
+    """Altering whitespace/formatting preserves JSON semantics but alters SHA-256;
+    must refuse before reservation or execution."""
+    parsed = json.loads(world.registration_file.read_bytes())
+    new_bytes = (json.dumps(parsed, indent=4) + "\n").encode("utf-8")
+    assert new_bytes != REG_BYTES
+    world.registration_file.write_bytes(new_bytes)
+    world._write_provenance(hashlib.sha256(new_bytes).hexdigest())
+    # The runner hashes the real registration bytes for the grant binding, so
+    # tampering is refused before the gate's later provenance check.
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_byte_level_change_with_updated_pool_refuses_at_reservation(world, order):
+    """If pool and provenance reflect modified bytes but grant binds original bytes,
+    verify_and_reserve refuses before budget or tasks."""
+    parsed = json.loads(world.registration_file.read_bytes())
+    new_bytes = (json.dumps(parsed, indent=4) + "\n").encode("utf-8")
+    world.registration_file.write_bytes(new_bytes)
+    new_hash = hashlib.sha256(new_bytes).hexdigest()
+    world._write_provenance(new_hash)
+    new_pool, new_pool_path = _pool(world.tmp, anchor=new_hash)
+    world.pool, world.pool_file = new_pool, new_pool_path
+    world.reissue(
+        candidate_pool_digest=pool_digest(new_pool),
+        registration_manifest_sha256=hashlib.sha256(REG_BYTES).hexdigest(),
+    )
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_matching_registration_manifest_digest_is_accepted(world, order):
+    """Positive control: the same field, equal to sha256(raw registration bytes)."""
+    world.reissue(registration_manifest_sha256=hashlib.sha256(REG_BYTES).hexdigest())
+    rc, recorder = _run(world, world.argv(), order)
+    assert recorder.calls == [TASK]
+    entry = BUDGET.audit(A.record_digest(world.record), ledger_root=world.budget_root)
+    assert entry["slots"] == 1 and entry["tasks"] == 1
+
+
+def test_readiness_failure_does_not_reserve_budget(world, order):
+    """F2-IMPL-AUTH-033 for v2: a governed-env failure must not spend any budget."""
+    budget_before = _snapshot(world.budget_root)
+    recorder = Recorder(order)
+
+    def _not_ready():
+        raise RuntimeError("governance inputs are missing: synthetic")
+
+    with pytest.raises(RuntimeError, match="governance inputs are missing"):
+        RUNNER.main(
+            world.argv(),
+            task_runner=recorder,
+            channel=FakeChannel(),
+            governance_loader=_not_ready,
+            budget_ledger_root=world.budget_root,
+        )
+    assert recorder.calls == []
+    assert "reserve" not in order
+    assert _snapshot(world.budget_root) == budget_before
+
+
+def test_wrong_hash_type_content_digest_for_registration_manifest_refused(world, order):
+    """Binding the derivation content digest (e.g. 5f3c9f47...) to
+    registration_manifest_sha256 instead of raw file bytes refuses fail-closed."""
+    world.reissue(registration_manifest_sha256=CONTENT)
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_wrong_artifact_manifest_file_digest_for_registration_manifest_refused(world, order):
+    """Binding the manifest file hash (e.g. 60c4af67...) to registration_manifest_sha256
+    instead of raw registered_tasks.json bytes refuses fail-closed."""
+    manifest_file_sha = hashlib.sha256(b'{"schema": "manifest"}').hexdigest()
+    world.reissue(registration_manifest_sha256=manifest_file_sha)
+    _assert_refused(world, world.argv(), "AUTHORIZATION_REFUSED", order, Recorder(order))
+
+
+def test_wrong_hash_type_raw_bytes_for_registration_sha256_refused(world, order):
+    """Binding the raw file byte hash to registration_sha256 instead of the derivation
+    content digest refuses fail-closed at the gate as PROVENANCE_DIGEST_MISMATCH."""
+    raw_file_sha = hashlib.sha256(REG_BYTES).hexdigest()
+    world.reissue(registration_sha256=raw_file_sha)
+    _assert_refused(
+        world,
+        world.argv(**{"--registration-sha256": raw_file_sha}),
+        "PROVENANCE_DIGEST_MISMATCH",
+        order,
+        Recorder(order),
+    )
+
+
+def test_changed_provenance_content_binding_detected(world, order):
+    """Tampering with registration_content_sha256 in provenance refuses as
+    PROVENANCE_DIGEST_MISMATCH before reservation or task execution."""
+    raw_file_sha = hashlib.sha256(REG_BYTES).hexdigest()
+    world._write_provenance(raw_file_sha, content="f" * 64)
+    _assert_refused(world, world.argv(), "PROVENANCE_DIGEST_MISMATCH", order, Recorder(order))
+
+
+def test_candidate_pool_containment_out_of_pool_manifest_refused(world, order):
+    """Manifest naming a task outside the signed pool is refused before reservation."""
+    world.add_input("unauthorized__pkg-999")
+    world.manifest["unauthorized__pkg-999"] = {
+        "status": "built",
+        "workspace": str(world.tmp / "ws"),
+        "project_subdir": "",
+    }
+    world.write_manifest()
+    world.reissue()
+    _assert_refused(world, world.argv(), "OUT_OF_POOL", order, Recorder(order))
+
+# ---------------------------------------------------------------------------
+# Step 4: intent, audit, revocation window, stuck claim, production fail-closed
+# ---------------------------------------------------------------------------
+
+
+def test_v2_intent_and_audit_bind_every_identity(world, order):
+    rc, recorder = _run(world, world.argv(), order)
+    assert recorder.calls == [TASK]
+    intent = json.loads((world.out_dir / "authorization_intent.json").read_text("utf-8"))
+    audit = json.loads((world.out_dir / "authorization_audit.json").read_text("utf-8"))
+    grant_digest = A.record_digest(world.record)
+    assert intent["grant_digest"] == grant_digest
+    assert intent["manifest_digest"] == world.manifest_digest
+    assert intent["execution_id"] == hashlib.sha256(
+        f'{grant_digest}|{world.manifest_digest}|{intent["nonce"]}'.encode("utf-8")
+    ).hexdigest()
+    assert audit["grant_digest"] == grant_digest
+    assert audit["grant_schema"] == "f2-authorization/v2"
+    assert audit["registration_sha256"] == CONTENT
+    assert audit["registration_manifest_sha256"] == hashlib.sha256(REG_BYTES).hexdigest()
+    assert audit["candidate_pool_digest"] == pool_digest(world.pool)
+    assert audit["manifest_digest"] == world.manifest_digest
+    assert audit["execution_id"] == intent["execution_id"]
+    assert audit["reservation_id"].startswith(intent["execution_id"] + ":")
+    assert audit["validated_task_ids"] == audit["executed_task_ids"] == [TASK]
+
+
+def test_v2_never_calls_verify_and_consume(world, order, monkeypatch):
+    def boom(**kwargs):
+        raise AssertionError("v2 path called verify_and_consume")
+
+    monkeypatch.setattr(A, "verify_and_consume", boom)
+    rc, recorder = _run(world, world.argv(), order)
+    assert recorder.calls == [TASK]
+
+
+def test_revocation_between_reservation_and_first_task_blocks(world, order, monkeypatch):
+    """Real trust-root revocation after reservation; no task runs."""
+    recorder = Recorder(order)
+    real_reserve = A.verify_and_reserve
+
+    def reserve_then_revoke(**kwargs):
+        result = real_reserve(**kwargs)
+        trust = json.loads(world.trust_root.read_text("utf-8"))
+        trust["revoked_record_ids"] = [world.record["id"]]
+        world.trust_root.write_text(json.dumps(trust), encoding="utf-8")
+        monkeypatch.setenv(
+            "F2_AUTHORIZATION_TRUST_ROOT_SHA256",
+            A.trust_root_digest(world.trust_root),
+        )
+        return result
+
+    monkeypatch.setattr(A, "verify_and_reserve", reserve_then_revoke)
+    with pytest.raises(SystemExit) as caught:
+        _run(world, world.argv(), order, recorder)
+    assert "code=AUTHORIZATION_REVOKED" in str(caught.value)
+    assert recorder.calls == []
+    assert BUDGET.audit(A.record_digest(world.record), ledger_root=world.budget_root)["slots"] == 1
+
+
+def test_stuck_claim_is_not_bypassed_by_a_new_run_id(world, order):
+    digest = A.record_digest(world.record)
+    gdir = world.budget_root / digest
+    gdir.mkdir(parents=True)
+    lock = gdir / ".reservation.lock"
+    lock.mkdir()
+    recorder = Recorder(order)
+    try:
+        with pytest.raises(SystemExit) as caught:
+            RUNNER.main(
+                world.argv(**{"--nonce": "a-new-nonce"}),
+                task_runner=recorder,
+                channel=FakeChannel(),
+                governance_loader=_governance,
+                budget_ledger_root=world.budget_root,
+            )
+        assert "code=STUCK_CLAIM" in str(caught.value)
+        assert recorder.calls == []
+        assert not world.out_dir.exists()
+        assert lock.is_dir()
+    finally:
+        lock.rmdir()
+
+
+def test_production_style_refuses_temp_trust_root(world, order):
+    recorder = Recorder(order)
+    with pytest.raises(SystemExit) as caught:
+        RUNNER.main(
+            world.argv(),
+            task_runner=recorder,
+            channel=FakeChannel(),
+            governance_loader=_governance,
+        )
+    assert "code=TEST_TRUST_ROOT" in str(caught.value)
+    assert recorder.calls == []
+    assert not world.out_dir.exists()
+
+
+def test_production_style_refuses_temp_production_root(world, order, monkeypatch):
+    monkeypatch.setattr(BUDGET, "PRODUCTION_BUDGET_ROOT", world.tmp / "prod")
+    recorder = Recorder(order)
+    with pytest.raises(SystemExit) as caught:
+        RUNNER.main(
+            world.argv(),
+            task_runner=recorder,
+            channel=FakeChannel(),
+            governance_loader=_governance,
+        )
+    assert "code=PRODUCTION_ROOT_TEMP" in str(caught.value)
+    assert recorder.calls == []
+
+
+def test_empty_manifest_refused_through_main(world, order):
+    world.manifest = {}
+    world.write_manifest()
+    recorder = Recorder(order)
+    with pytest.raises(SystemExit) as caught:
+        RUNNER.main(
+            world.argv(),
+            task_runner=recorder,
+            channel=FakeChannel(),
+            governance_loader=_governance,
+            budget_ledger_root=world.budget_root,
+        )
+    assert "zero runnable tasks" in str(caught.value)
+    assert recorder.calls == []
+    assert not world.out_dir.exists()
+    assert list(world.budget_root.iterdir()) == []
+
+
+def test_duplicate_gated_task_refused_through_main(world, order, monkeypatch):
+    # A JSON object cannot carry duplicate keys; this exercises the main->gate
+    # list contract with the same duplicate list the gate's direct test uses.
+    monkeypatch.setattr(RUNNER, "_gated_task_ids", lambda manifest: [TASK, TASK])
+    _assert_refused(world, world.argv(), "DUPLICATE_TASK", order, Recorder(order))
+
+def test_production_style_without_seam_refuses_temp_trust_root(world, order):
+    recorder = Recorder(order)
+    with pytest.raises(SystemExit) as caught:
+        RUNNER.main(
+            world.argv(),
+            task_runner=recorder,
+            channel=FakeChannel(),
+            governance_loader=_governance,
+        )
+    assert "code=TEST_TRUST_ROOT" in str(caught.value)
+    assert recorder.calls == []
+
+def test_target_299_proceeds_to_reservation(world, order, monkeypatch):
+    monkeypatch.setattr(RUNNER, "_credited_count", lambda *a, **k: 299)
+    rc, recorder = _run(world, world.argv(), order)
+    assert recorder.calls == [TASK]
+    assert BUDGET.audit(A.record_digest(world.record), ledger_root=world.budget_root)["slots"] == 1
+
+
+def test_target_300_refuses_with_zero_tasks_and_empty_root(world, order, monkeypatch):
+    monkeypatch.setattr(RUNNER, "_credited_count", lambda *a, **k: 300)
+    recorder = Recorder(order)
+    with pytest.raises(SystemExit) as caught:
+        _run(world, world.argv(), order, recorder)
+    assert "code=TARGET_REACHED" in str(caught.value)
+    assert recorder.calls == []
+    assert not world.out_dir.exists()
+    assert list(world.budget_root.iterdir()) == []

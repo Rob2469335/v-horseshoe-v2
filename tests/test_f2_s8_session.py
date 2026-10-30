@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import pytest
 
-from qwen_train.f2_s8_factory import ADMITTED_OUTCOME, AppendOnlyLedger, ExecutionResult
+from qwen_train.f2_s8_factory import (
+    ADMITTED_OUTCOME, REQUIRED_EVIDENCE_ROLES, AppendOnlyLedger, ExecutionResult,
+    RetryPolicy,
+)
 from qwen_train.f2_s8_session import (
     REQUIRED_GATES,
     FakeVMAdapter,
@@ -49,6 +52,15 @@ def _result(spec, outcome=ADMITTED_OUTCOME, attempt=1):
         task_id=spec.task_id, outcome=outcome, attempt=attempt,
         attempt_id=f"{spec.task_id}#{attempt}", evidence_name=f"{spec.task_id}.xml",
         evidence_sha256="c" * 64, evidence_size=10, evaluator=dict(EVAL),
+        # Decision 3: the binding identities an admission must carry.
+        evidence_record_digest="d" * 64, environment_identity="test-env",
+        execution_state_digest="e" * 64, base_state_digest="b" * 64,
+        started_at="2026-10-16T00:00:00Z", finished_at="2026-10-16T00:00:01Z",
+        repository_revision="a" * 40,
+        artifacts={r: {"name": f"{r}.bin", "sha256": "f" * 64, "size_bytes": 1}
+                   for r in REQUIRED_EVIDENCE_ROLES}
+        | {"gold_report": {"name": f"{spec.task_id}.xml", "sha256": "c" * 64,
+                           "size_bytes": 10}},
     )
 
 
@@ -263,3 +275,59 @@ class TestRunSession:
 
         with pytest.raises(SessionError, match="receipt task identity"):
             self._run(tmp_path, Liar(), lambda spec: _result(spec))
+
+class TestLifetimeAttemptCap:
+    """R1-D: the lifetime cap is NEVER widened by the session path.
+
+    The measured defect: ``run_session`` called ``run_once`` with
+    ``max_attempts=max(policy.max_attempts, used + 1)``, so a task with three
+    recorded attempts silently became a fourth.
+    """
+
+    def _seed(self, ledger, count):
+        for _ in range(count):
+            ledger.append({
+                "task_id": "o__a-1", "outcome": "timeout",
+                "outcome_class": "infrastructure", "reason": "seeded",
+            })
+
+    def test_at_the_cap_the_adapter_is_never_touched(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        self._seed(ledger, 3)
+        adapter = FakeVMAdapter()
+        res = run_session(
+            spec=_spec(), adapter=adapter, runner=lambda spec: _result(spec),
+            ledger=ledger, evaluate=lambda s, r: "pass",
+            verify_evidence=lambda s, r: True, verify_pair=lambda s, r: True,
+            policy=RetryPolicy(max_attempts=3))
+        assert res.state == "retry_exhausted"
+        assert res.record is None
+        assert adapter.calls == []
+        assert len(ledger.records()) == 3
+
+    def test_below_the_cap_the_next_attempt_is_recorded(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        self._seed(ledger, 1)
+        res = run_session(
+            spec=_spec(), adapter=FakeVMAdapter(),
+            runner=lambda spec: _result(spec, outcome="timeout", attempt=2),
+            ledger=ledger, policy=RetryPolicy(max_attempts=3))
+        assert res.record["attempt"] == 2
+        assert res.record["outcome_class"] == "infrastructure"
+        assert len(ledger.records()) == 2
+
+    def test_the_session_never_widens_the_policy_it_was_given(self, tmp_path):
+        ledger = _ledger(tmp_path)
+        self._seed(ledger, 2)
+        res = run_session(
+            spec=_spec(), adapter=FakeVMAdapter(),
+            runner=lambda spec: _result(spec, outcome="timeout", attempt=3),
+            ledger=ledger, policy=RetryPolicy(max_attempts=3))
+        assert res.record["attempt"] == 3
+        # a fourth session is refused, not silently promoted to max_attempts=4
+        res4 = run_session(
+            spec=_spec(), adapter=FakeVMAdapter(),
+            runner=lambda spec: _result(spec, outcome="timeout", attempt=4),
+            ledger=ledger, policy=RetryPolicy(max_attempts=3))
+        assert res4.state == "retry_exhausted"
+        assert len(ledger.records()) == 3

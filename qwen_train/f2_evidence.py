@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -79,6 +80,71 @@ VALID_EXECUTION_STATES = (STATE_BASE, STATE_GOLD)
 RESULT_PASS = "pass"
 RESULT_FAIL = "fail"
 RESULT_ERROR = "error"
+
+#: Marker prefixed to the persisted ``reason`` of an ERROR record (owner
+#: decision, 2026-10-18).  The OUTCOME stays the established
+#: ``infrastructure_failure``; this marker is what makes the ERROR explicitly
+#: classifiable in the hash-chained ledger without adding a second synonymous
+#: outcome to the factory's closed vocabulary.  Defined here so every writer of
+#: an ERROR record uses the identical string.
+ENVIRONMENT_ERROR_PREFIX = "ENVIRONMENT_ERROR"
+
+#: Manifest-level opt-in for the owner-authorized per-task digest policy
+#: (owner decision, 2026-10-19): a NEW F2-S8 manifest must bind BOTH the
+#: expected BASE and the expected GOLD state digest for every built task, and
+#: validation fails closed when either is absent, malformed, or when the two are
+#: identical.  A manifest that does not declare this field is HISTORICAL and is
+#: validated under the previous permissive contract -- historical manifests,
+#: grants, ledgers and evidence are never rewritten to retrofit the policy.
+DIGEST_POLICY_FIELD = "digest_policy"
+DIGEST_POLICY_PER_TASK_REQUIRED = "per-task-required"
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    return bool(re.fullmatch(r"[0-9a-f]{64}", str(value or "")))
+
+
+def per_task_digest_problems(manifest: Mapping[str, Any]) -> list[str]:
+    """Problems preventing ``manifest`` from satisfying the per-task policy.
+
+    Returns empty for a compliant manifest AND for a manifest that does not
+    declare the policy (historical documents keep their meaning).  Every built
+    task must bind both digests to well-formed, non-identical values.
+
+    A digest is an EXPECTED identity, not a measurement: satisfying this check
+    never proves a guest measured that state, that the evaluator ran correctly,
+    or that a task is admissible.
+    """
+    if not isinstance(manifest, Mapping):
+        return ["manifest is not an object"]
+    if str(manifest.get(DIGEST_POLICY_FIELD) or "") != DIGEST_POLICY_PER_TASK_REQUIRED:
+        return []
+
+    problems: list[str] = []
+    for task_id, entry in sorted(manifest.items()):
+        if str(task_id).startswith("_") or str(task_id) == DIGEST_POLICY_FIELD:
+            continue
+        if not isinstance(entry, Mapping):
+            problems.append(f"{task_id}: entry is not an object")
+            continue
+        if entry.get("status") != "built":
+            continue
+        values: dict[str, str] = {}
+        for name in ("expected_base_state_digest", "expected_gold_state_digest"):
+            value = entry.get(name)
+            if value is None or str(value).strip() == "":
+                problems.append(f"{task_id}: missing required {name}")
+                continue
+            if not _is_sha256_hex(value):
+                problems.append(f"{task_id}: malformed {name}")
+                continue
+            values[name] = str(value)
+        if (len(values) == 2
+                and values["expected_base_state_digest"]
+                == values["expected_gold_state_digest"]):
+            problems.append(
+                f"{task_id}: base and gold expected digests are identical")
+    return problems
 VALID_RESULTS = (RESULT_PASS, RESULT_FAIL, RESULT_ERROR)
 
 #: Optional failure classification, so an execution failure, an environment /
@@ -688,6 +754,7 @@ def verify_task_evidence(
     artifact_root: Path | str | None = None,
     authorized_evaluators: Mapping[str, tuple[str, ...]] | None = None,
     expected_gold_state_digest: str | None = None,
+    expected_base_state_digest: str | None = None,
 ) -> EvidenceVerification:
     """Verify the base/gold PAIR for one task.
 
@@ -696,9 +763,16 @@ def verify_task_evidence(
     they describe two DIFFERENT states; and the pair demonstrates the required
     scientific property - the base state does not pass and the gold state does.
 
-    ``expected_gold_state_digest``, when supplied, binds the gold record to a
-    curator-known reference-state digest (e.g. the Q8 ``reference_digest``)
-    WITHOUT that value ever entering a worker-facing manifest.
+    ``expected_gold_state_digest``, when supplied, must be an EXECUTION-STATE
+    digest: it is compared against the gold record's ``execution_state_digest``.
+    It is an operator/caller ASSERTION of which gold state the operator believes
+    ran, not a measurement; the current contract cannot establish that a supplied
+    digest is the genuine state of the guest.
+
+    The Q8 ``reference_digest`` (a SHA-256 over ``repo@commit``) is a digest of the
+    DERIVATION INPUT, not of execution state, and MUST NOT be passed here: it
+    belongs to a different semantic domain and would be rejected. See
+    ``docs/EXPERIMENT_J_F2_S8_GOLD_STATE_EVIDENCE_CONTRACT_PROPOSAL.md``.
     """
     if base_evidence is None and gold_evidence is None:
         return _fail(STATE_MISSING, "no base or gold evidence supplied")
@@ -777,6 +851,21 @@ def verify_task_evidence(
         return _fail(
             STATE_IDENTITY_MISMATCH,
             "gold evidence state digest does not match the expected reference "
+            "state for this task",
+        )
+
+    # Symmetric per-task base verification. Owner-authorized additive amendment
+    # (2026-10-18): the ENVIRONMENT-level pair in SWARM_S8_BASE_STATE_DIGEST /
+    # SWARM_S8_GOLD_STATE_DIGEST is an environment assertion and is preserved
+    # unchanged; these per-task expected values are a SEPARATE, finer binding
+    # carried on the task's manifest entry. A task states the exact base state it
+    # claims, and a mismatch is a hard failure -- never a warning.
+    if expected_base_state_digest is not None and (
+        base_rec.execution_state_digest != expected_base_state_digest
+    ):
+        return _fail(
+            STATE_IDENTITY_MISMATCH,
+            "base evidence state digest does not match the expected reference "
             "state for this task",
         )
 

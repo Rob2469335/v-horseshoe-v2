@@ -212,6 +212,19 @@ Each remaining item requires separate authorization. None was touched by that re
 
 ## 13. Broad pytest status
 
+**Superseded 2026-10-16.** The historical text follows; the current status is in
+`docs/TEST_PERSISTENT_STORE_ISOLATION_AUDIT.md` §18 and §18.1.
+
 **Do NOT run broad pytest yet.** This remediation alone does not authorize it.
 YELLOW-1 through YELLOW-3 and the GRAY items are unresolved, and broad pytest was
 not run to confirm the suite is otherwise unaffected.
+
+**Current (2026-10-16):** YELLOW-1 (Qdrant package-level patch), YELLOW-2
+(`test_admin_status.py` CWD redirect) and YELLOW-3 (`SWARM_WRITE_ROOT` containment)
+are closed; the GRAY items are closed in the audit's §18.1. A full suite run was
+executed under explicit owner instruction: at HEAD `15f6b48f`, **`5925 passed, 12
+skipped, 1 xfailed, 0 failed`** (exit 0, re-verified 2026-10-16; the earlier `5920`
+figure was correct for HEAD `2e024564`, before the 5 isolation-guard tests added at
+`28063091`), with both historical ledgers byte-identical before and after.
+A green suite is **not** the evidence that isolation holds — the fixtures and sweeps
+are. See the audit's §18 for that caveat.
