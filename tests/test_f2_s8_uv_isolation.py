@@ -8,6 +8,7 @@ only; production never passes one) may exempt a path.
 from __future__ import annotations
 
 import hashlib
+import os
 import pathlib
 import subprocess
 
@@ -20,6 +21,14 @@ from qwen_train.f2_s8_pilot_build import (
 )
 
 PROFILE = pathlib.Path(r"C:\Users\rober")
+
+#: These tests assert WINDOWS path semantics (drive paths, UNC/device spellings,
+#: junctions).  On POSIX the subject does not exist, so the module is not
+#: applicable there; it is not skipped to hide a failure on Windows.
+pytestmark = pytest.mark.skipif(
+    os.name != "nt",
+    reason="Windows path-spelling semantics are the subject of this module",
+)
 
 #: Captured at import time, before the suite's autouse Popen mock is installed.
 _REAL_POPEN = subprocess.Popen

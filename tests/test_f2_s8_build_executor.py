@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import hashlib
 import inspect
 import json
@@ -817,6 +818,8 @@ def test_builder_construction_failure_does_not_reserve(monkeypatch, capsys, tmp_
     from qwen_train.f2_s8_probe_driver import main as probe_main
 
     monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    if "USERNAME" not in os.environ:  # gate reads USERNAME; unset on POSIX CI
+        monkeypatch.setenv("USERNAME", getpass.getuser())
     calls = {"verify": 0, "reserve": 0}
 
     class _Stub:
@@ -871,6 +874,8 @@ def test_real_authorizer_builder_failure_never_reserves(monkeypatch, capsys, tmp
     from tests.test_f2_s8_probe_authz import _setup_probe_env
 
     monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    if "USERNAME" not in os.environ:  # gate reads USERNAME; unset on POSIX CI
+        monkeypatch.setenv("USERNAME", getpass.getuser())
 
     env = _setup_probe_env(
         tmp_path / "env",
@@ -931,6 +936,8 @@ def test_real_authorizer_normal_live_run_reserves_after_builder(monkeypatch, tmp
     from tests.test_f2_s8_probe_authz import _setup_probe_env
 
     monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    if "USERNAME" not in os.environ:  # gate reads USERNAME; unset on POSIX CI
+        monkeypatch.setenv("USERNAME", getpass.getuser())
 
     env = _setup_probe_env(
         tmp_path / "env",
@@ -1456,7 +1463,20 @@ def test_executor_forwards_its_workspace_root_to_the_builder(tmp_path):
         ws.mkdir(exist_ok=True)
         return {"task_id": task_id, "workspace": str(ws), "elapsed_s": 0.0}
 
-    ex = _default_executor(tmp_path, build_fn=build_fn, inputs=inputs)
+    (tmp_path / "patches").mkdir(exist_ok=True)
+    ex = HostBuildExecutor(
+        types.SimpleNamespace(selected_task_ids=()),
+        inputs=inputs,
+        patches=tmp_path / "patches",
+        workspace_root=tmp_path,
+        build_fn=build_fn,
+        classify_fn=pb.classify_build_failure,
+        resolve_url_fn=lambda task_id, inputs_dir: "https://example.com/x.git",
+        # This test is about workspace-root forwarding, not declaration
+        # resolution or collection; inject both so the assertion is portable.
+        declared_minor_fn=lambda task_id, inputs_dir: "3.11",
+        collect_fn=lambda *a, **k: (True, "", "test-injected"),
+    )
     ex.build_one(TASK)
     assert seen["root"] == str(tmp_path)
 
