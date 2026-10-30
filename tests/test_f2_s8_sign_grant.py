@@ -891,6 +891,17 @@ def test_verify_only_rejects_an_unbound_selection_signed_outside_main(case):
         S.main(_argv(c, record_path=out, verify_only=True))
 
 
+def test_self_consistent_alternate_selection_differs_from_the_approved_spec(case, monkeypatch):
+    """A different-but-internally-consistent selection must still match owner review."""
+    c = case
+    alt = ["task-evil"]
+    rec = dict(c["record"], selected_task_ids=alt,
+               probe_selection_digest=_runtime_selection_digest(alt))
+    _confirm(monkeypatch, rec)
+    with pytest.raises(SystemExit, match="differs from the owner-approved spec"):
+        S.main(_argv(c, record=rec))
+
+
 # ---------------------------------------------------------------------------
 # v1 records: refuse with a reason, never crash or sign an unexecutable grant
 # ---------------------------------------------------------------------------
