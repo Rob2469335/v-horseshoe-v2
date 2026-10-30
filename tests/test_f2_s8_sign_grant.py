@@ -866,6 +866,31 @@ def test_duplicate_operations_cannot_be_signed(case):
     assert not out.exists()
 
 
+def test_verify_only_rejects_an_unbound_selection_signed_outside_main(case):
+    """The verification path must enforce the invariant too.
+
+    ``S.sign()`` is a public function; a wrapper that calls it directly bypasses
+    the CLI's confirmation and validation.  ``--verify-only`` must therefore
+    refuse an otherwise-validly-signed envelope whose list does not match its
+    digest, instead of reporting it as verified.
+    """
+    c = case
+    unbound = dict(c["record"], selected_task_ids=["task-evil"])
+    key = _write_pem(c["tmp"], c["priv"])
+    from cryptography.hazmat.primitives import serialization
+
+    expected_pub = base64.b64encode(
+        c["priv"].public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+    ).decode()
+    out = c["tmp"] / "unbound.json"
+    S.sign(unbound, out=out, key_path=key, expected_public_b64=expected_pub, key_epoch=1)
+    assert out.is_file()
+    with pytest.raises(SystemExit, match="does not match probe_selection_digest"):
+        S.main(_argv(c, record_path=out, verify_only=True))
+
+
 # ---------------------------------------------------------------------------
 # v1 records: refuse with a reason, never crash or sign an unexecutable grant
 # ---------------------------------------------------------------------------

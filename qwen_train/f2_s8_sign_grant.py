@@ -927,6 +927,11 @@ def main(argv: list[str] | None = None) -> int:
         if not args.trust_root_sha256:
             raise _fail("trust root rejected: --trust-root-sha256 is required for --verify-only")
         record = _record_from_doc(_load_record_strict(rec_path), signed=True)
+        # A valid signature is not enough: the embedded record must also satisfy
+        # the same structural invariants signing enforces, so an envelope produced
+        # outside the CLI (e.g. by importing sign()) cannot be "verified" while its
+        # displayed selection is unbound from the digest that drives execution.
+        _validate_record_structure(record)
         extra: dict[str, Any] = {}
         if args.expect_bindings:
             raw_bindings = _load_record_strict(Path(args.expect_bindings))
