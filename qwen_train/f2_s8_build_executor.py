@@ -33,14 +33,31 @@ Honesty rules
 
 Not wired into ``--live``
 -------------------------
-``python -m qwen_train.f2_s8_probe_driver --live`` remains hard-refused by the
-driver's fail-closed policy. :func:`make_probe_live_builder` is the composition
-point a future, owner-approved live path would use; it is intentionally not
-called by the driver today.
+``python -m qwen_train.f2_s8_probe_driver --live`` IS wired: its ``main``
+constructs this builder via :func:`make_probe_live_builder` once ``--inputs`` and
+``--patches`` are present, the signed grant verifies, and the identity guard
+passes.  Before reserving budget it refuses with ``PROBE_PREREQUISITES_MISSING``
+when either directory is absent; construction failures are reported the same
+way and consume nothing.
+
+Compatibility means collectable
+-------------------------------
+A successful ``pilot_build.build`` proves the workspace and environment were
+created -- not that the task's declared tests exist in it.  After a successful
+build, the executor runs ``pytest --collect-only`` in the built task environment
+and marks the cell ``OBSERVED_COMPATIBLE`` only when EVERY declared
+FAIL_TO_PASS node is collected.  Otherwise the cell is a ``BUILD_FAILURE``
+carrying ``F2P_NOT_DECLARED`` / ``VENV_MISSING`` / ``TEST_CMD_UNSUPPORTED`` /
+``F2P_NOT_COLLECTED`` / ``COLLECT_TIMEOUT`` / ``COLLECT_FAILED``.  Collection is
+still not evidence that the tests fail at base or pass with the gold patch; it
+only removes "built but its declared tests do not even exist here" from the
+compatible set.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import subprocess
 from typing import Any, Callable, Iterable, Mapping
@@ -58,6 +75,121 @@ from qwen_train.f2_s8_probe_driver import (
 #: OBSERVED_INCOMPATIBLE is an owner policy decision, not an implementation
 #: default.
 DEFAULT_DETERMINISTIC_INCOMPATIBILITY_CODES: frozenset[str] = frozenset()
+
+
+def declared_contract(
+    inputs: pathlib.Path | str, task_id: str,
+) -> tuple[list[str], str]:
+    """Read the task's declared ``FAIL_TO_PASS`` nodes and first test command.
+
+    The record is the same acquisition artifact ``pilot_build.build`` consumes.
+    A missing/unreadable record raises: the caller already refuses that case.
+    """
+    path = pathlib.Path(inputs) / f"{task_id}.json"
+    if not path.is_file():
+        from qwen_train.f2_s8_precheck import _find_input_record
+
+        found = _find_input_record(pathlib.Path(inputs), task_id)
+        if found is None:
+            raise FileNotFoundError(f"task input record missing for {task_id}")
+        path = found
+    record = json.loads(path.read_text("utf-8"))
+    f2p = [str(x) for x in (record.get("FAIL_TO_PASS") or record.get("fail_to_pass") or [])]
+    cmd = str(record.get("test_cmd") or "")
+    if not cmd:
+        for entry in record.get("test_cmds") or []:
+            if isinstance(entry, str) and entry.strip():
+                cmd = entry
+                break
+            if isinstance(entry, Mapping):
+                cmd = str(entry.get("cmd") or entry.get("command") or "")
+                if cmd:
+                    break
+    return f2p, cmd
+
+
+def check_declared_nodes_collect(
+    workspace: pathlib.Path | str,
+    fail_to_pass: Iterable[str],
+    test_cmd: str = "",
+    *,
+    python: pathlib.Path | str | None = None,
+    timeout: int = 900,
+) -> tuple[bool, str, str]:
+    """Collect-only check in the built task environment.
+
+    Returns ``(ok, reason_code, detail)``.  ``ok`` is True only when every
+    declared FAIL_TO_PASS node is present in ``pytest --collect-only`` output.
+    Ordering/canonicalisation is delegated to the SAME helpers the Stage-1
+    pre-check uses, so a node accepted here is a node the scorer can resolve.
+    """
+    from qwen_train.f2_s8_precheck import (
+        _canonical_nodes,
+        _parse_collect,
+        _pytest_args,
+        _target_collected,
+        _venv_python,
+    )
+
+    targets = [str(t) for t in fail_to_pass]
+    if not targets:
+        return (
+            False,
+            "F2P_NOT_DECLARED",
+            "no declared FAIL_TO_PASS nodes; compatibility cannot be observed",
+        )
+    ws = pathlib.Path(workspace)
+    interpreter = pathlib.Path(python) if python is not None else _venv_python(ws, "base")
+    if interpreter is None or not interpreter.is_file():
+        return False, "VENV_MISSING", f"task venv interpreter not found under {ws}"
+    try:
+        pytest_args = _pytest_args(test_cmd) if test_cmd else []
+    except Exception as exc:  # noqa: BLE001 - declared command is untrusted input
+        return False, "TEST_CMD_UNSUPPORTED", str(exc)
+    project_root = ws / "repo"
+    if not project_root.is_dir():
+        return False, "WORKSPACE_INVALID", f"task repo directory missing: {project_root}"
+
+    env = dict(os.environ)
+    env["PATH"] = str(interpreter.parent) + os.pathsep + env.get("PATH", "")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    qwen_train_dir = str(pathlib.Path(__file__).resolve().parent)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{qwen_train_dir}{os.pathsep}{existing}" if existing else qwen_train_dir
+    )
+    cmd = [
+        str(interpreter), "-m", "pytest", *pytest_args,
+        "--collect-only", "-q", "-p", "no:cacheprovider",
+        "-p", "_pytest_no_network", "--no-header",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(project_root), capture_output=True, text=True,
+            timeout=timeout, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "COLLECT_TIMEOUT", f"collection exceeded {timeout}s"
+    except OSError as exc:
+        return False, "COLLECT_FAILED", f"collection could not start: {exc}"
+
+    nodes = _parse_collect(proc.stdout or "", proc.stderr or "")["nodes"]
+    canonical = _canonical_nodes(nodes)
+    missing = [t for t in targets if not _target_collected(t, nodes, canonical=canonical)]
+    if missing:
+        return (
+            False,
+            "F2P_NOT_COLLECTED",
+            f"{len(missing)} of {len(targets)} declared FAIL_TO_PASS node(s) not "
+            f"collected: {missing[:5]}",
+        )
+    if proc.returncode != 0:
+        return (
+            False,
+            "COLLECT_FAILED",
+            f"collection exited {proc.returncode} after listing every target",
+        )
+    return True, "", f"all {len(targets)} declared FAIL_TO_PASS nodes collected"
 
 
 def _load_pilot_build():
@@ -85,6 +217,7 @@ class HostBuildExecutor:
         resolve_url_fn: Callable[[str, pathlib.Path], str] | None = None,
         declared_minor_fn: Callable[[str, pathlib.Path], str | None] | None = None,
         deterministic_incompatibility_codes: Iterable[str] = DEFAULT_DETERMINISTIC_INCOMPATIBILITY_CODES,
+        collect_fn: Callable[[Any, Any, str], tuple[bool, str, str]] | None = None,
     ) -> None:
         self._authorized = authorized_run
         self._inputs = pathlib.Path(inputs)
@@ -108,6 +241,7 @@ class HostBuildExecutor:
         self._resolve_url = resolve_url_fn
         self._declared_minor = declared_minor_fn
         self._deterministic = frozenset(deterministic_incompatibility_codes)
+        self._collect = collect_fn or check_declared_nodes_collect
 
     def _workspace_root_value(self) -> pathlib.Path:
         if self._workspace_root is None:
@@ -194,6 +328,26 @@ class HostBuildExecutor:
                 f"build returned task_id {result.get('task_id')!r} for {task_id!r}"
             )
         workspace = self._validate_workspace(task_id, result.get("workspace"))
+        # A built workspace is not a compatible task: the declared tests must
+        # exist in it.  Collect-only runs in the built environment before any
+        # compatibility claim is made.
+        try:
+            f2p, test_cmd = declared_contract(self._inputs, task_id)
+        except Exception as exc:  # noqa: BLE001 - untrusted input record
+            return BuildCell(
+                task_id,
+                "BUILD_FAILURE",
+                failure=f"task input record unreadable: {str(exc)[:300]}",
+                reason_code="TASK_INPUT_INVALID",
+            )
+        collect_ok, collect_code, collect_detail = self._collect(workspace, f2p, test_cmd)
+        if not collect_ok:
+            return BuildCell(
+                task_id,
+                "BUILD_FAILURE",
+                failure=collect_detail,
+                reason_code=collect_code,
+            )
         elapsed = result.get("elapsed_s")
         return BuildCell(
             task_id,

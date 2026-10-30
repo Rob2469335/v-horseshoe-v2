@@ -23,6 +23,8 @@ from qwen_train.f2_s8_acquisition import (
 from qwen_train.f2_s8_build_executor import (
     DEFAULT_DETERMINISTIC_INCOMPATIBILITY_CODES,
     HostBuildExecutor,
+    check_declared_nodes_collect,
+    declared_contract,
     make_probe_live_builder,
 )
 from qwen_train.f2_s8_cleanup import CleanupRefused, cleanup_failed_build
@@ -53,7 +55,8 @@ def _input(tmp_path, task=TASK):
 
 def _executor(tmp_path, *, build_fn, classify_fn=lambda e: "BUILD_FAILURE_UNCLASSIFIED",
               resolve_url_fn=lambda t, i: "https://example.com/acme/widget.git",
-              declared_minor_fn=lambda t, i: "3.11", deterministic=()):
+              declared_minor_fn=lambda t, i: "3.11", deterministic=(),
+              collect_fn=None):
     inputs = _input(tmp_path)
     patches = tmp_path / "patches"
     patches.mkdir(exist_ok=True)
@@ -67,6 +70,7 @@ def _executor(tmp_path, *, build_fn, classify_fn=lambda e: "BUILD_FAILURE_UNCLAS
         resolve_url_fn=resolve_url_fn,
         declared_minor_fn=declared_minor_fn,
         deterministic_incompatibility_codes=deterministic,
+        collect_fn=collect_fn or (lambda ws, f2p, cmd: (True, "", "injected-ok")),
     )
 
 
@@ -191,6 +195,7 @@ def test_foreign_task_refused(tmp_path):
         classify_fn=lambda e: "X",
         resolve_url_fn=lambda t, i: "u",
         declared_minor_fn=lambda t, i: "3.11",
+        collect_fn=lambda *a, **k: (True, "", "test-injected"),
     )
     with pytest.raises(BuilderContractError, match="not in the authorized probe selection"):
         ex.build_one(TASK)
@@ -213,6 +218,7 @@ def test_integration_with_live_builder_and_run_probe(tmp_path):
         classify_fn=lambda e: "BUILD_FAILURE_UNCLASSIFIED",
         resolve_url_fn=lambda t, i: "https://example.com/acme/widget.git",
         declared_minor_fn=lambda t, i: "3.11",
+        collect_fn=lambda *a, **k: (True, "", "test-injected"),
     )
     assert isinstance(builder, LiveBuilder)
 
@@ -323,6 +329,7 @@ def test_run_probe_aborts_on_authorization_revalidation_failure(tmp_path):
         classify_fn=lambda e: "BUILD_FAILURE_UNCLASSIFIED",
         resolve_url_fn=lambda t, i: "https://example.com/r.git",
         declared_minor_fn=lambda t, i: "3.11",
+        collect_fn=lambda *a, **k: (True, "", "test-injected"),
     )
     builder = LiveBuilder(ex.build_one, workspace_root=tmp_path)
     result = run_probe(
@@ -509,6 +516,7 @@ def _executor_at(tmp_path, root, build_fn):
         classify_fn=lambda e: "BUILD_FAILURE_UNCLASSIFIED",
         resolve_url_fn=lambda t, i: "https://example.com/r.git",
         declared_minor_fn=lambda t, i: "3.11",
+        collect_fn=lambda *a, **k: (True, "", "test-injected"),
     )
 
 
@@ -588,6 +596,7 @@ def test_mid_batch_authorization_abort_records_completed_cells(tmp_path):
         classify_fn=lambda e: "BUILD_FAILURE_UNCLASSIFIED",
         resolve_url_fn=lambda t, i: "https://example.com/r.git",
         declared_minor_fn=lambda t, i: "3.11",
+        collect_fn=lambda *a, **k: (True, "", "test-injected"),
     )
     builder = LiveBuilder(ex.build_one, workspace_root=tmp_path)
 
@@ -1230,6 +1239,9 @@ def _default_executor(tmp_path, *, auth=(), build_fn=None, inputs=None, patches=
         build_fn=build_fn or (lambda task_id, url, **kw: {}),
         classify_fn=pb.classify_build_failure,
         resolve_url_fn=lambda task_id, inputs_dir: "https://example.com/x.git",
+        # Collection is not what this helper exercises (it has no built venv);
+        # the dedicated collection tests cover the real gate.
+        collect_fn=lambda *a, **k: (True, "", "test-injected"),
     )
 
 
@@ -1490,3 +1502,91 @@ def test_build_passes_its_root_to_workspace_preservation(tmp_path, monkeypatch):
     assert pathlib.Path(seen["root"]) == root
 
 
+
+
+# ---------------------------------------------------------------------------
+# "Compatible" must mean "collectable"
+# ---------------------------------------------------------------------------
+
+_REAL_POPEN = subprocess.Popen
+
+
+@pytest.fixture
+def real_subprocess(monkeypatch):
+    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
+
+
+def _collectable_workspace(tmp_path):
+    repo = tmp_path / "ws" / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / "tests" / "test_sample.py").write_text(
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n",
+        "utf-8",
+    )
+    return tmp_path / "ws"
+
+
+def test_collect_check_passes_only_when_every_declared_node_collects(tmp_path, real_subprocess):
+    ws = _collectable_workspace(tmp_path)
+    ok, code, detail = check_declared_nodes_collect(
+        ws,
+        ["tests/test_sample.py::test_one", "tests/test_sample.py::test_two"],
+        python=os.sys.executable,
+    )
+    assert ok is True, (code, detail)
+
+
+def test_collect_check_rejects_a_node_that_does_not_exist(tmp_path, real_subprocess):
+    ws = _collectable_workspace(tmp_path)
+    ok, code, detail = check_declared_nodes_collect(
+        ws,
+        ["tests/test_sample.py::test_one", "tests/test_sample.py::test_absent"],
+        python=os.sys.executable,
+    )
+    assert ok is False
+    assert code == "F2P_NOT_COLLECTED"
+    assert "test_absent" in detail
+
+
+def test_collect_check_requires_declared_nodes(tmp_path):
+    ok, code, _detail = check_declared_nodes_collect(tmp_path / "ws", [])
+    assert ok is False and code == "F2P_NOT_DECLARED"
+
+
+def test_compatible_requires_collection_to_succeed(tmp_path):
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(task_id, url, **kw):
+        return {"task_id": task_id, "workspace": str(ws), "elapsed_s": 1.0}
+
+    cell = _executor(
+        tmp_path, build_fn=build_fn,
+        collect_fn=lambda _ws, _f2p, _cmd: (False, "F2P_NOT_COLLECTED", "missing nodes"),
+    ).build_one(TASK)
+    assert cell.classification == "BUILD_FAILURE"
+    assert cell.reason_code == "F2P_NOT_COLLECTED"
+
+
+def test_compatible_is_returned_when_collection_succeeds(tmp_path):
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(task_id, url, **kw):
+        return {"task_id": task_id, "workspace": str(ws), "elapsed_s": 1.0}
+
+    cell = _executor(tmp_path, build_fn=build_fn).build_one(TASK)
+    assert cell.classification == "OBSERVED_COMPATIBLE"
+
+
+def test_declared_contract_reads_f2p_and_test_cmd(tmp_path):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / f"{TASK}.json").write_text(json.dumps({
+        "FAIL_TO_PASS": ["tests/test_a.py::test_x"],
+        "test_cmds": ["pytest -q tests/test_a.py"],
+    }), "utf-8")
+    f2p, cmd = declared_contract(inputs, TASK)
+    assert f2p == ["tests/test_a.py::test_x"]
+    assert cmd == "pytest -q tests/test_a.py"
