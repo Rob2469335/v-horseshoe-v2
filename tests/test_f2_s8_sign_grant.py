@@ -73,6 +73,26 @@ class _Pipe:
         return ""
 
 
+def _runtime_selection_digest(task_ids) -> str:
+    """The RUNTIME's canonicalisation, duplicated here on purpose.
+
+    Deliberately NOT ``S.selection_digest``: a test that calls the signer's own
+    helper cannot detect a wrong canonicalisation in the signer.  This is the
+    exact expression from
+    ``f2_s8_probe_driver.compute_ordered_probe_candidates``.
+    """
+    return hashlib.sha256(
+        json.dumps(list(task_ids), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+TASKS = [
+    "openai__openai-agents-python-1619",
+    "a2aproject__a2a-python-443",
+]
+SELECTION = _runtime_selection_digest(TASKS)
+
+
 def _record(**over):
     """The approval substance (no revision: that is bound to live git)."""
     rec = {
@@ -93,10 +113,7 @@ def _record(**over):
         "retention_policy": "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE",
         "allowed_identities": ["f2builder"],
         "network_policy": "CONTROLLED_ACQUISITION_OFFLINE_EXECUTION",
-        "selected_task_ids": [
-            "openai__openai-agents-python-1619",
-            "a2aproject__a2a-python-443",
-        ],
+        "selected_task_ids": list(TASKS),
         "target_compatible": 2,
         "target_credited": 0,
         "awards_credits": False,
@@ -660,12 +677,9 @@ def test_wrong_revision_is_refused(case, monkeypatch):
 
 @pytest.mark.parametrize("field,value", [
     ("probe_pool_digest", "1" * 64),
-    ("probe_selection_digest", "2" * 64),
     ("candidate_manifest_digest", "3" * 64),
     ("registration_sha256", "4" * 64),
     ("registration_manifest_sha256", "5" * 64),
-    ("selected_task_ids", ["a2aproject__a2a-python-443",
-                           "openai__openai-agents-python-1619"]),
     ("budget", {"max_executions": 1, "max_total_tasks": 99,
                 "batch_limit": 99, "max_retries": 5}),
     ("network_policy", "OFFLINE_WHEELHOUSE_ONLY"),
@@ -728,3 +742,196 @@ def test_scope_escalation_is_refused(case, monkeypatch):
     _confirm(monkeypatch, invalid)
     with pytest.raises(SystemExit, match="scope escalation"):
         S.main(_argv(c))
+
+
+# ---------------------------------------------------------------------------
+# Approval integrity: the displayed task list IS the digested selection
+# ---------------------------------------------------------------------------
+
+def test_selection_helper_matches_the_runtime_function():
+    """The signer's canonicalisation must equal the runtime's, byte for byte."""
+    from qwen_train.f2_s8_probe_driver import compute_ordered_probe_candidates
+
+    compat = {tid: "UNKNOWN" for tid in TASKS}
+    _pool, selected, runtime_digest = compute_ordered_probe_candidates(
+        registration_order=list(TASKS), compat_classes=compat, max_tasks=15,
+    )
+    assert selected == TASKS
+    assert S.selection_digest(selected) == runtime_digest
+    assert _runtime_selection_digest(TASKS) == runtime_digest
+
+
+def test_canonical_summary_shows_the_verified_bound_selection():
+    text = S._canonical_summary(_record())
+    for tid in TASKS:
+        assert tid in text
+    assert _runtime_selection_digest(TASKS) in text
+    assert "verified" in text
+
+
+def test_list_changed_but_digest_kept_is_refused():
+    rec = _record(selected_task_ids=["task-evil"])
+    with pytest.raises(SystemExit, match="does not match probe_selection_digest"):
+        S._validate_record_structure(rec)
+
+
+def test_digest_changed_but_list_kept_is_refused():
+    rec = _record(probe_selection_digest=_runtime_selection_digest(["task-evil"]))
+    with pytest.raises(SystemExit, match="does not match probe_selection_digest"):
+        S._validate_record_structure(rec)
+
+
+def test_reversed_order_is_refused():
+    rec = _record(selected_task_ids=list(reversed(TASKS)))
+    with pytest.raises(SystemExit, match="does not match probe_selection_digest"):
+        S._validate_record_structure(rec)
+
+
+def test_reversed_order_with_its_own_digest_still_differs_from_the_original():
+    """Ordering is significant: the reversed digest is a different selection."""
+    reversed_ids = list(reversed(TASKS))
+    assert _runtime_selection_digest(reversed_ids) != _runtime_selection_digest(TASKS)
+    rec = _record(selected_task_ids=reversed_ids,
+                  probe_selection_digest=_runtime_selection_digest(reversed_ids))
+    # The record is internally consistent; it must differ from the committed spec.
+    assert S.selection_digest(rec["selected_task_ids"]) == rec["probe_selection_digest"]
+
+
+def test_missing_list_with_a_digest_is_refused():
+    rec = _record()
+    rec.pop("selected_task_ids")
+    with pytest.raises(SystemExit, match="no selected_task_ids"):
+        S._validate_record_structure(rec)
+
+
+def test_list_without_a_digest_is_refused():
+    rec = _record(
+        operations=["base_gold_production"],
+        target_credited=300,
+        awards_credits=True,
+        candidate_pool_digest="9" * 64,
+    )
+    rec.pop("probe_selection_digest")
+    with pytest.raises(SystemExit, match="without probe_selection_digest"):
+        S._validate_record_structure(rec)
+
+
+def test_benign_list_with_a_digest_for_other_tasks_cannot_be_signed(case):
+    """The exploit Claude described: a harmless displayed list + a different digest."""
+    c = case
+    exploit = dict(c["record"],
+                   selected_task_ids=list(TASKS),
+                   probe_selection_digest=_runtime_selection_digest(["task-evil"]))
+    out = c["tmp"] / "signed.json"
+    with pytest.raises(SystemExit, match="does not match probe_selection_digest"):
+        S.main(_argv(c, record=exploit, out=out))
+    assert not out.exists()
+    assert not c["audit"].exists()
+
+
+def test_selection_binding_is_checked_before_the_confirmation_prompt(case, monkeypatch):
+    """A refused selection must never reach the TTY prompt (or the key)."""
+    c = case
+    monkeypatch.setattr(sys, "stdin", _Pipe())  # non-TTY: would fail differently
+    exploit = dict(c["record"], selected_task_ids=["task-evil"])
+    with pytest.raises(SystemExit, match="does not match probe_selection_digest"):
+        S.main(_argv(c, record=exploit))
+
+
+# ---------------------------------------------------------------------------
+# Signer validation must not accept records the runtime verifier rejects
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("label,over,match", [
+    ("duplicate operations", {"operations": ["build_probe", "build_probe"]},
+     "duplicate operations"),
+    ("non-string operation", {"operations": ["build_probe", 7]},
+     "list of strings"),
+    ("non-string id", {"id": 123}, "id must be a non-empty string"),
+    ("empty id", {"id": ""}, "id must be a non-empty string"),
+    ("None id", {"id": None}, "id must be a non-empty string"),
+])
+def test_record_shapes_the_runtime_rejects_are_refused(label, over, match):
+    rec = _record(**over)
+    with pytest.raises(SystemExit, match=match):
+        S._validate_record_structure(rec)
+
+
+def test_duplicate_operations_cannot_be_signed(case):
+    c = case
+    out = c["tmp"] / "signed.json"
+    bad = dict(c["record"], operations=["build_probe", "build_probe"])
+    with pytest.raises(SystemExit, match="duplicate operations"):
+        S.main(_argv(c, record=bad, out=out))
+    assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Revision input is validated BEFORE any Git call
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("make_rev", [
+    lambda rev: rev[:12],
+    lambda rev: rev.upper(),
+    lambda rev: "HEAD",
+    lambda rev: " " + rev,
+    lambda rev: rev + "0",
+])
+def test_malformed_expect_revision_is_refused(case, monkeypatch, make_rev):
+    c = case
+    _confirm(monkeypatch, c["record"])
+    bad_rev = make_rev(c["rev"])
+    out = c["tmp"] / "signed.json"
+    with pytest.raises(SystemExit, match="full 40-character lowercase commit id"):
+        S.main(_argv(c, out=out, rev=bad_rev))
+    assert not out.exists()
+
+
+def test_option_like_revision_reaches_validation_and_is_refused(case, monkeypatch):
+    """``--expect-revision=--output=...`` must be rejected by our check.
+
+    The separate-argument form is consumed by argparse as an option, so the
+    equals form is used here to prove the value is validated rather than handed
+    to Git.
+    """
+    c = case
+    _confirm(monkeypatch, c["record"])
+    out = c["tmp"] / "signed.json"
+    argv = _argv(c, out=out)
+    idx = argv.index("--expect-revision")
+    argv[idx:idx + 2] = ["--expect-revision=--output=C:/tmp/evil"]
+    with pytest.raises(SystemExit, match="full 40-character lowercase commit id"):
+        S.main(argv)
+    assert not out.exists()
+
+
+def test_revision_validation_does_not_rely_on_git_failure():
+    """The helper itself refuses before Git is invoked."""
+    for value in ("", "HEAD", "abc1234", "A" * 40, "0" * 39, "  " + "0" * 40):
+        with pytest.raises(SystemExit, match="full 40-character lowercase commit id"):
+            S._require_full_revision(value, "--expect-revision")
+    assert S._require_full_revision("a" * 40, "--expect-revision") == "a" * 40
+
+
+# ---------------------------------------------------------------------------
+# Documented audit-log limitation: envelope first, audit append second
+# ---------------------------------------------------------------------------
+
+def test_audit_append_failure_leaves_a_signed_artifact(case, monkeypatch):
+    """Pins the documented limitation instead of claiming atomicity.
+
+    If this behaviour ever changes (audit written first, or the output rolled
+    back), this test must be updated deliberately.
+    """
+    c = case
+    _confirm(monkeypatch, c["record"])
+    bad_audit = c["tmp"] / "missing_dir" / "audit.jsonl"
+    out = c["tmp"] / "signed.json"
+    with pytest.raises(SystemExit, match="parent directory does not exist"):
+        S.main(_argv(c, out=out, audit=bad_audit))
+    assert out.is_file(), (
+        "the envelope is written before the audit append; a failed append leaves "
+        "a signed artifact that the operator must treat as unaudited"
+    )
+    assert not bad_audit.exists()
+

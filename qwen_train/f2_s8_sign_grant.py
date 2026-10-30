@@ -34,11 +34,36 @@ Safety properties (all fail closed)
   signature on that spec);
 * refuses unless the record's structure passes the same budget / network /
   identity / selection loaders the runtime gate uses;
+* refuses unless ``selected_task_ids`` is exactly the ordered pre-image of
+  ``probe_selection_digest`` (recomputed with the runtime's own canonical
+  expression), so the list shown to the owner is the selection the gate
+  compares against what it will actually execute;
+* refuses unless ``--expect-revision`` is a full 40-character lowercase commit id
+  (validated BEFORE any Git call, so no option-like or expression value reaches
+  Git);
 * refuses to sign without a TTY and an exactly typed confirmation of the
   record digest prefix (no unattended signing oracle);
 * appends one audit line to an explicitly supplied path OUTSIDE the repository;
 * never consumes a grant, reserves budget, or starts a pilot - it only signs and,
   with ``--verify-only``, re-verifies non-consumingly.
+
+Audit log: what it does and does NOT guarantee
+----------------------------------------------
+* DESTINATION: the path must be absolute, its parent must already exist, and it
+  must resolve outside the signed worktree.  The resolved target is what is
+  written, so a symlink pointing into the repo is refused.
+* APPEND: the file is opened in append mode and one JSON line is written,
+  flushed and fsynced.  An existing record is never truncated or rewritten.
+* DURABILITY: the signed envelope is written FIRST; the audit line is appended
+  afterwards.  If the append fails (permissions, removed directory, full disk,
+  crash) the tool exits non-zero but a VALID SIGNED ARTIFACT MAY ALREADY EXIST
+  without an audit record.  A non-zero exit must never be treated as "nothing
+  happened"; treat the run as unaudited and inspect the output path.
+* CONCURRENCY: there is no lock.  Two concurrent signers can interleave lines,
+  and a crash can leave a partial final line.
+* PARENT TRUST: only "the parent is a directory" is checked.  Ownership/ACLs of
+  the parent directory are NOT verified, so a world-writable parent is accepted;
+  the owner must choose a directory whose custody they control.
 
 Usage
 -----
@@ -109,6 +134,40 @@ _REQUIRED = (
 _SPEC_SCHEMA = "f2-expected-grant/v1"
 _SPEC_KEYS = frozenset({"schema", "approved_record_sha256", "approved_record"})
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+_FULL_REVISION = re.compile(r"[0-9a-f]{40}")
+
+
+def _require_full_revision(value: Any, label: str) -> str:
+    """Reject anything that is not a full lowercase 40-hex commit id.
+
+    The revision is handed to Git as ``<rev>:<path>``; validating it BEFORE any
+    Git call removes option-like, abbreviated, whitespace-bearing and
+    expression-style inputs instead of relying on a Git failure to reject them.
+    """
+    if not isinstance(value, str) or not _FULL_REVISION.fullmatch(value):
+        raise _fail(
+            f"{label} must be a full 40-character lowercase commit id "
+            f"(got {value!r}); abbreviations, expressions and option-like "
+            "values are not accepted"
+        )
+    return value
+
+
+def selection_digest(task_ids: "list[str] | tuple[str, ...]") -> str:
+    """The runtime's ``probe_selection_digest`` over an ORDERED id list.
+
+    Byte-for-byte the expression in
+    ``f2_s8_probe_driver.compute_ordered_probe_candidates``::
+
+        sha256(json.dumps(selected, separators=(",", ":")).encode("utf-8"))
+
+    Ordering is preserved (no sorting): the runtime treats the list order as
+    significant, so this function must too.
+    """
+    return hashlib.sha256(
+        json.dumps(list(task_ids), separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
 
 #: Fields the expected-grant spec may not carry: the revision is bound to live
 #: git at signing time and re-checked against ``--expect-revision``, so it must
@@ -276,6 +335,7 @@ def _verify_expected_grant_provenance(
             "missing or malformed --expected-grant-sha256 "
             "(64 lowercase hex required to pin the approved spec)"
         )
+    revision = _require_full_revision(revision, "--expect-revision")
     if not spec_path.is_file():
         raise _fail(f"expected-grant spec not present: {spec_path}")
     resolved = spec_path.resolve()
@@ -316,9 +376,19 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
     from qwen_train import f2_authz_budget as B
 
     stage = str(record.get("stage"))
+    rid = record.get("id")
+    # Mirrors f2_authorization.verify_authorization: the id must be a
+    # non-empty string (the verifier accepts whitespace-only ids, so this
+    # check does not add a restriction the runtime does not have).
+    if not isinstance(rid, str) or not rid:
+        raise _fail("authorization record id must be a non-empty string")
     ops = record.get("operations")
     if not isinstance(ops, list) or not ops:
         raise _fail("record operations must be a non-empty list")
+    if any(not isinstance(op, str) for op in ops):
+        raise _fail("record operations must be a list of strings")
+    if len(set(ops)) != len(ops):
+        raise _fail("record contains duplicate operations")
     allowed = A.STAGE_OPERATIONS.get(stage)
     if allowed is None:
         raise _fail(f"record declares unsupported stage: {stage!r}")
@@ -400,7 +470,31 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
                 f"0..{budget['max_total_tasks']}"
             )
 
-    if "selected_task_ids" in record:
+    # ---- approval integrity: the displayed list IS the digested selection ----
+    # The runtime gate ignores a record's ``selected_task_ids`` entirely and
+    # executes the selection it recomputes from the compat report, comparing
+    # only ``probe_selection_digest``.  If the signer does not bind the two, the
+    # owner can confirm a benign list while a different selection executes.
+    declared_digest = record.get("probe_selection_digest")
+    has_list = "selected_task_ids" in record
+    if declared_digest is not None:
+        if not isinstance(declared_digest, str) or not _HEX64.fullmatch(declared_digest):
+            raise _fail(
+                "record probe_selection_digest must be 64 lowercase hex, "
+                f"got {declared_digest!r}"
+            )
+        if not has_list:
+            raise _fail(
+                "record declares probe_selection_digest but no selected_task_ids; "
+                "the owner cannot review an unseen selection"
+            )
+    elif has_list:
+        raise _fail(
+            "record declares selected_task_ids without probe_selection_digest; "
+            "an undigested task list cannot be bound to execution"
+        )
+
+    if has_list:
         selected = record["selected_task_ids"]
         if not isinstance(selected, list) or not selected:
             raise _fail("record selected_task_ids must be a non-empty list")
@@ -408,6 +502,14 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
             raise _fail("record selected_task_ids entries must be non-empty strings")
         if len(set(selected)) != len(selected):
             raise _fail("record selected_task_ids contains duplicates")
+        recomputed = selection_digest(selected)
+        if recomputed != declared_digest:
+            raise _fail(
+                "record selected_task_ids does not match probe_selection_digest: "
+                f"digest over the displayed list is {recomputed}, record declares "
+                f"{declared_digest}; refusing to sign a selection the owner did "
+                "not see"
+            )
         if len(selected) > budget["max_total_tasks"]:
             raise _fail(
                 f"record selects {len(selected)} tasks but max_total_tasks is "
@@ -440,8 +542,21 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
 
 
 def _canonical_summary(record: Mapping[str, Any]) -> str:
-    """Human-readable canonical summary printed before the confirmation prompt."""
+    """Human-readable canonical summary printed before the confirmation prompt.
+
+    Every selection-related line is printed only from a record that already
+    passed :func:`_validate_record_structure`, so the list below is the exact
+    pre-image of ``probe_selection_digest`` (the value the runtime gate
+    compares against its own recomputation).
+    """
     budget = record.get("budget") or {}
+    selected = list(record.get("selected_task_ids") or [])
+    selection_line = (
+        f"selection digest : {record.get('probe_selection_digest')} "
+        f"(verified: sha256 of the ordered list below)"
+        if selected else
+        f"selection digest : {record.get('probe_selection_digest')}"
+    )
     lines = [
         "=== SIGNING REQUEST - REVIEW BEFORE CONFIRMING ===",
         f"record id        : {record.get('id')}",
@@ -452,9 +567,8 @@ def _canonical_summary(record: Mapping[str, Any]) -> str:
         f"manifest digest  : {record.get('candidate_manifest_digest')}",
         f"registration     : {record.get('registration_sha256')}",
         f"pool digest      : {record.get('probe_pool_digest')}",
-        f"selection digest : {record.get('probe_selection_digest')}",
-        f"selected tasks   : {len(record.get('selected_task_ids') or [])} "
-        f"{list(record.get('selected_task_ids') or [])}",
+        selection_line,
+        f"selected tasks   : {len(selected)} {selected}",
         f"budget           : max_total_tasks={budget.get('max_total_tasks')} "
         f"batch_limit={budget.get('batch_limit')} max_retries={budget.get('max_retries')} "
         f"max_executions={budget.get('max_executions')}",
@@ -518,6 +632,7 @@ def preflight(
     now: _dt.datetime,
 ) -> dict[str, Any]:
     """Fail-closed preflight. Returns ``{"key_epoch": int, "key_public_b64": str}``."""
+    _require_full_revision(expect_revision, "--expect-revision")
     for field in _REQUIRED:
         if field not in record:
             raise _fail(f"record missing required field: {field!r}")
