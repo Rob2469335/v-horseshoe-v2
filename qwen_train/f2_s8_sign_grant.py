@@ -136,6 +136,10 @@ _SPEC_KEYS = frozenset({"schema", "approved_record_sha256", "approved_record"})
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _FULL_REVISION = re.compile(r"[0-9a-f]{40}")
 
+#: The runtime gate's fallback when a record declares no budget object
+#: (``f2_s8_v2_gate.py:953``: ``int(raw_budget.get("max_total_tasks") or 50)``).
+_GATE_DEFAULT_MAX_TOTAL_TASKS = 50
+
 
 def _require_full_revision(value: Any, label: str) -> str:
     """Reject anything that is not a full lowercase 40-hex commit id.
@@ -376,6 +380,9 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
     from qwen_train import f2_authz_budget as B
 
     stage = str(record.get("stage"))
+    schema = record.get("schema")
+    if schema not in _SCHEMAS:
+        raise _fail(f"record declares unsupported schema: {schema!r}")
     rid = record.get("id")
     # Mirrors f2_authorization.verify_authorization: the id must be a
     # non-empty string (the verifier accepts whitespace-only ids, so this
@@ -396,6 +403,25 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
     if outside:
         raise _fail(f"record scope escalation: {outside} outside stage {stage}")
 
+    if schema == A.SCHEMA:
+        # Mirror the v1 branch of verify_authorization: these fields are v2-only,
+        # and an S8 probe grant cannot be v1 because the probe gate requires
+        # registration_manifest_sha256, which v1 forbids.  Refuse with a reason
+        # instead of crashing or producing an unexecutable signature.
+        forbidden = [name for name in
+                     ("budget", "candidate_pool_digest", "registration_manifest_sha256")
+                     if name in record]
+        if forbidden:
+            raise _fail(
+                f"v1 authorization record must not declare {forbidden} (the runtime "
+                "rejects those v2-only fields); S8 grants are f2-authorization/v2"
+            )
+        if "build_probe" in ops:
+            raise _fail(
+                "an S8 build_probe grant must use f2-authorization/v2: the probe "
+                "gate requires registration_manifest_sha256, which v1 forbids"
+            )
+
     for name in ("candidate_manifest_digest", "registration_sha256"):
         value = record.get(name)
         if not isinstance(value, str) or not _HEX64.fullmatch(value):
@@ -408,6 +434,13 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
         budget = B.budget_of(record)  # same validator the gate/budget path uses
     except B.BudgetError as exc:
         raise _fail(f"record budget rejected: {exc}") from exc
+    # ``budget_of`` returns None for a v1 record (v1 forbids the budget object).
+    # The runtime gate then falls back to its documented default, so mirror that
+    # instead of subscripting None.
+    max_total = (
+        budget["max_total_tasks"] if budget is not None
+        else _GATE_DEFAULT_MAX_TOTAL_TASKS
+    )
 
     is_probe = "build_probe" in ops
     if is_probe:
@@ -449,25 +482,25 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
                 f"got {value!r}"
             )
 
-    raw_budget = record.get("budget")
+    raw_budget = record.get("budget") or {}
     batch_limit = raw_budget.get("batch_limit")
     if batch_limit is not None:
         if isinstance(batch_limit, bool) or not isinstance(batch_limit, int):
             raise _fail("record budget.batch_limit must be an integer when declared")
-        if not 1 <= batch_limit <= budget["max_total_tasks"]:
+        if not 1 <= batch_limit <= max_total:
             raise _fail(
                 f"record budget.batch_limit {batch_limit} outside "
-                f"1..{budget['max_total_tasks']}"
+                f"1..{max_total}"
             )
 
     target_compatible = record.get("target_compatible")
     if target_compatible is not None:
         if isinstance(target_compatible, bool) or not isinstance(target_compatible, int):
             raise _fail("record target_compatible must be an integer")
-        if not 0 <= target_compatible <= budget["max_total_tasks"]:
+        if not 0 <= target_compatible <= max_total:
             raise _fail(
                 f"record target_compatible {target_compatible} outside "
-                f"0..{budget['max_total_tasks']}"
+                f"0..{max_total}"
             )
 
     # ---- approval integrity: the displayed list IS the digested selection ----
@@ -510,10 +543,10 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
                 f"{declared_digest}; refusing to sign a selection the owner did "
                 "not see"
             )
-        if len(selected) > budget["max_total_tasks"]:
+        if len(selected) > max_total:
             raise _fail(
                 f"record selects {len(selected)} tasks but max_total_tasks is "
-                f"{budget['max_total_tasks']}"
+                f"{max_total}"
             )
         if batch_limit is not None and len(selected) > batch_limit:
             raise _fail(

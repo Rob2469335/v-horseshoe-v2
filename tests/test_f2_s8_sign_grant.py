@@ -867,6 +867,27 @@ def test_duplicate_operations_cannot_be_signed(case):
 
 
 # ---------------------------------------------------------------------------
+# v1 records: refuse with a reason, never crash or sign an unexecutable grant
+# ---------------------------------------------------------------------------
+
+def test_v1_probe_grant_is_refused_with_a_reason():
+    """Regression: ``budget_of`` returns None for v1 and the signer must not
+    subscript it; the refusal must be an S8-specific reason, not a TypeError."""
+    rec = _record(schema="f2-authorization/v1")
+    for key in ("budget", "candidate_pool_digest", "registration_manifest_sha256"):
+        rec.pop(key, None)
+    with pytest.raises(SystemExit, match="must use f2-authorization/v2"):
+        S._validate_record_structure(rec)
+
+
+def test_v1_record_with_v2_only_fields_is_refused():
+    rec = _record(schema="f2-authorization/v1")
+    with pytest.raises(SystemExit, match="v1 authorization record must not declare"):
+        S._validate_record_structure(rec)
+
+
+
+# ---------------------------------------------------------------------------
 # Revision input is validated BEFORE any Git call
 # ---------------------------------------------------------------------------
 
