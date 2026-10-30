@@ -209,7 +209,8 @@ class TestBuilderToolIsolation:
         expected_sha = hashlib.sha256(b"uv-binary-content-v2").hexdigest()
 
         monkeypatch.setenv("F2_BUILDER_UV_PATH", str(fake_uv))
-        resolved = resolve_and_verify_uv(expected_sha256=expected_sha)
+        resolved = resolve_and_verify_uv(expected_sha256=expected_sha,
+                                        fixture_root=tmp_path)
         assert resolved == fake_uv
 
     def test_condition_11_missing_uv_fails_closed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
@@ -217,7 +218,7 @@ class TestBuilderToolIsolation:
         nonexistent = tmp_path / "missing_dir" / "uv.exe"
         monkeypatch.setenv("F2_BUILDER_UV_PATH", str(nonexistent))
         with pytest.raises(FileNotFoundError, match="BUILDER_TOOL_UNAVAILABLE"):
-            resolve_and_verify_uv()
+            resolve_and_verify_uv(fixture_root=tmp_path)
 
         # Classification check
         code = classify_build_failure(FileNotFoundError(f"BUILDER_TOOL_UNAVAILABLE: uv executable not found at {nonexistent}"))
@@ -230,7 +231,7 @@ class TestBuilderToolIsolation:
         monkeypatch.setenv("F2_BUILDER_UV_PATH", str(fake_uv))
 
         with pytest.raises(RuntimeError, match="BUILDER_TOOL_CORRUPT"):
-            resolve_and_verify_uv(expected_sha256="deadbeef" * 8)
+            resolve_and_verify_uv(expected_sha256="deadbeef" * 8, fixture_root=tmp_path)
 
         # Classification check
         code = classify_build_failure(RuntimeError("BUILDER_TOOL_CORRUPT: uv executable has digest mismatch"))
@@ -768,6 +769,15 @@ class TestInstalledVersionEnforcement:
 class TestDedicatedUvExecution:
     """R1-B: a uv-owned dry run uses the verified executable, never PATH."""
 
+
+    def _prepare(self, fixture_root, *args, **kwargs):
+        kwargs["fixture_root"] = fixture_root
+        return DRY.prepare_uv_execution(*args, **kwargs)
+
+    def _run(self, fixture_root, *args, **kwargs):
+        kwargs["fixture_root"] = fixture_root
+        return DRY.run_test(*args, **kwargs)
+
     def _uv_stub(self, directory: pathlib.Path, text: str) -> pathlib.Path:
         directory.mkdir(parents=True, exist_ok=True)
         stub = directory / ("uv.cmd" if os.name == "nt" else "uv")
@@ -777,7 +787,7 @@ class TestDedicatedUvExecution:
     def test_dedicated_executable_is_selected(self, tmp_path: pathlib.Path) -> None:
         approved = self._uv_stub(tmp_path / "approved", "APPROVED")
         digest = hashlib.sha256(approved.read_bytes()).hexdigest()
-        plan = DRY.prepare_uv_execution("uv run pytest -q", uv_path=approved,
+        plan = self._prepare(tmp_path, "uv run pytest -q", uv_path=approved,
                                         expected_sha256=digest)
         assert pathlib.Path(plan["argv"][0]) == approved
         assert plan["argv"][1:] == ["run", "pytest", "-q"]
@@ -786,12 +796,12 @@ class TestDedicatedUvExecution:
     def test_invalid_dedicated_executable_is_rejected(self, tmp_path: pathlib.Path) -> None:
         approved = self._uv_stub(tmp_path / "approved", "APPROVED")
         with pytest.raises(RuntimeError, match="BUILDER_TOOL_CORRUPT"):
-            DRY.prepare_uv_execution("uv run pytest", uv_path=approved,
+            self._prepare(tmp_path, "uv run pytest", uv_path=approved,
                                      expected_sha256="deadbeef" * 8)
 
     def test_missing_dedicated_executable_is_reported(self, tmp_path: pathlib.Path) -> None:
         with pytest.raises(FileNotFoundError, match="BUILDER_TOOL_UNAVAILABLE"):
-            DRY.prepare_uv_execution("uv run pytest",
+            self._prepare(tmp_path, "uv run pytest",
                                      uv_path=tmp_path / "missing" / "uv.exe")
 
     def test_ambient_path_executable_cannot_hijack(self, tmp_path: pathlib.Path,
@@ -820,7 +830,7 @@ class TestDedicatedUvExecution:
         # path is exercised through its process-launcher seam: the captured argv
         # is EXACTLY what would be executed.
         monkeypatch.setattr(DRY.subprocess, "run", _fake_run)
-        result = DRY.run_test(
+        result = self._run(tmp_path, 
             python="", repo=tmp_path, test_cmd="uv run pytest",
             junit=tmp_path / "out.xml", timeout=60, uv_offline=True,
             uv_path=approved, uv_sha256=digest)
@@ -837,20 +847,20 @@ class TestDedicatedUvExecution:
         approved = self._uv_stub(tmp_path / "approved", "APPROVED")
         digest = hashlib.sha256(approved.read_bytes()).hexdigest()
         with pytest.raises(RuntimeError, match="UV_EXECUTION_UNSAFE_COMMAND"):
-            DRY.prepare_uv_execution("uv run pytest && echo hi", uv_path=approved,
+            self._prepare(tmp_path, "uv run pytest && echo hi", uv_path=approved,
                                      expected_sha256=digest)
 
     def test_non_uv_command_is_refused(self, tmp_path: pathlib.Path) -> None:
         approved = self._uv_stub(tmp_path / "approved", "APPROVED")
         digest = hashlib.sha256(approved.read_bytes()).hexdigest()
         with pytest.raises(RuntimeError, match="does not start with uv"):
-            DRY.prepare_uv_execution("pytest -q", uv_path=approved,
+            self._prepare(tmp_path, "pytest -q", uv_path=approved,
                                      expected_sha256=digest)
 
     def test_windows_path_with_spaces_is_preserved(self, tmp_path: pathlib.Path) -> None:
         approved = self._uv_stub(tmp_path / "approved", "APPROVED")
         digest = hashlib.sha256(approved.read_bytes()).hexdigest()
-        plan = DRY.prepare_uv_execution(
+        plan = self._prepare(tmp_path, 
             'uv run pytest "tests/with space/test_a.py::test_b"',
             uv_path=approved, expected_sha256=digest)
         assert plan["argv"][-1] == "tests/with space/test_a.py::test_b"
@@ -867,7 +877,7 @@ class TestDedicatedUvExecution:
 
         monkeypatch.setattr(DRY.subprocess, "run", lambda *a, **k: _Proc())
         (tmp_path / "repo").mkdir()
-        result = DRY.run_test(
+        result = self._run(tmp_path, 
             python="", repo=tmp_path / "repo", test_cmd="uv run pytest -q",
             junit=tmp_path / "out.xml", timeout=60, uv_offline=True,
             uv_path=approved, uv_sha256=digest)

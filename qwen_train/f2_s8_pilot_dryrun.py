@@ -136,6 +136,7 @@ def uv_safe_path(path_value: str, uv_exe: Path) -> list[str]:
 def prepare_uv_execution(
     test_cmd: str, *, uv_path: Path | str | None = None,
     expected_sha256: str | None = None,
+    fixture_root: Path | str | None = None,
 ) -> dict:
     """The exact argv and identity for a uv-owned declared command.
 
@@ -145,7 +146,8 @@ def prepare_uv_execution(
     a shell.  ``expected_sha256`` exists for tests; production must pass
     ``None`` so the module's approved digest is enforced.
     """
-    uv_exe = resolve_and_verify_uv(uv_path, expected_sha256)
+    uv_exe = resolve_and_verify_uv(uv_path, expected_sha256,
+                                   fixture_root=fixture_root)
     argv = _split_declared_command(test_cmd)
     if not argv:
         raise UvExecutionError("UV_EXECUTION_UNSAFE_COMMAND: empty command")
@@ -165,7 +167,8 @@ def prepare_uv_execution(
 def run_test(*, python: str, repo: Path, test_cmd: str, junit: Path,
              timeout: int, uv_offline: bool = False,
              uv_path: Path | str | None = None,
-             uv_sha256: str | None = None) -> dict:
+             uv_sha256: str | None = None,
+             fixture_root: Path | str | None = None) -> dict:
     """Run the DECLARED test command with --junitxml appended, as the guest
     executor will. Nothing is rewritten: the command is the population's.
 
@@ -191,7 +194,8 @@ def run_test(*, python: str, repo: Path, test_cmd: str, junit: Path,
 
     if uv_offline:
         plan = prepare_uv_execution(test_cmd, uv_path=uv_path,
-                                    expected_sha256=uv_sha256)
+                                    expected_sha256=uv_sha256,
+                                    fixture_root=fixture_root)
         env["UV_OFFLINE"] = "1"
         env["PATH"] = os.pathsep.join(
             uv_safe_path(env.get("PATH", ""), Path(plan["uv_path"])))

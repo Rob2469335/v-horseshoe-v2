@@ -204,34 +204,49 @@ DEFAULT_UV_PATH = Path(r"C:\f2_pilot\tools\uv.exe")
 UV_APPROVED_SHA256 = "81ea623608f8c17720c62efd0a380a8ead380c4d365ba6968e9d279a2319c674"
 
 
-def _is_ephemeral_fixture_path(p_posix: str) -> bool:
-    """True for the ephemeral directories a TEST creates under the owner profile.
+def _resolved_norm(path: Path | str) -> str | None:
+    """Absolute, case-folded form of ``path``; ``None`` when unresolvable."""
+    try:
+        return os.path.normcase(str(Path(path).resolve()))
+    except (OSError, RuntimeError):
+        return None
 
-    The profile-isolation guard exists so ``f2builder`` never depends on ACLs in
-    the owner's personal profile.  A pytest temporary directory is not such a
-    dependency: pytest creates it for the test process and removes it
-    afterwards.  The previous marker list (``pytest_tmp``) never matched
-    pytest's real layout (``.../pytest-of-<user>/pytest-<n>/...``), so every
-    Windows run of the uv-path tests tripped the guard instead of exercising the
-    digest check it was testing.
 
-    The exemption is deliberately narrow: named fixture roots plus pytest's own
-    two temp-directory naming schemes.  A durable profile path -- including the
-    owner's ``.local/bin`` -- still raises.
+def _is_within(path: Path | str, root: Path | str) -> bool:
+    """True only when resolved ``path`` is STRICTLY inside resolved ``root``.
+
+    Resolution collapses ``..`` so traversal cannot escape; ``normcase`` makes
+    the comparison case-insensitive on Windows; the trailing separator stops
+    ``C:\\rootish`` from matching root ``C:\\root``.
     """
-    for part in p_posix.split("/"):
-        if part in ("f2_evidence", "f2_scratch", "pytest_tmp"):
-            return True
-        if part.startswith("pytest-of-"):
-            return True
-        if re.fullmatch(r"pytest-\d+", part):
-            return True
-    return False
+    p = _resolved_norm(path)
+    r = _resolved_norm(root)
+    if p is None or r is None or p == r:
+        return False
+    return p.startswith(r + os.sep)
+
+
+def _is_ephemeral_fixture_path(
+    p: Path | str, *, fixture_root: Path | str | None = None
+) -> bool:
+    """True only when ``p`` is inside an EXPLICITLY injected fixture root.
+
+    A directory NAME is never a trust anchor: ``f2_scratch``, ``f2_evidence`` and
+    ``pytest_tmp`` carry no authority by themselves.  Production callers never
+    pass a fixture root, so production has no exemption at all; a test injects
+    the one temporary directory it created.  Resolution happens first, so ``..``
+    traversal, case variants and intermediate components cannot escape it.
+    """
+    if fixture_root is None:
+        return False
+    return _is_within(p, fixture_root)
 
 
 def resolve_and_verify_uv(
     custom_path: Path | str | None = None,
     expected_sha256: str | None = None,
+    *,
+    fixture_root: Path | str | None = None,
 ) -> Path:
     r"""Resolve and verify the dedicated, builder-owned uv executable. Deterministic.
 
@@ -252,8 +267,11 @@ def resolve_and_verify_uv(
     else:
         p = DEFAULT_UV_PATH
 
-    # Profile isolation guard: ensure f2builder does not depend on owner profile ACLs
-    p_posix = p.as_posix().lower()
+    # Profile isolation guard: ensure f2builder does not depend on owner profile
+    # ACLs.  Decisions use the RESOLVED path; a fixture exemption exists only
+    # when a caller injects one explicitly (tests).  No env var, filename or
+    # directory name can create the exemption.
+    resolved = Path(p).resolve()
     forbidden_prefixes = [
         Path(r"C:\Users\rober"),
         Path.home(),
@@ -262,17 +280,19 @@ def resolve_and_verify_uv(
         forbidden_prefixes.append(Path(os.environ["USERPROFILE"]))
 
     for forbidden in forbidden_prefixes:
-        f_posix = forbidden.as_posix().lower()
+        f_resolved = Path(forbidden).resolve()
         is_owner_profile = (
-            p_posix == f_posix
-            or p_posix.startswith(f_posix + "/")
-            or "c:/users/rober" in p_posix
+            _resolved_norm(resolved) == _resolved_norm(f_resolved)
+            or _is_within(resolved, f_resolved)
         )
-        if is_owner_profile and not _is_ephemeral_fixture_path(p_posix):
+        if is_owner_profile and not _is_ephemeral_fixture_path(
+            resolved, fixture_root=fixture_root
+        ):
             raise RuntimeError(
                 f"PROFILE_ISOLATION_VIOLATION: uv path {p} is located within user profile {forbidden}; "
                 f"f2builder must use dedicated tools directory"
             )
+    p = resolved
 
     if not p.is_file():
         raise FileNotFoundError(
