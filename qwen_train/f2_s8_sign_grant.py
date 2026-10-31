@@ -422,10 +422,11 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
                 "gate requires registration_manifest_sha256, which v1 forbids"
             )
 
-    for name in ("candidate_manifest_digest", "registration_sha256"):
-        value = record.get(name)
-        if not isinstance(value, str) or not _HEX64.fullmatch(value):
-            raise _fail(f"record field {name} must be 64 lowercase hex, got {value!r}")
+    registration_sha256 = record.get("registration_sha256")
+    if not isinstance(registration_sha256, str) or not _HEX64.fullmatch(registration_sha256):
+        raise _fail(
+            f"record field registration_sha256 must be 64 lowercase hex, got {registration_sha256!r}"
+        )
 
     if record.get("revoked") is True or record.get("superseded_by"):
         raise _fail("record is revoked or superseded; it cannot be signed")
@@ -444,6 +445,19 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
 
     is_probe = "build_probe" in ops
     if is_probe:
+        # A build_probe grant runs BEFORE a candidate manifest exists, so the
+        # runtime verifier treats candidate_manifest_digest as optional for it.
+        # Match the verifier exactly: absent OR a real 64-hex digest; never a
+        # placeholder, empty string or malformed value.
+        manifest = record.get("candidate_manifest_digest")
+        if manifest is not None and (
+            not isinstance(manifest, str) or not _HEX64.fullmatch(manifest)
+        ):
+            raise _fail(
+                "record candidate_manifest_digest must be 64 lowercase hex when "
+                f"declared for build_probe, got {manifest!r}"
+            )
+
         target_credited = record.get("target_credited")
         if isinstance(target_credited, bool) or target_credited != 0:
             raise _fail("PROBE_CREDITS_FORBIDDEN: target_credited must be 0 for a probe grant")
@@ -466,6 +480,12 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
         }:
             raise _fail(f"record declares invalid retention_policy: {record.get('retention_policy')!r}")
     else:
+        manifest = record.get("candidate_manifest_digest")
+        if not isinstance(manifest, str) or not _HEX64.fullmatch(manifest):
+            raise _fail(
+                "v2 production record requires 64-hex candidate_manifest_digest, "
+                f"got {manifest!r}"
+            )
         target_credited = record.get("target_credited")
         if isinstance(target_credited, bool) or not isinstance(target_credited, int) \
                 or target_credited < 300:
@@ -556,8 +576,13 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
     if "network_policy" in record and record["network_policy"] not in _NETWORK_POLICIES:
         raise _fail(f"record declares unsupported network_policy: {record['network_policy']!r}")
 
-    if "allowed_identities" in record:
-        identities = record["allowed_identities"]
+    identities = record.get("allowed_identities")
+    if identities is None:
+        # The runtime verifier requires this for a v2 build_probe grant; the
+        # signer must not produce a signature the gate would refuse.
+        if "build_probe" in ops:
+            raise _fail("record build_probe grant requires allowed_identities")
+    else:
         if not isinstance(identities, list) or not identities:
             raise _fail("record allowed_identities must be a non-empty list")
         if any(not isinstance(u, str) or not u.strip() for u in identities):

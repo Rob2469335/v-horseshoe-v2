@@ -992,3 +992,41 @@ def test_audit_append_failure_leaves_a_signed_artifact(case, monkeypatch):
     )
     assert not bad_audit.exists()
 
+
+
+# ---------------------------------------------------------------------------
+# Manifest-digest and identity parity with the runtime verifier
+# ---------------------------------------------------------------------------
+
+def test_probe_grant_may_omit_the_manifest_digest():
+    """A build_probe runs before a candidate manifest exists; the verifier
+    treats the field as optional, so the signer must too."""
+    rec = _record()
+    rec.pop("candidate_manifest_digest")
+    S._validate_record_structure(rec)  # must not raise
+
+
+@pytest.mark.parametrize("value", ["", "0" * 63, "z" * 64, "not-hex", 7])
+def test_probe_grant_rejects_a_declared_malformed_manifest_digest(value):
+    rec = _record(candidate_manifest_digest=value)
+    with pytest.raises(SystemExit, match="candidate_manifest_digest"):
+        S._validate_record_structure(rec)
+
+
+def test_production_grant_requires_the_manifest_digest():
+    rec = _record(
+        operations=["base_gold_production"],
+        target_credited=300,
+        awards_credits=True,
+        candidate_pool_digest="9" * 64,
+    )
+    rec.pop("candidate_manifest_digest", None)
+    with pytest.raises(SystemExit, match="candidate_manifest_digest"):
+        S._validate_record_structure(rec)
+
+
+def test_probe_grant_requires_allowed_identities():
+    rec = _record()
+    rec.pop("allowed_identities")
+    with pytest.raises(SystemExit, match="allowed_identities"):
+        S._validate_record_structure(rec)
