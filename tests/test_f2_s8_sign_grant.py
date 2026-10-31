@@ -711,7 +711,7 @@ def test_unapproved_extra_field_is_refused(case, monkeypatch):
     ("selected_task_ids", [], "non-empty list"),
     ("network_policy", "UNRESTRICTED", "unsupported network_policy"),
     ("allowed_identities", ["*"], "wildcard"),
-    ("allowed_identities", ["F2Builder"], "lowercase"),
+    ("allowed_identities", ["a\\b\\c"], "allowed_identities"),
     ("budget", {"max_executions": 1, "max_total_tasks": 15,
                 "batch_limit": 16, "max_retries": 0}, "batch_limit"),
 ])
@@ -1029,4 +1029,162 @@ def test_probe_grant_requires_allowed_identities():
     rec = _record()
     rec.pop("allowed_identities")
     with pytest.raises(SystemExit, match="allowed_identities"):
+        S._validate_record_structure(rec)
+
+
+# ---------------------------------------------------------------------------
+# End-to-end CLI: operation-specific manifest binding
+# ---------------------------------------------------------------------------
+
+def _probe_record_without_manifest(case):
+    rec = _record()
+    rec.pop("candidate_manifest_digest")
+    repin(case, rec)
+    return case["record"]
+
+
+def test_cli_build_probe_without_manifest_signs_and_verifies(case, monkeypatch):
+    c = case
+    rec = _probe_record_without_manifest(c)
+    out = c["tmp"] / "signed_nomanifest.json"
+    argv = _strip(_argv(c, out=out), "--expect-manifest-sha256")
+    _confirm(monkeypatch, rec)
+    assert S.main(argv) == 0
+    assert out.is_file()
+    env = json.loads(out.read_text("utf-8"))
+    assert "candidate_manifest_digest" not in env["record"]
+    # The signed bytes are the canonical record, verifier-style.
+    c["priv"].public_key().verify(
+        base64.b64decode(env["signature"]["sig"]), A.canonical_bytes(rec)
+    )
+    vargv = _strip(
+        _argv(c, record_path=out, verify_only=True), "--expect-manifest-sha256"
+    )
+    assert S.main(vargv) == 0
+
+
+def test_cli_build_probe_without_manifest_preflight_succeeds(case, monkeypatch):
+    c = case
+    _probe_record_without_manifest(c)
+    argv = _strip(_argv(c), "--out", "--key", "--expect-manifest-sha256")
+    argv.append("--preflight")
+    monkeypatch.setattr(sys, "stdin", _Pipe())
+    assert S.main(argv) == 0
+
+
+def test_cli_build_probe_with_valid_manifest_still_signs(case, monkeypatch):
+    c = case
+    out = c["tmp"] / "signed_with_manifest.json"
+    _confirm(monkeypatch, c["record"])
+    assert S.main(_argv(c, out=out)) == 0
+    env = json.loads(out.read_text("utf-8"))
+    assert env["record"]["candidate_manifest_digest"] == MANIFEST
+
+
+def test_cli_malformed_probe_manifest_is_rejected(case, monkeypatch):
+    c = case
+    rec = _record(candidate_manifest_digest="not-hex")
+    repin(c, rec)
+    _confirm(monkeypatch, c["record"])
+    with pytest.raises(SystemExit, match="candidate_manifest_digest"):
+        S.main(_argv(c))
+
+
+def test_cli_supplied_digest_cannot_be_ignored_when_record_omits_it(case, monkeypatch):
+    c = case
+    _probe_record_without_manifest(c)
+    _confirm(monkeypatch, c["record"])
+    with pytest.raises(SystemExit, match="does not bind candidate_manifest_digest"):
+        S.main(_argv(c))  # _argv still passes --expect-manifest-sha256
+
+
+def test_cli_production_without_manifest_is_rejected(case, monkeypatch):
+    c = case
+    rec = _record(
+        operations=["base_gold_production"],
+        target_credited=300,
+        awards_credits=True,
+        candidate_pool_digest="9" * 64,
+    )
+    rec.pop("candidate_manifest_digest", None)
+    repin(c, rec)
+    _confirm(monkeypatch, c["record"])
+    argv = _strip(
+        _argv(c, operation="base_gold_production"), "--expect-manifest-sha256"
+    )
+    with pytest.raises(SystemExit, match="candidate_manifest_digest"):
+        S.main(argv)
+
+
+def test_cli_production_with_malformed_manifest_is_rejected(case, monkeypatch):
+    c = case
+    rec = _record(
+        operations=["base_gold_production"],
+        target_credited=300,
+        awards_credits=True,
+        candidate_pool_digest="9" * 64,
+        candidate_manifest_digest="z" * 64,
+    )
+    repin(c, rec)
+    _confirm(monkeypatch, c["record"])
+    with pytest.raises(SystemExit, match="candidate_manifest_digest"):
+        S.main(_argv(c, operation="base_gold_production"))
+
+
+def test_manifest_free_signed_record_tamper_is_rejected(case, monkeypatch):
+    c = case
+    rec = _probe_record_without_manifest(c)
+    out = c["tmp"] / "signed_nomanifest.json"
+    _confirm(monkeypatch, rec)
+    assert S.main(_strip(_argv(c, out=out), "--expect-manifest-sha256")) == 0
+    env = json.loads(out.read_text("utf-8"))
+    env["record"]["id"] = "s8-tampered"
+    tampered = c["tmp"] / "tampered_nomanifest.json"
+    tampered.write_text(json.dumps(env), "utf-8")
+    with pytest.raises(A.AuthorizationError):
+        S.main(_strip(
+            _argv(c, record_path=tampered, verify_only=True),
+            "--expect-manifest-sha256",
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Identity canonicalisation: case is compared, not required to be lowercase
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value", [
+    "f2builder",
+    "F2Builder",
+    "rob3\\f2builder",
+    "ROB3\\F2Builder",
+    "S-1-5-21-3097615451-1098832964-466925138-1009",
+    "s-1-5-21-3097615451-1098832964-466925138-1009",
+    "S-1-5-21-3097615451-1098832964-466925138-1009".lower().upper(),
+])
+def test_identity_case_forms_are_accepted(value):
+    rec = _record(allowed_identities=[value])
+    S._validate_record_structure(rec)
+
+
+@pytest.mark.parametrize("value", [
+    "S-1",
+    "S-1-5-",
+    "S-1-5-21-abc",
+    "S-1-5-21--1009",
+    "rob3\\",
+    "\\f2builder",
+    "a\\b\\c",
+    "   ",
+    "",
+    7,
+])
+def test_malformed_identities_are_rejected(value):
+    rec = _record(allowed_identities=[value])
+    with pytest.raises(SystemExit, match="allowed_identities"):
+        S._validate_record_structure(rec)
+
+
+def test_case_only_duplicate_identities_are_rejected():
+    rec = _record(allowed_identities=["f2builder", "F2Builder"])
+    with pytest.raises(SystemExit, match="duplicate entries"):
         S._validate_record_structure(rec)

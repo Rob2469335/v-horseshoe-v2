@@ -93,3 +93,26 @@ def test_real_process_token_resolves_sid_and_name():
     assert ident.sid.startswith("S-1-")
     assert "\\" in ident.name
     assert ident.account
+
+
+def test_gate_accepts_an_uppercase_sid_allow_entry(tmp_path, monkeypatch):
+    sid = "S-1-5-21-0-0-0-7777"
+    env = _setup_probe_env(tmp_path, monkeypatch, allowed_identities=(sid,))
+    auth = _run(env, tmp_path, current_identity=_identity("testuser", sid=sid))
+    assert auth.current_identity.sid == sid
+
+
+def test_gate_accepts_a_mixed_case_domain_allow_entry(tmp_path, monkeypatch):
+    env = _setup_probe_env(
+        tmp_path, monkeypatch, allowed_identities=("ROB3\\F2BUILDER",)
+    )
+    auth = _run(env, tmp_path, current_identity=_identity("f2builder"))
+    assert auth.current_identity.account == "f2builder"
+
+
+def test_gate_rejects_a_malformed_sid_allow_entry(tmp_path, monkeypatch):
+    env = _setup_probe_env(
+        tmp_path, monkeypatch, allowed_identities=("S-1-5-21-abc",)
+    )
+    with pytest.raises(G.V2GateError, match="not in allowed_identities"):
+        _run(env, tmp_path, current_identity=_identity("testuser"))

@@ -135,10 +135,43 @@ _SPEC_SCHEMA = "f2-expected-grant/v1"
 _SPEC_KEYS = frozenset({"schema", "approved_record_sha256", "approved_record"})
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _FULL_REVISION = re.compile(r"[0-9a-f]{40}")
+#: A Windows SID as ``S-1-<authority>-<subauthority>...`` (case-insensitive S).
+_SID = re.compile(r"[Ss]-1-(?:\d+-)+\d+")
+
 
 #: The runtime gate's fallback when a record declares no budget object
 #: (``f2_s8_v2_gate.py:953``: ``int(raw_budget.get("max_total_tasks") or 50)``).
 _GATE_DEFAULT_MAX_TOTAL_TASKS = 50
+
+
+def _valid_identity(value: Any) -> bool:
+    """Structural validation of one allowed-identity entry.
+
+    Accepts a bare account, ``DOMAIN\\account``, or a SID. Case is NOT
+    canonicalised here: the signed record keeps exactly what the owner approved,
+    and the runtime gate compares case-insensitively. A value that looks like a
+    SID must be a well-formed SID; a value that is not a SID must not contain a
+    backslash pattern that would be misread as one.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    text = value.strip()
+    if not text or any(ord(ch) < 32 for ch in text):
+        return False
+    if text.lower().startswith("s-1"):
+        return bool(_SID.fullmatch(text))
+    if "\\" in text:
+        domain, _, account = text.partition("\\")
+        return bool(domain.strip()) and bool(account.strip()) and "\\" not in account
+    return True
+
+
+def _validate_identity_entry(value: Any) -> None:
+    if not _valid_identity(value):
+        raise _fail(
+            "record allowed_identities entry is malformed (expected a bare "
+            f"account, DOMAIN\\account, or a SID): {value!r}"
+        )
 
 
 def _require_full_revision(value: Any, label: str) -> str:
@@ -587,12 +620,14 @@ def _validate_record_structure(record: Mapping[str, Any]) -> None:
             raise _fail("record allowed_identities must be a non-empty list")
         if any(not isinstance(u, str) or not u.strip() for u in identities):
             raise _fail("record allowed_identities entries must be non-empty strings")
-        if any(u != u.lower() for u in identities):
-            raise _fail("record allowed_identities entries must be lowercase")
+        for entry in identities:
+            _validate_identity_entry(entry)
         if "*" in identities:
             raise _fail("record allowed_identities must not contain a wildcard")
-        if len(set(identities)) != len(identities):
-            raise _fail("record allowed_identities contains duplicates")
+        # Case is not part of the Windows identity; two entries that differ only
+        # by case are the same principal and would make the allow-list ambiguous.
+        if len({u.lower() for u in identities}) != len(identities):
+            raise _fail("record allowed_identities contains duplicate entries (case-insensitive)")
 
     nb, na = _parse_ts(record["not_before"]), _parse_ts(record["not_after"])
     if not nb < na:
@@ -685,7 +720,7 @@ def preflight(
     trust_root_sha256: str | None,
     repo: Path | None,
     expect_revision: str,
-    expect_manifest_sha256: str,
+    expect_manifest_sha256: str | None,
     expect_registration_sha256: str,
     now: _dt.datetime,
 ) -> dict[str, Any]:
@@ -709,16 +744,25 @@ def preflight(
     # --- authoritative binding expectations (operator supplied, never assumed) ---
     if not expect_revision:
         raise _fail("missing --expect-revision (authoritative execution revision)")
-    if not expect_manifest_sha256:
-        raise _fail("missing --expect-manifest-sha256 (authoritative manifest digest)")
+    is_probe = operation == "build_probe"
+    if not is_probe and not expect_manifest_sha256:
+        raise _fail(
+            "missing --expect-manifest-sha256 (authoritative manifest digest "
+            "required for base_gold_production)"
+        )
     if not expect_registration_sha256:
         raise _fail("missing --expect-registration-sha256 (authoritative registration digest)")
 
-    pairs = (
+    pairs: list[tuple[str, str]] = [
         ("repository_revision", expect_revision),
-        ("candidate_manifest_digest", expect_manifest_sha256),
         ("registration_sha256", expect_registration_sha256),
-    )
+    ]
+    # A build_probe grant may omit candidate_manifest_digest (the probe runs
+    # before a candidate manifest exists). If the operator DOES supply an
+    # expected digest, the record must bind it; a supplied expectation is never
+    # silently ignored.
+    if expect_manifest_sha256 is not None:
+        pairs.append(("candidate_manifest_digest", expect_manifest_sha256))
     for name, expected in pairs:
         bound = record.get(name)
         if not isinstance(bound, str) or not bound:
@@ -837,7 +881,7 @@ def verify_only(
     trust_root_sha256: str | None,
     repo: Path | None,
     expect_revision: str,
-    expect_manifest_sha256: str,
+    expect_manifest_sha256: str | None,
     expect_registration_sha256: str,
     bindings: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
@@ -854,10 +898,12 @@ def verify_only(
         os.environ[A.TRUST_ROOT_DIGEST_ENV] = trust_root_sha256
     try:
         merged: dict[str, Any] = dict(bindings or {})
-        for key, value in (
-            ("candidate_manifest_digest", expect_manifest_sha256),
+        expected_pairs: list[tuple[str, str]] = [
             ("registration_sha256", expect_registration_sha256),
-        ):
+        ]
+        if expect_manifest_sha256 is not None:
+            expected_pairs.append(("candidate_manifest_digest", expect_manifest_sha256))
+        for key, value in expected_pairs:
             if key in merged and merged[key] != value:
                 raise _fail(
                     f"conflicting expected binding {key!r}: --expect-* says "
@@ -890,7 +936,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--trust-root-sha256", default=None, help="required SHA-256 pin of the trust root")
     ap.add_argument("--repo", default=None, help="execution worktree whose HEAD must equal the bound revision (required for signing/verify)")
     ap.add_argument("--expect-revision", required=True)
-    ap.add_argument("--expect-manifest-sha256", required=True)
+    ap.add_argument("--expect-manifest-sha256", default=None,
+                    help="authoritative manifest digest; optional only for --operation build_probe")
     ap.add_argument("--expect-registration-sha256", required=True)
     ap.add_argument("--stage", default="S8-001")
     ap.add_argument("--operation", default="base_gold_production")
