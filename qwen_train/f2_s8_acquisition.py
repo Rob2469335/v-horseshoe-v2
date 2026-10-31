@@ -275,6 +275,130 @@ def effective_identity_is_admin() -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Authenticated process identity (Windows token, not an environment string)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ProcessIdentity:
+    """The security principal of the CURRENT PROCESS, from its token.
+
+    ``sid`` is the authoritative identifier; ``name`` (``DOMAIN\\account``) and
+    ``account`` (bare account name) are display/diagnostic values derived from
+    the same SID by ``LookupAccountSid``.  They are never read from the
+    environment, so ``USERNAME``/``USERDOMAIN`` cannot influence them.
+    """
+
+    sid: str
+    name: str
+    account: str
+
+
+class IdentityLookupError(RuntimeError):
+    """The process token identity could not be established. Callers fail closed."""
+
+
+def resolve_process_identity() -> ProcessIdentity:
+    """Return the process token's SID and account, or raise ``IdentityLookupError``.
+
+    Uses ``OpenProcessToken(GetCurrentProcess())`` +
+    ``GetTokenInformation(TokenUser)`` + ``ConvertSidToStringSid`` +
+    ``LookupAccountSid``.  There is no environment fallback and no non-Windows
+    fallback: an unverifiable identity is an error, not a weaker check.
+    """
+    if os.name != "nt":
+        raise IdentityLookupError(
+            "process identity lookup is only implemented for Windows tokens"
+        )
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception as exc:  # noqa: BLE001 - cannot verify -> fail closed
+        raise IdentityLookupError(f"ctypes unavailable: {exc}") from exc
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)
+    ]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+        wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_wchar_p)
+    ]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    advapi32.LookupAccountSidW.argtypes = [
+        wintypes.LPCWSTR, ctypes.c_void_p, wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.LookupAccountSidW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(
+        kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)  # TOKEN_QUERY
+    ):
+        raise IdentityLookupError(
+            f"OpenProcessToken failed (winerror {ctypes.get_last_error()})"
+        )
+    try:
+        size = wintypes.DWORD(0)
+        advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))  # TokenUser
+        if size.value == 0:
+            raise IdentityLookupError("GetTokenInformation returned no size")
+        buffer = ctypes.create_string_buffer(size.value)
+        if not advapi32.GetTokenInformation(
+            token, 1, buffer, size, ctypes.byref(size)
+        ):
+            raise IdentityLookupError(
+                f"GetTokenInformation(TokenUser) failed (winerror {ctypes.get_last_error()})"
+            )
+
+        class _SID_AND_ATTRIBUTES(ctypes.Structure):
+            _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
+
+        class _TOKEN_USER(ctypes.Structure):
+            _fields_ = [("User", _SID_AND_ATTRIBUTES)]
+
+        token_user = ctypes.cast(buffer, ctypes.POINTER(_TOKEN_USER)).contents
+        sid_text = ctypes.c_wchar_p()
+        if not advapi32.ConvertSidToStringSidW(token_user.User.Sid, ctypes.byref(sid_text)):
+            raise IdentityLookupError(
+                f"ConvertSidToStringSid failed (winerror {ctypes.get_last_error()})"
+            )
+        sid = sid_text.value or ""
+
+        name_buf = ctypes.create_unicode_buffer(256)
+        domain_buf = ctypes.create_unicode_buffer(256)
+        name_len = wintypes.DWORD(len(name_buf))
+        domain_len = wintypes.DWORD(len(domain_buf))
+        use = wintypes.DWORD(0)
+        if not advapi32.LookupAccountSidW(
+            None, token_user.User.Sid, name_buf, ctypes.byref(name_len),
+            domain_buf, ctypes.byref(domain_len), ctypes.byref(use),
+        ):
+            raise IdentityLookupError(
+                f"LookupAccountSid failed (winerror {ctypes.get_last_error()})"
+            )
+        account = name_buf.value or ""
+        domain = domain_buf.value or ""
+        if not sid or not account:
+            raise IdentityLookupError("token identity returned an empty SID or account")
+        return ProcessIdentity(
+            sid=sid,
+            name=f"{domain}\\{account}" if domain else account,
+            account=account,
+        )
+    finally:
+        kernel32.CloseHandle(token)
+
+
+
 def require_unprivileged_identity(entry: str) -> None:
     """Refuse to run ``entry`` under an administrator identity. Fail-closed.
 

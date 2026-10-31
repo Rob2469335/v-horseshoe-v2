@@ -133,7 +133,6 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -177,6 +176,7 @@ PROBE_OPERATION = "build_probe"
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 PROBE_NOT_AUTHORIZED = "PROBE_NOT_AUTHORIZED"
 PROBE_IDENTITY_MISMATCH = "PROBE_IDENTITY_MISMATCH"
+PROBE_IDENTITY_UNAVAILABLE = "PROBE_IDENTITY_UNAVAILABLE"
 PROBE_POOL_DIGEST_MISMATCH = "PROBE_POOL_DIGEST_MISMATCH"
 PROBE_SELECTION_DIGEST_MISMATCH = "PROBE_SELECTION_DIGEST_MISMATCH"
 PROBE_LEDGER_MUTATION_FORBIDDEN = "PROBE_LEDGER_MUTATION_FORBIDDEN"
@@ -190,6 +190,7 @@ PROBE_PREREQUISITES_MISSING = "PROBE_PREREQUISITES_MISSING"
 PROBE_CODES = (
     PROBE_NOT_AUTHORIZED,
     PROBE_IDENTITY_MISMATCH,
+    PROBE_IDENTITY_UNAVAILABLE,
     PROBE_POOL_DIGEST_MISMATCH,
     PROBE_SELECTION_DIGEST_MISMATCH,
     PROBE_LEDGER_MUTATION_FORBIDDEN,
@@ -685,6 +686,10 @@ class S8ProbeAuthorizedRun:
     repository_root: str = ""
     budget_ledger_root: str = ""
     current_username: str = ""
+    #: The authenticated token principal used for this authorization.  Retained
+    #: so mid-run revalidation compares the SAME principal, never a re-spoofable
+    #: string.
+    current_identity: Any = None
 
 
 def _compat_classes_from_report(data: Mapping[str, Any]) -> dict[str, str]:
@@ -743,22 +748,44 @@ def authorize_s8_probe_run(
     #: must never burn budget as a side effect of verifying a grant.
     reserve_execution: bool = False,
     execution_id: str | None = None,
-    current_username: str | None = None,
+    current_identity: Any = None,
 ) -> S8ProbeAuthorizedRun:
     """Verify authorization for a build-probe run. Fail-closed on any discrepancy.
 
     Verification is non-reserving unless the caller explicitly requests a
     reservation.  Only the real execution path may do so.
     """
-    from qwen_train.f2_s8_acquisition import require_unprivileged_identity
+    from qwen_train.f2_s8_acquisition import (
+        IdentityLookupError,
+        ProcessIdentity,
+        require_unprivileged_identity,
+        resolve_process_identity,
+    )
 
     require_unprivileged_identity("authorize_s8_probe_run")
 
-    username = (
-        current_username
-        if current_username is not None
-        else (os.environ.get("USERNAME") or "unknown")
-    ).lower()
+    # Identity is authenticated from the process TOKEN, never from USERNAME.
+    # ``current_identity`` exists for tests and for revalidation of an identity
+    # already resolved in this process; production callers pass nothing.
+    if current_identity is None:
+        try:
+            identity = resolve_process_identity()
+        except IdentityLookupError as exc:
+            raise V2GateError(
+                PROBE_IDENTITY_UNAVAILABLE,
+                f"process identity could not be established: {exc}",
+            ) from exc
+    else:
+        identity = current_identity
+    if (
+        not isinstance(identity, ProcessIdentity)
+        or not identity.sid
+        or not identity.account
+    ):
+        raise V2GateError(
+            PROBE_IDENTITY_UNAVAILABLE, "process identity is missing a SID or account"
+        )
+    username = identity.account.lower()
 
     from qwen_train.f2_authorization import record_digest, verify_authorization
     from qwen_train.f2_s8_probe_driver import compute_ordered_probe_candidates
@@ -1017,14 +1044,22 @@ def authorize_s8_probe_run(
         now=now,
     )
 
-    # Verify identity
+    # Verify identity against the authenticated token principal.  A grant may
+    # list the bare account, DOMAIN\\account, or the SID; the environment is
+    # never consulted.
     allowed_ids = tuple(
         str(u).lower() for u in (verified_rec.get("allowed_identities") or ())
     )
-    if username and allowed_ids and username not in allowed_ids:
+    presented = {
+        identity.account.lower(),
+        identity.name.lower(),
+        identity.sid.lower(),
+    }
+    if allowed_ids and not (presented & set(allowed_ids)):
         raise V2GateError(
             PROBE_IDENTITY_MISMATCH,
-            f"current user {username!r} not in allowed_identities {allowed_ids!r}",
+            f"process identity {identity.name!r} (sid {identity.sid}) is not in "
+            f"allowed_identities {allowed_ids!r}",
         )
 
     # Pre-probe snapshot of admission ledgers
@@ -1094,6 +1129,7 @@ def authorize_s8_probe_run(
         repository_root=str(repository_root) if repository_root else "",
         budget_ledger_root=str(budget_ledger_root) if budget_ledger_root else "",
         current_username=username,
+        current_identity=identity,
     )
 
 
@@ -1188,7 +1224,7 @@ def check_probe_grant_still_valid(
             ),
             reserve_execution=False,
             execution_id=authorized.execution_id,
-            current_username=authorized.current_username or None,
+            current_identity=authorized.current_identity,
         )
     except V2GateError:
         raise

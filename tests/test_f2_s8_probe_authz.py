@@ -32,6 +32,7 @@ from qwen_train.f2_s8_probe_driver import (
     compute_ordered_probe_candidates,
     run_probe,
 )
+from qwen_train.f2_s8_acquisition import ProcessIdentity
 from qwen_train.f2_s8_v2_gate import (
     PROBE_OPERATION,
     V2GateError,
@@ -86,6 +87,15 @@ def _compute_digests(
         ordering_policy=ordering_policy,
         max_tasks=max_tasks,
     )
+
+
+def _identity(name: str, sid: str = "S-1-5-21-0-0-0-1001") -> ProcessIdentity:
+    """A synthetic token identity for tests; production resolves the real SID."""
+    if "\\" in name:
+        domain, account = name.split("\\", 1)
+    else:
+        domain, account = "ROB3", name
+    return ProcessIdentity(sid=sid, name=f"{domain}\\{account}", account=account)
 
 
 def _setup_probe_env(
@@ -274,7 +284,7 @@ def test_revoked_probe_grant_refused_before_and_mid_run(tmp_path, monkeypatch):
             compat_report_file=env["compat_file"],
             trust_root_path=env["trust_root"],
             budget_ledger_root=broot,
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
 
     # (b) Mid-run revocation check
@@ -289,7 +299,7 @@ def test_revoked_probe_grant_refused_before_and_mid_run(tmp_path, monkeypatch):
         compat_report_file=env["compat_file"],
         trust_root_path=env["trust_root"],
         budget_ledger_root=broot2,
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     # Revoke in trust root after authorization
     root_data["revoked_record_ids"] = [env["record"]["id"]]
@@ -380,7 +390,7 @@ def test_wrong_population_or_selection_digest_refused(tmp_path, monkeypatch):
             compat_report_file=env["compat_file"],
             trust_root_path=env["trust_root"],
             budget_ledger_root=tmp_path / "broot1",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
     assert exc_info.value.code == "PROBE_POOL_DIGEST_MISMATCH"
 
@@ -398,7 +408,7 @@ def test_wrong_population_or_selection_digest_refused(tmp_path, monkeypatch):
             compat_report_file=env2["compat_file"],
             trust_root_path=env2["trust_root"],
             budget_ledger_root=tmp_path / "broot2",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
     assert exc_info2.value.code == "PROBE_SELECTION_DIGEST_MISMATCH"
 
@@ -469,7 +479,7 @@ def test_privileged_or_unauthorized_identity_refused(tmp_path, monkeypatch):
             compat_report_file=env["compat_file"],
             trust_root_path=env["trust_root"],
             budget_ledger_root=tmp_path / "broot1",
-            current_username="f2_s8_builder",
+            current_identity=_identity("f2_s8_builder"),
         )
 
     # (b) Identity mismatch
@@ -483,7 +493,7 @@ def test_privileged_or_unauthorized_identity_refused(tmp_path, monkeypatch):
             compat_report_file=env["compat_file"],
             trust_root_path=env["trust_root"],
             budget_ledger_root=tmp_path / "broot2",
-            current_username="unauthorized_user",
+            current_identity=_identity("unauthorized_user"),
         )
     assert exc_info.value.code == "PROBE_IDENTITY_MISMATCH"
 
@@ -902,6 +912,8 @@ def test_probe_build_positive_and_selection_enforcement(tmp_path, monkeypatch):
     from qwen_train import f2_s8_pilot_build as pb
 
     monkeypatch.setenv("USERNAME", "testuser")
+    monkeypatch.setattr("qwen_train.f2_s8_acquisition.resolve_process_identity",
+                        lambda: _identity("testuser"))
     env = _setup_probe_env(tmp_path, monkeypatch, task_ids=("task-A", "task-B"))
     monkeypatch.setenv("F2_REGISTRATION_FILE", str(env["reg_file"]))
     monkeypatch.setenv("F2_COMPAT_REPORT_FILE", str(env["compat_file"]))
@@ -912,7 +924,7 @@ def test_probe_build_positive_and_selection_enforcement(tmp_path, monkeypatch):
         registration_manifest_file=env["manifest_file"],
         compat_report_file=env["compat_file"],
         budget_ledger_root=tmp_path / "broot_positive",
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     assert "task-A" in auth_run.selected_task_ids
     assert "task-B" in auth_run.selected_task_ids
@@ -981,7 +993,7 @@ def test_check_probe_grant_still_valid_pin_failure_fails_closed(tmp_path, monkey
         registration_file=env["reg_file"],
         compat_report_file=env["compat_file"],
         budget_ledger_root=tmp_path / "broot_pin",
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     # Tamper the trust root pin hash
     monkeypatch.setenv("F2_AUTHORIZATION_TRUST_ROOT_SHA256", "0" * 64)
@@ -1000,7 +1012,7 @@ def test_check_probe_grant_still_valid_corrupted_budget_fails_closed(tmp_path, m
         compat_report_file=env["compat_file"],
         budget_ledger_root=broot,
         reserve_execution=True,
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     # Corrupt store file
     grant_dir = broot / auth_run.grant_digest
@@ -1017,6 +1029,8 @@ def test_probe_driver_cli_live_refused_prerequisites(tmp_path, monkeypatch, caps
     import qwen_train.f2_s8_probe_driver as pdrv
 
     monkeypatch.setenv("USERNAME", "testuser")
+    monkeypatch.setattr("qwen_train.f2_s8_acquisition.resolve_process_identity",
+                        lambda: _identity("testuser"))
     env = _setup_probe_env(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "qwen_train.f2_s8_acquisition.effective_identity_is_admin", lambda: False
@@ -1046,6 +1060,8 @@ def test_probe_driver_cli_dry_run_completes_isolated(tmp_path, monkeypatch, caps
     from qwen_train import f2_authz_budget as budget
 
     monkeypatch.setenv("USERNAME", "testuser")
+    monkeypatch.setattr("qwen_train.f2_s8_acquisition.resolve_process_identity",
+                        lambda: _identity("testuser"))
     env = _setup_probe_env(tmp_path, monkeypatch)
     monkeypatch.setattr(
         "qwen_train.f2_s8_acquisition.effective_identity_is_admin", lambda: False
@@ -1300,7 +1316,7 @@ def test_explicit_probe_budget_root_is_used_not_production(tmp_path, monkeypatch
         compat_report_file=env["compat_file"],
         budget_ledger_root=explicit,
         reserve_execution=True,
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     assert (explicit / auth_run.grant_digest).is_dir()
     assert not sentinel.exists()
@@ -1317,7 +1333,7 @@ def test_authorize_default_does_not_reserve_budget(tmp_path, monkeypatch):
         registration_manifest_file=env["manifest_file"],
         compat_report_file=env["compat_file"],
         budget_ledger_root=root,
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     assert not root.exists()
     assert not (root / auth.grant_digest).exists()
@@ -1335,7 +1351,7 @@ def test_authorize_explicit_reservation_reserves_in_isolated_root(tmp_path, monk
         compat_report_file=env["compat_file"],
         budget_ledger_root=root,
         reserve_execution=True,
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     grant_dir = root / auth.grant_digest
     assert grant_dir.is_dir()
@@ -1361,7 +1377,7 @@ def test_authorize_probe_rejects_unreadable_registration_order(tmp_path, monkeyp
             registration_manifest_file=env["manifest_file"],
             compat_report_file=env["compat_file"],
             budget_ledger_root=tmp_path / "broot_badreg",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
     assert exc_info.value.code == "REGISTRATION_UNREADABLE"
 
@@ -1391,7 +1407,7 @@ def test_authorize_probe_rejects_corrupt_admission_ledger(tmp_path, monkeypatch)
             compat_report_file=env["compat_file"],
             ledger_paths=[bad],
             budget_ledger_root=tmp_path / "broot_badledger",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
     assert exc_info.value.code == "PROBE_NOT_AUTHORIZED"
     assert "failed verification" in str(exc_info.value)
@@ -1410,7 +1426,7 @@ def test_probe_gate_excludes_source_priority_conflicts(tmp_path, monkeypatch):
         registration_manifest_file=env["manifest_file"],
         compat_report_file=env["compat_file"],
         budget_ledger_root=tmp_path / "broot_conflicts",
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     assert "acme__widget-1" not in auth.selected_task_ids
     assert "acme__gadget-2" in auth.selected_task_ids
@@ -1424,7 +1440,7 @@ def test_probe_grant_binds_target_compatible(tmp_path, monkeypatch):
         registration_manifest_file=env["manifest_file"],
         compat_report_file=env["compat_file"],
         budget_ledger_root=tmp_path / "broot_target",
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     assert auth.target_compatible == 1
 
@@ -1439,7 +1455,7 @@ def test_probe_grant_rejects_invalid_target_compatible(tmp_path, monkeypatch, va
             registration_manifest_file=env["manifest_file"],
             compat_report_file=env["compat_file"],
             budget_ledger_root=tmp_path / "broot_bad_target",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
     assert exc_info.value.code == "PROBE_NOT_AUTHORIZED"
 
@@ -1454,7 +1470,7 @@ def test_probe_grant_record_must_be_a_json_object(tmp_path, monkeypatch):
             registration_manifest_file=env["manifest_file"],
             compat_report_file=env["compat_file"],
             budget_ledger_root=tmp_path / "broot_non_object_grant",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
     assert exc_info.value.code == "INVALID_GRANT"
 
@@ -1472,7 +1488,7 @@ def _authorized_probe(tmp_path, monkeypatch, *, name="broot", ledger_paths=()):
         ledger_paths=ledger_paths,
         budget_ledger_root=tmp_path / name,
         reserve_execution=True,
-        current_username="testuser",
+        current_identity=_identity("testuser"),
     )
     return env, auth
 
@@ -1691,7 +1707,7 @@ def test_exclude_185_cannot_be_bypassed_across_candidate_paths(tmp_path, monkeyp
             compat_report_file=env["compat_file"],
             exclusion_policy_file=policy_path,
             budget_ledger_root=tmp_path / "broot_excl_mismatch",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
 
     # 5. v2_preflight refuses a pool that includes a task from exclusion_policy_file
@@ -1753,7 +1769,7 @@ def test_exclude_185_cannot_be_bypassed_across_candidate_paths(tmp_path, monkeyp
             compat_report_file=env["compat_file"],
             ledger_paths=[tmp_path / "nonexistent_ledger.jsonl"],
             budget_ledger_root=tmp_path / "broot_missing_ledger",
-            current_username="testuser",
+            current_identity=_identity("testuser"),
         )
     assert exc_missing_ledger.value.code == "MISSING_ARTIFACT"
 
