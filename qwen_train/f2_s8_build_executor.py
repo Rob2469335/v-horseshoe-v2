@@ -218,6 +218,7 @@ class HostBuildExecutor:
         declared_minor_fn: Callable[[str, pathlib.Path], str | None] | None = None,
         deterministic_incompatibility_codes: Iterable[str] = DEFAULT_DETERMINISTIC_INCOMPATIBILITY_CODES,
         collect_fn: Callable[[Any, Any, str], tuple[bool, str, str]] | None = None,
+        task_timeout_seconds: float | None = None,
     ) -> None:
         self._authorized = authorized_run
         self._inputs = pathlib.Path(inputs)
@@ -241,7 +242,28 @@ class HostBuildExecutor:
         self._resolve_url = resolve_url_fn
         self._declared_minor = declared_minor_fn
         self._deterministic = frozenset(deterministic_incompatibility_codes)
-        self._collect = collect_fn or check_declared_nodes_collect
+        if task_timeout_seconds is not None and (
+            isinstance(task_timeout_seconds, bool)
+            or not isinstance(task_timeout_seconds, (int, float))
+            or task_timeout_seconds <= 0
+        ):
+            raise ValueError(
+                f"task_timeout_seconds must be a positive number, got {task_timeout_seconds!r}"
+            )
+        self._task_timeout_seconds = (
+            float(task_timeout_seconds) if task_timeout_seconds else None
+        )
+        if collect_fn is None:
+            # Collection runs pytest, which a task's own tests can slow down.
+            # It must never outlive the task budget: cap it at the smaller of
+            # the historical 900s default and the declared task limit.
+            collect_timeout = 900
+            if self._task_timeout_seconds is not None:
+                collect_timeout = max(1, int(min(900, self._task_timeout_seconds)))
+            collect_fn = lambda ws, f2p, cmd: check_declared_nodes_collect(
+                ws, f2p, cmd, timeout=collect_timeout
+            )
+        self._collect = collect_fn
 
     def _workspace_root_value(self) -> pathlib.Path:
         if self._workspace_root is None:
@@ -363,20 +385,58 @@ def make_probe_live_builder(
     inputs: pathlib.Path | str,
     patches: pathlib.Path | str,
     workspace_root: pathlib.Path | str,
+    task_timeout_seconds: float | None = None,
+    verify_inputs: bool = True,
     **executor_kwargs: Any,
 ) -> LiveBuilder:
     """Compose the host build executor into a :class:`LiveBuilder`.
 
-    This is the wiring point for a future, owner-approved live probe. It is NOT
-    called by ``f2_s8_probe_driver.main``; the driver's ``--live`` refusal stays
-    in force until the owner policy decision and operational prerequisites are
-    satisfied.
+    This is the wiring point used by ``f2_s8_probe_driver.main`` for every
+    non-dry-run invocation (``--dry-run`` never constructs it). The driver calls
+    it after its ``--live`` prerequisite checks and before any budget
+    reservation, and reports any failure here as ``PROBE_PREREQUISITES_MISSING``
+    with no grant consumed. Live execution remains gated by the driver's
+    prerequisite checks and a valid signed grant.
+
+    ``task_timeout_seconds`` is the per-task wall-clock budget. It bounds the
+    executor's collection subprocess and is enforced by :class:`LiveBuilder`
+    after the build returns. The grant schema carries no timeout field today, so
+    this value comes from the driver's documented ``ProbeLimits`` default until
+    the owner authorizes a signed field.
+
+    ``verify_inputs`` (default) reads every selected task's input record and both
+    patches exactly once, hashes them, and copies them byte-for-byte into a
+    run-private snapshot; the executor is pointed at that snapshot so the bytes
+    it consumes are the bytes that were verified. The manifest digest is exposed
+    on the returned builder for the run record. It does NOT prove the owner
+    authorized those bytes: binding the manifest digest into the grant is a
+    schema extension and an owner decision.
     """
+    verified_inputs = None
+    if verify_inputs:
+        from qwen_train.f2_s8_verified_inputs import snapshot_verified_inputs
+
+        verified_inputs = snapshot_verified_inputs(
+            inputs,
+            patches,
+            task_ids=tuple(getattr(authorized_run, "selected_task_ids", ()) or ()),
+            dest_root=pathlib.Path(workspace_root) / "_verified_inputs",
+        )
+        inputs = verified_inputs.inputs_dir
+        patches = verified_inputs.patches_dir
+
     executor = HostBuildExecutor(
         authorized_run,
         inputs=inputs,
         patches=patches,
         workspace_root=workspace_root,
+        task_timeout_seconds=task_timeout_seconds,
         **executor_kwargs,
     )
-    return LiveBuilder(executor.build_one, workspace_root=workspace_root)
+    builder = LiveBuilder(
+        executor.build_one,
+        workspace_root=workspace_root,
+        task_timeout_seconds=task_timeout_seconds,
+    )
+    builder.verified_inputs = verified_inputs
+    return builder

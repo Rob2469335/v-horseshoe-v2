@@ -14,6 +14,7 @@ import pathlib
 import re
 import shutil
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import AbstractSet, Any, Callable, Mapping, Sequence
 
@@ -125,13 +126,14 @@ def _normalise_cell(task_id: str, row: object) -> BuildCell:
 class LiveBuilder:
     """Compose an approved per-task build executor into the batch-builder contract.
 
-    NOT wired into :func:`main`: live execution remains fail-closed behind the
-    driver's policy refusal. Enabling live probing requires (a) an explicit
-    owner policy decision and (b) an approved per-task executor ``build_one``
-    that actually builds a task under the provisioned f2builder / offline-
-    wheelhouse / OS-isolation environment. The probe contract does not
-    establish how a task is built, so only this composition/enforcement layer
-    is implemented and tested here; no default executor exists.
+    Wired into :func:`main`: every non-dry-run invocation constructs this through
+    :func:`qwen_train.f2_s8_build_executor.make_probe_live_builder`, after the
+    ``--live`` prerequisite checks and before any budget reservation, so a
+    construction failure consumes nothing. Live execution is still gated by the
+    driver itself (a valid signed grant plus ``--inputs``/``--patches``), and the
+    build semantics come from ``HostBuildExecutor`` -> ``pilot_build.build`` under
+    the provisioned f2builder / offline-wheelhouse / OS-isolation environment.
+    There is no default executor: an absent ``build_one`` fails closed.
     """
 
     def __init__(
@@ -139,15 +141,28 @@ class LiveBuilder:
         build_one: Callable[[str], object] | None,
         *,
         workspace_root: pathlib.Path | str,
+        task_timeout_seconds: float | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         if build_one is None:
             raise BuilderUnavailable("no approved live build executor configured")
+        if task_timeout_seconds is not None and (
+            isinstance(task_timeout_seconds, bool)
+            or not isinstance(task_timeout_seconds, (int, float))
+            or task_timeout_seconds <= 0
+        ):
+            raise BuilderContractError(
+                f"task_timeout_seconds must be a positive number, got {task_timeout_seconds!r}"
+            )
         self._build_one = build_one
         self._workspace_root = pathlib.Path(workspace_root)
+        self._task_timeout = float(task_timeout_seconds) if task_timeout_seconds else None
+        self._clock = clock or time.monotonic
 
     def __call__(self, batch: Sequence[str]) -> dict[str, BuildCell]:
         out: dict[str, BuildCell] = {}
         for task_id in batch:
+            started = self._clock()
             try:
                 cell = self._build_one(task_id)
             except ProbeHalt:
@@ -163,11 +178,24 @@ class LiveBuilder:
                     f"build executor failed for {task_id!r}: "
                     f"{type(exc).__name__}: {exc}"
                 ) from exc
+            elapsed = self._clock() - started
             if not isinstance(cell, BuildCell):
                 cell = _normalise_cell(task_id, cell)
             if cell.task_id != task_id:
                 raise BuilderContractError(
                     f"executor returned cell for {cell.task_id!r} under {task_id!r}"
+                )
+            if self._task_timeout is not None and elapsed > self._task_timeout:
+                # The task exceeded its time budget. Report the truth: the
+                # result is not a usable compatibility observation.
+                cell = BuildCell(
+                    task_id,
+                    "BUILD_FAILURE",
+                    failure=(
+                        f"task wall clock {elapsed:.1f}s exceeded the "
+                        f"{self._task_timeout:.0f}s limit"
+                    ),
+                    reason_code="TASK_TIMEOUT",
                 )
             if cell.classification == "OBSERVED_COMPATIBLE":
                 if cell.failure:
@@ -220,6 +248,14 @@ BUILD_FAILURE_CLASSIFICATIONS = frozenset({
     "BUILD_FAILURE",
     "OBSERVED_BUILD_FAILURE",
 })
+
+
+class CleanupPolicyUnsupported(RuntimeError):
+    """A signed retention policy the runtime cannot honour.
+
+    Raised *before* any cleanup function is called. A policy that cannot be
+    verified must neither delete nor silently retain.
+    """
 
 
 class CleanupClassificationUnrecognized(RuntimeError):
@@ -764,6 +800,7 @@ def cleanup_probe_task(
     output_dir: pathlib.Path | str,
     manifest_path: pathlib.Path | str,
     allow_delete: bool = False,
+    retention_policy: str | None = None,
 ) -> None:
     """Clean one probe workspace according to its classification.
 
@@ -772,8 +809,24 @@ def cleanup_probe_task(
     cleanup function is called, so an unexpected value cannot trigger
     destructive cleanup.  A refusal raises; the driver reports it and never
     treats it as success.
+
+    ``retention_policy`` is the signed policy. ``None`` keeps the historical
+    behaviour (retain compatible, trim failed/incompatible). The only other
+    supported value is ``DELETE_ALL_AFTER_CLASSIFICATION``; it is refused here
+    because this driver writes neither the probe report nor per-task build logs
+    that ``cleanup_probe_workspace`` requires as evidence. Failing closed beats
+    deleting a workspace on the strength of a policy the runtime cannot verify.
     """
     from qwen_train.f2_s8_cleanup import cleanup_failed_build, cleanup_probe_workspace
+
+    if retention_policy not in (
+        None,
+        "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE",
+        "DELETE_ALL_AFTER_CLASSIFICATION",
+    ):
+        raise CleanupPolicyUnsupported(
+            f"unsupported retention_policy: {retention_policy!r}"
+        )
 
     raw = row.get("classification")
     if not isinstance(raw, str) or not raw.strip():
@@ -786,6 +839,20 @@ def cleanup_probe_task(
             # A compatible verdict plus a build-failure flag is contradictory.
             raise CleanupClassificationUnrecognized(
                 task_id, f"{classification}+failure"
+            )
+        if retention_policy == "DELETE_ALL_AFTER_CLASSIFICATION":
+            raise CleanupPolicyUnsupported(
+                "DELETE_ALL_AFTER_CLASSIFICATION cannot be honoured: this driver "
+                "writes no probe report or per-task build log, so the evidence "
+                "cleanup_probe_workspace requires does not exist. Refusing rather "
+                "than retaining or deleting silently."
+            )
+        if retention_policy not in (
+            None,
+            "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE",
+        ):
+            raise CleanupPolicyUnsupported(
+                f"unsupported retention_policy: {retention_policy!r}"
             )
         return
     root = pathlib.Path(workspace_root)
@@ -932,7 +999,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"PROBE_NOT_AUTHORIZED: {exc}", file=sys.stderr)
         return 1
 
-    # 2. Construct the builder BEFORE any reservation, so a construction
+    # 2. Fixed per-task limits are derived from the verified grant before the
+    #    builder exists, so the builder can carry the same time budget the run
+    #    will enforce. No side effects: ProbeLimits only validates numbers.
+    limits = ProbeLimits(
+        max_tasks=authorized.budget_limits.get("max_total_tasks", 50),
+        disk_floor_bytes=authorized.disk_floor_bytes,
+        per_task_disk_bytes=authorized.per_task_disk_bytes,
+        batch_limit=authorized.batch_limit,
+        target_compatible=authorized.target_compatible,
+    )
+
+    # 3. Construct the builder BEFORE any reservation, so a construction
     #    failure cannot consume budget. Dry-run never builds the live builder.
     if args.dry_run:
         builder: Callable[[Sequence[str]], Mapping[str, object]] = DryRunBuilder()
@@ -945,6 +1023,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 inputs=args.inputs,
                 patches=args.patches,
                 workspace_root=args.workspace_root,
+                task_timeout_seconds=limits.per_task_time_seconds,
             )
         except Exception as exc:
             print(
@@ -954,7 +1033,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
 
-    # 3. Reserve the grant's task budget only after the builder exists.
+    # 4. Reserve the grant's task budget only after the builder exists.
     if not args.dry_run:
         try:
             authorized = authorize_s8_probe_run(
@@ -971,13 +1050,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"PROBE_NOT_AUTHORIZED: {exc}", file=sys.stderr)
             return 1
 
-    limits = ProbeLimits(
-        max_tasks=authorized.budget_limits.get("max_total_tasks", 50),
-        disk_floor_bytes=authorized.disk_floor_bytes,
-        per_task_disk_bytes=authorized.per_task_disk_bytes,
-        batch_limit=authorized.batch_limit,
-        target_compatible=authorized.target_compatible,
-    )
     def _revalidate():
         from qwen_train.f2_s8_v2_gate import check_probe_grant_still_valid
 
@@ -1002,6 +1074,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=args.output_dir,
             manifest_path=pathlib.Path(args.output_dir) / "cleanup_manifest.jsonl",
             allow_delete=not args.dry_run,
+            retention_policy=authorized.retention_policy,
         )
 
     result = run_probe(

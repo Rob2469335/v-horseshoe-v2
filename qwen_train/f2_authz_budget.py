@@ -240,6 +240,24 @@ def _claim(path: pathlib.Path, payload: Mapping[str, Any]) -> None:
         raise
 
 
+def _record_digest_problem(
+    data: Mapping[str, Any], expected: str, label: str
+) -> str | None:
+    """Return a reason when a store record is not bound to the grant digest.
+
+    Every record written by :func:`reserve`/:func:`claim_retry` carries the
+    signed record digest it was created for.  A record whose digest is absent,
+    malformed, or different belongs to a different authorization and must not
+    be counted or resumed (fail closed).
+    """
+    actual = data.get("record_digest")
+    if not isinstance(actual, str) or not re.fullmatch(r"[0-9a-f]{64}", actual):
+        return f"missing or malformed record_digest in {label}"
+    if actual != expected:
+        return f"record_digest mismatch in {label}: {actual!r} != {expected!r}"
+    return None
+
+
 def classify_store(
     grant_dir: pathlib.Path,
     record_digest_value: str,
@@ -264,6 +282,15 @@ def classify_store(
     }
     if not grant_dir.is_dir():
         return empty_result
+
+    if not isinstance(record_digest_value, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", record_digest_value
+    ):
+        return {
+            "status": "INVALID_DIGEST",
+            "reason": "classify_store requires the full lowercase 64-hex record digest",
+            "counts": empty_result["counts"],
+        }
 
     # 1. Inspect top-level directory entries
     for p in sorted(grant_dir.iterdir()):
@@ -365,6 +392,13 @@ def classify_store(
                     "reason": f"invalid schema in task record {q.name}",
                     "counts": empty_result["counts"],
                 }
+            problem = _record_digest_problem(data, record_digest_value, f"task record {q.name}")
+            if problem is not None:
+                return {
+                    "status": "DIGEST_MISMATCH",
+                    "reason": problem,
+                    "counts": empty_result["counts"],
+                }
             task_records.append(data)
 
     # 4. Inspect retries/
@@ -424,6 +458,13 @@ def classify_store(
                         "reason": f"invalid schema in retry slot {q.name}",
                         "counts": empty_result["counts"],
                     }
+                problem = _record_digest_problem(rdata, record_digest_value, f"retry slot {q.name}")
+                if problem is not None:
+                    return {
+                        "status": "DIGEST_MISMATCH",
+                        "reason": problem,
+                        "counts": empty_result["counts"],
+                    }
                 retry_slots.append(rdata)
 
     # 5. Inspect committed reservation slots in grant_dir
@@ -442,6 +483,13 @@ def classify_store(
                 return {
                     "status": "MALFORMED_SLOT",
                     "reason": f"invalid schema in reservation record {p.name}",
+                    "counts": empty_result["counts"],
+                }
+            problem = _record_digest_problem(sdata, record_digest_value, f"reservation slot {p.name}")
+            if problem is not None:
+                return {
+                    "status": "DIGEST_MISMATCH",
+                    "reason": problem,
                     "counts": empty_result["counts"],
                 }
             committed_slots.append(sdata)

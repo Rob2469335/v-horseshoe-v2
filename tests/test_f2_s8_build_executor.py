@@ -215,6 +215,7 @@ def test_integration_with_live_builder_and_run_probe(tmp_path):
         inputs=ex._inputs,
         patches=ex._patches,
         workspace_root=tmp_path,
+        verify_inputs=False,  # this test exercises wiring, not input verification
         build_fn=build_fn,
         classify_fn=lambda e: "BUILD_FAILURE_UNCLASSIFIED",
         resolve_url_fn=lambda t, i: "https://example.com/acme/widget.git",
@@ -823,7 +824,14 @@ def test_builder_construction_failure_does_not_reserve(monkeypatch, capsys, tmp_
     calls = {"verify": 0, "reserve": 0}
 
     class _Stub:
+        # Reflect the attributes the driver reads from a verified authorization.
         execution_id = "probe-test"
+        budget_limits = {"max_total_tasks": 1}
+        disk_floor_bytes = 25_000_000_000
+        per_task_disk_bytes = 3_500_000_000
+        batch_limit = 1
+        target_compatible = 0
+        retention_policy = "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE"
 
     def fake_authorize(**kw):
         if kw.get("reserve_execution"):

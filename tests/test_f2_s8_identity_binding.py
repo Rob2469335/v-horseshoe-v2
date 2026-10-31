@@ -116,3 +116,69 @@ def test_gate_rejects_a_malformed_sid_allow_entry(tmp_path, monkeypatch):
     )
     with pytest.raises(G.V2GateError, match="not in allowed_identities"):
         _run(env, tmp_path, current_identity=_identity("testuser"))
+
+# --- SID-only policy (Argon: name aliasing must not grant authorization) -----
+
+GRANTED_SID = "S-1-5-21-0-0-0-4242"
+IMPOSTOR_SID = "S-1-5-21-0-0-0-9999"
+
+
+def test_sid_only_allow_entry_accepts_the_exact_sid(tmp_path, monkeypatch):
+    env = _setup_probe_env(tmp_path, monkeypatch, allowed_identities=(GRANTED_SID,))
+    auth = _run(env, tmp_path, current_identity=_identity("f2builder", sid=GRANTED_SID))
+    assert auth.current_identity.sid == GRANTED_SID
+
+
+def test_sid_only_allow_entry_rejects_a_same_named_different_sid(tmp_path, monkeypatch):
+    """A different account with the SAME account name must not match a SID entry."""
+    env = _setup_probe_env(tmp_path, monkeypatch, allowed_identities=(GRANTED_SID,))
+    with pytest.raises(G.V2GateError, match="not in allowed_identities"):
+        _run(env, tmp_path, current_identity=_identity("f2builder", sid=IMPOSTOR_SID))
+
+
+def test_sid_only_allow_entry_rejects_a_same_display_name(tmp_path, monkeypatch):
+    """Same DOMAIN\\account string, different SID: still refused."""
+    env = _setup_probe_env(tmp_path, monkeypatch, allowed_identities=(GRANTED_SID,))
+    impostor = _identity("ROB3\\f2builder", sid=IMPOSTOR_SID)
+    assert impostor.name == "ROB3\\f2builder"
+    with pytest.raises(G.V2GateError, match="not in allowed_identities"):
+        _run(env, tmp_path, current_identity=impostor)
+
+
+def test_sid_only_policy_is_not_bypassed_by_the_account_name(tmp_path, monkeypatch):
+    """The gate matches the presented name only if the NAME is in the allow-list."""
+    env = _setup_probe_env(
+        tmp_path, monkeypatch, allowed_identities=(GRANTED_SID, "someone-else")
+    )
+    with pytest.raises(G.V2GateError, match="not in allowed_identities"):
+        _run(env, tmp_path, current_identity=_identity("f2builder", sid=IMPOSTOR_SID))
+
+
+def test_name_entry_still_matches_by_name(tmp_path, monkeypatch):
+    """Characterisation: a name entry authorizes any token with that name."""
+    env = _setup_probe_env(tmp_path, monkeypatch, allowed_identities=("f2builder",))
+    auth = _run(env, tmp_path, current_identity=_identity("f2builder", sid=IMPOSTOR_SID))
+    assert auth.current_identity.sid == IMPOSTOR_SID
+
+
+def test_malformed_sid_allow_entry_is_refused_by_the_signer():
+    from qwen_train import f2_s8_sign_grant as S
+
+    rec = {
+        "id": "x", "schema": "f2-authorization/v2", "stage": "S8-001",
+        "operations": ["build_probe"], "approver": "k",
+        "not_before": "2000-01-01T00:00:00+00:00",
+        "not_after": "2100-01-01T00:00:00+00:00",
+        "protocol_digest": "a" * 64, "registration_sha256": "b" * 64,
+        "registration_manifest_sha256": "c" * 64,
+        "probe_pool_digest": "d" * 64,
+        "probe_selection_digest": S.selection_digest(["t1"]),
+        "selected_task_ids": ["t1"], "ordering_policy": "REGISTRATION_ORDER_UNBUILT",
+        "retention_policy": "RETAIN_COMPATIBLE_DELETE_FAILED_AND_INCOMPATIBLE",
+        "network_policy": "OFFLINE_WHEELHOUSE_ONLY",
+        "allowed_identities": ["S-1-5-21-not-a-sid"],
+        "awards_credits": False, "target_credited": 0,
+        "budget": {"max_executions": 1, "max_total_tasks": 1, "max_retries": 0},
+    }
+    with pytest.raises(SystemExit, match="allowed_identities"):
+        S._validate_record_structure(rec)

@@ -336,6 +336,10 @@ def resolve_process_identity() -> ProcessIdentity:
         ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
     ]
     advapi32.LookupAccountSidW.restype = wintypes.BOOL
+
+    # ConvertSidToStringSidW returns a LocalAlloc'd buffer; the caller frees it.
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
 
@@ -371,29 +375,37 @@ def resolve_process_identity() -> ProcessIdentity:
             raise IdentityLookupError(
                 f"ConvertSidToStringSid failed (winerror {ctypes.get_last_error()})"
             )
-        sid = sid_text.value or ""
+        # ConvertSidToStringSidW allocates with LocalAlloc; the caller owns that
+        # buffer and must release it exactly once. Read the string first, then
+        # free the allocation in a finally so no path leaks it.
+        sid_allocation = ctypes.cast(sid_text, ctypes.c_void_p)
+        try:
+            sid = sid_text.value or ""
 
-        name_buf = ctypes.create_unicode_buffer(256)
-        domain_buf = ctypes.create_unicode_buffer(256)
-        name_len = wintypes.DWORD(len(name_buf))
-        domain_len = wintypes.DWORD(len(domain_buf))
-        use = wintypes.DWORD(0)
-        if not advapi32.LookupAccountSidW(
-            None, token_user.User.Sid, name_buf, ctypes.byref(name_len),
-            domain_buf, ctypes.byref(domain_len), ctypes.byref(use),
-        ):
-            raise IdentityLookupError(
-                f"LookupAccountSid failed (winerror {ctypes.get_last_error()})"
+            name_buf = ctypes.create_unicode_buffer(256)
+            domain_buf = ctypes.create_unicode_buffer(256)
+            name_len = wintypes.DWORD(len(name_buf))
+            domain_len = wintypes.DWORD(len(domain_buf))
+            use = wintypes.DWORD(0)
+            if not advapi32.LookupAccountSidW(
+                None, token_user.User.Sid, name_buf, ctypes.byref(name_len),
+                domain_buf, ctypes.byref(domain_len), ctypes.byref(use),
+            ):
+                raise IdentityLookupError(
+                    f"LookupAccountSid failed (winerror {ctypes.get_last_error()})"
+                )
+            account = name_buf.value or ""
+            domain = domain_buf.value or ""
+            if not sid or not account:
+                raise IdentityLookupError("token identity returned an empty SID or account")
+            return ProcessIdentity(
+                sid=sid,
+                name=f"{domain}\\{account}" if domain else account,
+                account=account,
             )
-        account = name_buf.value or ""
-        domain = domain_buf.value or ""
-        if not sid or not account:
-            raise IdentityLookupError("token identity returned an empty SID or account")
-        return ProcessIdentity(
-            sid=sid,
-            name=f"{domain}\\{account}" if domain else account,
-            account=account,
-        )
+        finally:
+            if sid_allocation and hasattr(kernel32, "LocalFree"):
+                kernel32.LocalFree(sid_allocation)
     finally:
         kernel32.CloseHandle(token)
 
