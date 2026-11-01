@@ -1016,10 +1016,9 @@ def pick_interpreter(
 def parse_python_map(values: Sequence[str] | None) -> dict[str, str]:
     """Parse ``MINOR=PATH`` entries into ``{"3.10": "C:\\...\\python.exe"}``.
 
-    Validation here is structural: an exact ``major.minor`` key, an absolute
-    executable path, and no duplicate minor. Existence is checked again at
-    builder construction, so a path that disappears is refused there rather
-    than silently falling back to discovery.
+    Keys are canonicalised to ``major.minor`` integers, so ``3.010`` and ``3.10``
+    are the same key (and a duplicate is refused). An entry that could never
+    match a declared minor can no longer silently fall back to discovery.
     """
     mapping: dict[str, str] = {}
     for raw in values or ():
@@ -1031,18 +1030,40 @@ def parse_python_map(values: Sequence[str] | None) -> dict[str, str]:
             raise DeclaredInterpreterError(
                 f"python map entry must be MINOR=PATH, got {raw!r}"
             )
-        if not re.fullmatch(r"\d+\.\d+", key):
+        match = re.fullmatch(r"(\d{1,2})\.(\d{1,2})", key)
+        if not match:
             raise DeclaredInterpreterError(
-                f"python map key must be major.minor, got {key!r}"
+                f"python map key must be major.minor with 1-2 digits, got {key!r}"
             )
+        canonical = f"{int(match.group(1))}.{int(match.group(2))}"
         if not Path(path).is_absolute():
             raise DeclaredInterpreterError(
                 f"python map path must be absolute, got {path!r}"
             )
-        if key in mapping:
-            raise DeclaredInterpreterError(f"duplicate python map entry for {key}")
-        mapping[key] = path
+        if canonical in mapping:
+            raise DeclaredInterpreterError(f"duplicate python map entry for {canonical}")
+        mapping[canonical] = path
     return mapping
+
+
+def validate_python_map(mapping: Mapping[str, str] | None) -> dict[str, str]:
+    """Re-validate a map at use time: canonical keys, existing absolute files."""
+    out: dict[str, str] = {}
+    for key, value in dict(mapping or {}).items():
+        match = re.fullmatch(r"(\d{1,2})\.(\d{1,2})", str(key))
+        if not match:
+            raise DeclaredInterpreterError(f"python map key is malformed: {key!r}")
+        canonical = f"{int(match.group(1))}.{int(match.group(2))}"
+        path = Path(str(value))
+        if not path.is_absolute() or not path.is_file():
+            raise DeclaredInterpreterError(
+                f"python map entry {canonical!r} must be an existing absolute path: "
+                f"{value!r}"
+            )
+        if canonical in out:
+            raise DeclaredInterpreterError(f"duplicate python map entry for {canonical}")
+        out[canonical] = str(path)
+    return out
 
 
 def resolve_declared_interpreter(
@@ -1075,6 +1096,12 @@ def resolve_declared_interpreter(
         if not mapped.is_file():
             raise DeclaredInterpreterError(
                 f"mapped interpreter for {key} is missing: {mapped}"
+            )
+        actual = _version_of(str(mapped))
+        if actual != minor:
+            raise DeclaredInterpreterError(
+                f"mapped interpreter for {key} reports "
+                f"{actual[0]}.{actual[1]}: {mapped}"
             )
         return str(mapped)
     return pick_interpreter(project, prefer=(minor,))

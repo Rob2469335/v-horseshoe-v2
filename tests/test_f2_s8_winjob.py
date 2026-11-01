@@ -168,10 +168,9 @@ def test_bounded_communicate_gives_up_on_a_descendant_holding_pipes(tmp_path):
         out, err, drained = W._bounded_communicate(proc, 1.0)
         elapsed = time.monotonic() - start
         assert out is None and err is None
-        assert drained is True  # the parent exited; no pipe drain is attempted
+        assert drained is False  # draining is deliberately abandoned
         assert elapsed < 8
-        assert proc.stdout is None and proc.stderr is None
-        assert proc.stdout is None and proc.stderr is None
+        time.sleep(0.2)
     finally:
         try:
             if pid_file.exists():
@@ -260,3 +259,42 @@ def test_timeout_does_not_wait_for_a_pipe_holding_descendant(tmp_path):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
             kill.communicate(timeout=10)
+
+
+def test_taskkill_nonzero_result_is_failure(monkeypatch):
+    from qwen_train import f2_s8_winjob as W
+
+    class _Kill:
+        returncode = 5
+
+        def communicate(self, timeout=None):
+            return "", ""
+
+    monkeypatch.setattr(W, "_REAL_POPEN", lambda *a, **k: _Kill())
+    ok, detail = W._run_taskkill(4242)
+    assert ok is False
+    assert "rc=5" in detail
+
+
+def test_taskkill_timeout_is_failure(monkeypatch):
+    from qwen_train import f2_s8_winjob as W
+
+    class _Kill:
+        returncode = None
+        killed = False
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired(["taskkill"], timeout)
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    kill = _Kill()
+    monkeypatch.setattr(W, "_REAL_POPEN", lambda *a, **k: kill)
+    ok, detail = W._run_taskkill(4242)
+    assert ok is False
+    assert "timed out" in detail
+    assert kill.killed is True

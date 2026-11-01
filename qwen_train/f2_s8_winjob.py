@@ -163,7 +163,7 @@ def _run_taskkill(pid: int) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         kill.kill()
         try:
-            kill.communicate(timeout=1.0)
+            kill.wait(timeout=1.0)
         except subprocess.TimeoutExpired:
             pass
         return False, "taskkill timed out"
@@ -194,30 +194,23 @@ def _bounded_communicate(
 ) -> tuple[object, object, bool]:
     """Post-termination handling with a hard bound; never waits for EOF.
 
-    Returns ``(stdout, stderr, drained)``. ``drained`` is False when the process
-    had not exited within ``seconds`` or pipes could not be drained. Draining is
-    deliberately abandoned rather than attempted with ``communicate`` again: the
-    first ``communicate(timeout=...)`` leaves reader threads holding the pipe
-    buffer locks, so a second read (or a close) can block until a surviving
-    descendant exits. A daemon thread disposes the handles best-effort and the
-    caller's references are dropped immediately.
+    Returns ``(stdout, stderr, drained)``. ``drained`` is always False here:
+    output is deliberately not drained, because the first
+    ``communicate(timeout=...)`` leaves reader threads holding the pipe buffer
+    locks, so a second read (or a close) can block until a surviving descendant
+    exits. A daemon thread disposes the handles best-effort; the caller never
+    waits for EOF.
     """
     import threading
 
-    drained = True
     try:
         proc.wait(timeout=seconds)
     except subprocess.TimeoutExpired:
-        drained = False
+        pass
     threading.Thread(
         target=_dispose_pipes, args=(proc,), daemon=True, name="f2-s8-pipe-dispose"
     ).start()
-    for name in ("stdin", "stdout", "stderr"):
-        try:
-            setattr(proc, name, None)
-        except (AttributeError, OSError):
-            pass
-    return None, None, drained
+    return None, None, False
 
 
 def _terminate_tree(job: int, proc: subprocess.Popen) -> TerminationOutcome:
@@ -301,10 +294,7 @@ def run_in_job(cmd, *, cwd=None, timeout: float | None = None, env=None):
             )
             detail = cleanup.detail
             if not drained:
-                detail += (
-                    "; output not drained after a bounded wait - a descendant may "
-                    "hold the inherited handles"
-                )
+                detail += "; timeout output not drained (bounded handling)"
             cleanup = dataclasses.replace(cleanup, detail=detail)
             terminated = True
             exc = subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)

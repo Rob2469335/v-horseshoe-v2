@@ -269,14 +269,15 @@ class HostBuildExecutor:
             float(task_timeout_seconds) if task_timeout_seconds else None
         )
         self._verified_inputs = verified_inputs
-        self._python_map: dict[str, str] = {}
-        for key, value in dict(python_map or {}).items():
-            path = pathlib.Path(str(value))
-            if not path.is_absolute() or not path.is_file():
-                raise ValueError(
-                    f"python map entry {key!r} must be an existing absolute path: {value!r}"
-                )
-            self._python_map[str(key)] = str(path)
+        from qwen_train.f2_s8_pilot_build import (
+            DeclaredInterpreterError,
+            validate_python_map,
+        )
+
+        try:
+            self._python_map = validate_python_map(python_map)
+        except DeclaredInterpreterError as exc:
+            raise ValueError(str(exc)) from exc
         if collect_fn is None:
             # Collection runs pytest, which a task's own tests can slow down.
             # It must never outlive the task budget: cap it at the smaller of
@@ -370,6 +371,15 @@ class HostBuildExecutor:
             # AuthorizationError), not a substring search.
             raise
         except subprocess.TimeoutExpired as exc:
+            from qwen_train.f2_s8_pilot_build import TaskDeadlineExceeded
+
+            if isinstance(exc, TaskDeadlineExceeded):
+                return BuildCell(
+                    task_id,
+                    "BUILD_FAILURE",
+                    failure=f"task deadline exceeded: {exc.stderr or 'expired'}",
+                    reason_code="TASK_DEADLINE_EXCEEDED",
+                )
             cleanup = getattr(exc, "cleanup", None)
             detail = "build timed out"
             if cleanup is not None:
@@ -472,6 +482,11 @@ def make_probe_live_builder(
     schema extension and an owner decision.
     """
     verified_inputs = None
+    if python_map:
+        # Refuse a bad owner map BEFORE writing the input snapshot.
+        from qwen_train.f2_s8_pilot_build import validate_python_map
+
+        validate_python_map(python_map)
     if verify_inputs:
         from qwen_train.f2_s8_verified_inputs import snapshot_verified_inputs
 

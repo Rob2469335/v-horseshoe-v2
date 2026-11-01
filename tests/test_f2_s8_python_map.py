@@ -55,6 +55,7 @@ def test_mapped_minor_uses_the_path_without_discovery(tmp_path, monkeypatch):
         raise AssertionError("discovery was used for a mapped minor")
 
     monkeypatch.setattr(PB, "pick_interpreter", _boom)
+    monkeypatch.setattr(PB, "_version_of", lambda path: (3, 10))
     chosen = PB.resolve_declared_interpreter(
         project, "3.10", python_map={"3.10": str(interpreter)}
     )
@@ -140,3 +141,24 @@ def test_driver_refuses_a_malformed_map_before_any_grant(monkeypatch, capsys):
     rc = probe_main(["--python-map", "not-a-map"])
     assert rc == 1
     assert "invalid --python-map" in capsys.readouterr().err
+
+
+def test_zero_padded_keys_are_canonicalised_or_refused():
+    # "3.010" can never match a declared minor; it is refused rather than left
+    # inert (which would silently re-enable discovery). "03.10" is canonicalised.
+    with pytest.raises(PB.DeclaredInterpreterError, match="major.minor"):
+        PB.parse_python_map(["3.010=C:\\Python310\\python.exe"])
+    assert PB.parse_python_map(["03.10=C:\\Python310\\python.exe"]) == {
+        "3.10": "C:\\Python310\\python.exe"
+    }
+
+
+def test_mapped_interpreter_with_the_wrong_version_is_refused(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    interpreter = tmp_path / "python.exe"
+    interpreter.write_bytes(b"stub")
+    monkeypatch.setattr(PB, "_version_of", lambda path: (3, 12))
+    with pytest.raises(PB.DeclaredInterpreterError, match="reports 3.12"):
+        PB.resolve_declared_interpreter(
+            project, "3.10", python_map={"3.10": str(interpreter)}
+        )

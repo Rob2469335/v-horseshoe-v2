@@ -138,3 +138,20 @@ def test_collection_refuses_when_deadline_already_expired(tmp_path):
     assert ok is False
     assert code == "COLLECT_TIMEOUT"
     assert "deadline expired" in detail
+
+
+def test_deadline_exhaustion_is_classified_distinctly(tmp_path):
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(*a, **k):
+        raise PB.TaskDeadlineExceeded("uv-sync", 0.0, stderr="task deadline expired")
+
+    def collect_fn(*a, **k):
+        return True, "", "ok"
+
+    ex = _executor(tmp_path, collect_fn=collect_fn, build_fn=build_fn, task_timeout=30)
+    cell = ex.build_one(TASK)
+    assert cell.classification == "BUILD_FAILURE"
+    assert cell.reason_code == "TASK_DEADLINE_EXCEEDED"
+    assert "deadline" in cell.failure
