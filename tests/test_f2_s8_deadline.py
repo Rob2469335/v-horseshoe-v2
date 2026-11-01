@@ -155,3 +155,14 @@ def test_deadline_exhaustion_is_classified_distinctly(tmp_path):
     assert cell.classification == "BUILD_FAILURE"
     assert cell.reason_code == "TASK_DEADLINE_EXCEEDED"
     assert "deadline" in cell.failure
+
+
+def test_a_truncated_timeout_is_classified_as_a_task_deadline(monkeypatch):
+    def _late(cmd, *, cwd=None, timeout=None, env=None):
+        time.sleep(0.05)
+        raise __import__("subprocess").TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(W, "run_in_job", _late)
+    with PB.task_deadline(time.monotonic() + 0.01):
+        with pytest.raises(PB.TaskDeadlineExceeded):
+            PB.run(["slow"], timeout=3600)

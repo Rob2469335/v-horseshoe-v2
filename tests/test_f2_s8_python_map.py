@@ -162,3 +162,33 @@ def test_mapped_interpreter_with_the_wrong_version_is_refused(tmp_path, monkeypa
         PB.resolve_declared_interpreter(
             project, "3.10", python_map={"3.10": str(interpreter)}
         )
+
+
+def test_unusable_mapped_path_fails_as_a_configuration_error(tmp_path):
+    project = _project(tmp_path)
+    stub = tmp_path / "python.exe"
+    stub.write_bytes(b"not an executable")
+    with pytest.raises(PB.DeclaredInterpreterError, match="could not be executed"):
+        PB.resolve_declared_interpreter(
+            project, "3.10", python_map={"3.10": str(stub)}
+        )
+
+
+def test_direct_map_with_a_noncanonical_key_still_matches(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    interpreter = tmp_path / "python.exe"
+    interpreter.write_bytes(b"stub")
+    monkeypatch.setattr(PB, "_version_of", lambda path: (3, 10))
+    monkeypatch.setattr(PB, "pick_interpreter", lambda *a, **k: "discovery")
+    assert PB.resolve_declared_interpreter(
+        project, "3.10", python_map={"03.10": str(interpreter)}
+    ) == str(interpreter)
+
+
+def test_validate_refuses_duplicate_canonical_keys(tmp_path):
+    a = tmp_path / "a.exe"
+    b = tmp_path / "b.exe"
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    with pytest.raises(PB.DeclaredInterpreterError, match="duplicate"):
+        PB.validate_python_map({"3.10": str(a), "03.10": str(b)})

@@ -630,7 +630,17 @@ def run(cmd, *, cwd=None, timeout=3600, check=True):
         timeout = min(timeout, remaining)
     from qwen_train.f2_s8_winjob import run_in_job
 
-    proc = run_in_job(cmd, cwd=cwd, timeout=timeout)
+    try:
+        proc = run_in_job(cmd, cwd=cwd, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        deadline = _TASK_DEADLINE.get()
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TaskDeadlineExceeded(
+                cmd, timeout,
+                output=getattr(exc, "output", None),
+                stderr="task deadline expired during subprocess",
+            ) from exc
+        raise
     if check and proc.returncode != 0:
         raise RuntimeError(
             f"command failed rc={proc.returncode}: {' '.join(map(str, cmd))}\n"
@@ -1054,14 +1064,14 @@ def validate_python_map(mapping: Mapping[str, str] | None) -> dict[str, str]:
         if not match:
             raise DeclaredInterpreterError(f"python map key is malformed: {key!r}")
         canonical = f"{int(match.group(1))}.{int(match.group(2))}"
+        if canonical in out:
+            raise DeclaredInterpreterError(f"duplicate python map entry for {canonical}")
         path = Path(str(value))
         if not path.is_absolute() or not path.is_file():
             raise DeclaredInterpreterError(
                 f"python map entry {canonical!r} must be an existing absolute path: "
                 f"{value!r}"
             )
-        if canonical in out:
-            raise DeclaredInterpreterError(f"duplicate python map entry for {canonical}")
         out[canonical] = str(path)
     return out
 
@@ -1091,13 +1101,26 @@ def resolve_declared_interpreter(
             f"declared Python minor {minor[0]}.{minor[1]} violates the project's "
             f"requires-python={bounds!r}"
         )
-    if python_map and key in python_map:
-        mapped = Path(python_map[key])
+    canonical_map: dict[str, str] = {}
+    for raw_key, raw_path in dict(python_map or {}).items():
+        match = re.fullmatch(r"(\d{1,2})\.(\d{1,2})", str(raw_key))
+        if not match:
+            raise DeclaredInterpreterError(
+                f"python map key is malformed: {raw_key!r}"
+            )
+        canonical_map[f"{int(match.group(1))}.{int(match.group(2))}"] = str(raw_path)
+    if key in canonical_map:
+        mapped = Path(canonical_map[key])
         if not mapped.is_file():
             raise DeclaredInterpreterError(
                 f"mapped interpreter for {key} is missing: {mapped}"
             )
-        actual = _version_of(str(mapped))
+        try:
+            actual = _version_of(str(mapped))
+        except Exception as exc:  # noqa: BLE001 - unusable owner path fails closed
+            raise DeclaredInterpreterError(
+                f"mapped interpreter for {key} could not be executed: {mapped}: {exc}"
+            ) from exc
         if actual != minor:
             raise DeclaredInterpreterError(
                 f"mapped interpreter for {key} reports "
