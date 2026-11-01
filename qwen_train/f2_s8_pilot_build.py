@@ -30,7 +30,7 @@ import socket
 import stat
 import subprocess
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping, Sequence
 
 from packaging.version import Version
@@ -1031,6 +1031,26 @@ def pick_interpreter(
     )
 
 
+def _interpreter_path_is_absolute(text: str) -> bool:
+    """True for an absolute interpreter path under this platform's semantics.
+
+    On Windows this is exactly ``pathlib.Path.is_absolute`` -- drive-absolute and
+    UNC paths -- so production validation is unchanged.  On POSIX (CI) a Windows
+    interpreter map (``C:\\Python310\\python.exe``) is still a real, absolute
+    owner-supplied path, so Windows semantics are checked as well.  POSIX
+    absolute paths are *not* accepted on Windows: that would widen production
+    behaviour on the strength of a portability fix.
+    """
+    if not text:
+        return False
+    if Path(text).is_absolute():
+        return True
+    if os.name == "nt":
+        return False
+    windows = PureWindowsPath(text)
+    return bool(windows.drive) and windows.is_absolute()
+
+
 def parse_python_map(values: Sequence[str] | None) -> dict[str, str]:
     """Parse ``MINOR=PATH`` entries into ``{"3.10": "C:\\...\\python.exe"}``.
 
@@ -1054,7 +1074,7 @@ def parse_python_map(values: Sequence[str] | None) -> dict[str, str]:
                 f"python map key must be major.minor with 1-2 digits, got {key!r}"
             )
         canonical = f"{int(match.group(1))}.{int(match.group(2))}"
-        if not Path(path).is_absolute():
+        if not _interpreter_path_is_absolute(path):
             raise DeclaredInterpreterError(
                 f"python map path must be absolute, got {path!r}"
             )
@@ -1075,7 +1095,7 @@ def validate_python_map(mapping: Mapping[str, str] | None) -> dict[str, str]:
         if canonical in out:
             raise DeclaredInterpreterError(f"duplicate python map entry for {canonical}")
         path = Path(str(value))
-        if not path.is_absolute() or not path.is_file():
+        if not _interpreter_path_is_absolute(str(value)) or not path.is_file():
             raise DeclaredInterpreterError(
                 f"python map entry {canonical!r} must be an existing absolute path: "
                 f"{value!r}"
@@ -1124,7 +1144,7 @@ def resolve_declared_interpreter(
         canonical_map[canonical] = str(raw_path)
     if key in canonical_map:
         mapped = Path(canonical_map[key])
-        if not mapped.is_absolute():
+        if not _interpreter_path_is_absolute(str(mapped)):
             raise DeclaredInterpreterError(
                 f"mapped interpreter for {key} must be an absolute path: {mapped}"
             )

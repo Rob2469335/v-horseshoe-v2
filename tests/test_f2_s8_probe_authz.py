@@ -968,6 +968,7 @@ def test_authorize_s8_probe_run_rejects_none_grant_path(tmp_path, monkeypatch):
             grant_path=None,
             registration_file=env["reg_file"],
             compat_report_file=env["compat_file"],
+            current_identity=_identity("testuser"),
         )
     assert exc_info.value.code == "PROBE_NOT_AUTHORIZED"
     assert "grant_path is required" in str(exc_info.value)
@@ -982,6 +983,7 @@ def test_authorize_s8_probe_run_missing_registration_manifest_refused(tmp_path, 
             registration_file=env["reg_file"],
             registration_manifest_file=missing_manifest,
             compat_report_file=env["compat_file"],
+            current_identity=_identity("testuser"),
         )
     assert exc_info.value.code == "MISSING_ARTIFACT"
 

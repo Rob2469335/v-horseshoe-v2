@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 
 import pytest
@@ -235,3 +236,53 @@ def test_interpreter_failures_classify_as_interpreter_unavailable():
     assert PB.classify_build_failure(
         PB.DeclaredInterpreterError("mapped interpreter for 3.10 reports 3.12")
     ) == "INTERPRETER_UNAVAILABLE"
+
+
+# --- platform semantics: Windows drive paths and POSIX paths -----------------
+
+
+def test_windows_absolute_paths_are_accepted_on_every_platform():
+    # The interpreter map names Windows interpreters.  Validating it on POSIX
+    # (CI) must not reject a real owner-supplied absolute path.
+    for value in (r"C:\Python310\python.exe", r"\\server\share\python.exe"):
+        assert PB._interpreter_path_is_absolute(value) is True
+    assert PB.parse_python_map([r"3.10=C:\Python310\python.exe"]) == {
+        "3.10": r"C:\Python310\python.exe"
+    }
+
+
+def test_posix_absolute_path_follows_native_semantics():
+    # Accepted where it is a real local path; NOT invented as acceptable on
+    # Windows, where production behaviour must stay unchanged.
+    assert PB._interpreter_path_is_absolute("/opt/python/bin/python.exe") is (
+        os.name != "nt"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "relative\\python.exe",
+        "relative/python.exe",
+        "C:python.exe",  # drive-relative, not drive-absolute
+        "..\\python.exe",
+        "../python.exe",
+    ],
+)
+def test_relative_and_empty_paths_are_not_absolute(bad):
+    assert PB._interpreter_path_is_absolute(bad) is False
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "3.10=relative\\python.exe",
+        "3.10=relative/python.exe",
+        "3.10=C:python.exe",
+        "3.10=..\\python.exe",
+    ],
+)
+def test_parse_rejects_relative_paths_on_every_platform(bad):
+    with pytest.raises(PB.DeclaredInterpreterError, match="absolute"):
+        PB.parse_python_map([bad])

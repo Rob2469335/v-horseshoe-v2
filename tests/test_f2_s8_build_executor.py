@@ -879,9 +879,12 @@ def test_real_authorizer_builder_failure_never_reserves(monkeypatch, capsys, tmp
     import qwen_train.f2_s8_acquisition as acq
     import qwen_train.f2_s8_build_executor as be
     from qwen_train.f2_s8_probe_driver import main as probe_main
-    from tests.test_f2_s8_probe_authz import _setup_probe_env
+    from tests.test_f2_s8_probe_authz import _identity, _setup_probe_env
 
     monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    # CI has no Windows token; inject the explicit test identity at the seam
+    # the gate uses. Production still resolves the real process token.
+    monkeypatch.setattr(acq, "resolve_process_identity", lambda: _identity("f2_s8_builder"))
     if "USERNAME" not in os.environ:  # gate reads USERNAME; unset on POSIX CI
         monkeypatch.setenv("USERNAME", getpass.getuser())
 
@@ -941,9 +944,12 @@ def test_real_authorizer_normal_live_run_reserves_after_builder(monkeypatch, tmp
     import qwen_train.f2_s8_probe_driver as driver
     import qwen_train.f2_s8_v2_gate as gate
     from qwen_train.f2_s8_probe_driver import ProbeResult, main as probe_main
-    from tests.test_f2_s8_probe_authz import _setup_probe_env
+    from tests.test_f2_s8_probe_authz import _identity, _setup_probe_env
 
     monkeypatch.setattr(acq, "require_unprivileged_identity", lambda entry: None)
+    # CI has no Windows token; inject the explicit test identity at the seam
+    # the gate uses. Production still resolves the real process token.
+    monkeypatch.setattr(acq, "resolve_process_identity", lambda: _identity("f2_s8_builder"))
     if "USERNAME" not in os.environ:  # gate reads USERNAME; unset on POSIX CI
         monkeypatch.setenv("USERNAME", getpass.getuser())
 
