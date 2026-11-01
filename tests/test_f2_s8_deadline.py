@@ -178,3 +178,16 @@ def test_a_plain_subprocess_timeout_stays_a_timeout(monkeypatch):
             PB.run(["slow"], timeout=5)
     assert not isinstance(info.value, PB.TaskDeadlineExceeded)
     assert isinstance(info.value, __import__("subprocess").TimeoutExpired)
+
+
+def test_a_deadline_during_discovery_is_not_cached_as_missing(monkeypatch):
+    PB._DISCOVERED_INTERPRETERS.clear()
+
+    def _expired(**_kwargs):
+        raise PB.TaskDeadlineExceeded("discovery", 0.0, stderr="expired")
+
+    monkeypatch.setattr(PB, "discover_interpreters", _expired)
+    with pytest.raises(PB.TaskDeadlineExceeded):
+        PB.available_interpreters(((3, 10),))
+    assert ((3, 10),) not in PB._DISCOVERED_INTERPRETERS
+    PB._DISCOVERED_INTERPRETERS.clear()

@@ -976,6 +976,10 @@ def available_interpreters(
                 _DISCOVERED_INTERPRETERS[key] = discover_interpreters(
                     version_of=_version_of, prefer=prefer
                 )
+        except subprocess.TimeoutExpired:
+            # A deadline or probe timeout is transient; never cache an empty
+            # result that would be re-read as "no interpreter installed".
+            raise
         except Exception:  # noqa: BLE001 - never let discovery break a build
             _DISCOVERED_INTERPRETERS[key] = (
                 list(INTERPRETERS) if prefer is None else []

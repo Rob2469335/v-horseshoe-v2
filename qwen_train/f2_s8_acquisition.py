@@ -1107,6 +1107,10 @@ def discover_interpreters(
                 continue
             try:
                 version = tuple(version_of(resolved))
+            except subprocess.TimeoutExpired:
+                # A deadline/timeout is not "this exe is unrunnable"; it must
+                # stop the task, never be silently skipped.
+                raise
             except Exception:  # noqa: BLE001 - an unrunnable exe is not a candidate
                 continue
             if len(version) < 2:
