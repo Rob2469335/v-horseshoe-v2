@@ -1013,20 +1013,70 @@ def pick_interpreter(
     )
 
 
-def resolve_declared_interpreter(project: Path, declared_minor: str | int | None) -> str:
-    """Interpreter for a task's DECLARED minor, or fail closed."""
+def parse_python_map(values: Sequence[str] | None) -> dict[str, str]:
+    """Parse ``MINOR=PATH`` entries into ``{"3.10": "C:\\...\\python.exe"}``.
+
+    Validation here is structural: an exact ``major.minor`` key, an absolute
+    executable path, and no duplicate minor. Existence is checked again at
+    builder construction, so a path that disappears is refused there rather
+    than silently falling back to discovery.
+    """
+    mapping: dict[str, str] = {}
+    for raw in values or ():
+        text = str(raw)
+        key, sep, path = text.partition("=")
+        key = key.strip()
+        path = path.strip()
+        if not sep or not key or not path:
+            raise DeclaredInterpreterError(
+                f"python map entry must be MINOR=PATH, got {raw!r}"
+            )
+        if not re.fullmatch(r"\d+\.\d+", key):
+            raise DeclaredInterpreterError(
+                f"python map key must be major.minor, got {key!r}"
+            )
+        if not Path(path).is_absolute():
+            raise DeclaredInterpreterError(
+                f"python map path must be absolute, got {path!r}"
+            )
+        if key in mapping:
+            raise DeclaredInterpreterError(f"duplicate python map entry for {key}")
+        mapping[key] = path
+    return mapping
+
+
+def resolve_declared_interpreter(
+    project: Path,
+    declared_minor: str | int | None,
+    *,
+    python_map: Mapping[str, str] | None = None,
+) -> str:
+    """Interpreter for a task's DECLARED minor, or fail closed.
+
+    A mapped minor uses the owner-supplied absolute path and **never** falls
+    back to discovery: if the mapped path is missing, this raises. Unmapped
+    minors keep the existing discovery path.
+    """
     minor = declared_minor_tuple(declared_minor)
     if minor is None:
         raise DeclaredInterpreterError(
             f"declared Python minor is missing or unparseable: {declared_minor!r}; "
             "refusing to fall back to the preference default"
         )
+    key = f"{minor[0]}.{minor[1]}"
     bounds = _requires_python(project)
     if bounds is not None and not (bounds[0] <= minor < bounds[1]):
         raise DeclaredInterpreterError(
             f"declared Python minor {minor[0]}.{minor[1]} violates the project's "
             f"requires-python={bounds!r}"
         )
+    if python_map and key in python_map:
+        mapped = Path(python_map[key])
+        if not mapped.is_file():
+            raise DeclaredInterpreterError(
+                f"mapped interpreter for {key} is missing: {mapped}"
+            )
+        return str(mapped)
     return pick_interpreter(project, prefer=(minor,))
 
 
@@ -1294,7 +1344,8 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
           manifest_file: Path | str | None = None,
           registration_file: Path | str | None = None,
           registration_manifest_file: Path | str | None = None,
-          root: Path | str | None = None) -> dict:
+          root: Path | str | None = None,
+          python_map: Mapping[str, str] | None = None) -> dict:
     rec = json.loads((Path(inputs) / f"{task_id}.json").read_text(encoding="utf-8"))
     base_commit = rec["base_commit"]
     ws = workspace_path(root, task_id)
@@ -1372,7 +1423,9 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     # call to build() must not be able to pip-install a task (and so run its
     # build backend) with an administrator identity.
     require_unprivileged_identity("qwen_train.f2_s8_pilot_build.build")
-    base_python = resolve_declared_interpreter(project, declared_python_minor)
+    base_python = resolve_declared_interpreter(
+        project, declared_python_minor, python_map=python_map
+    )
     extra = EXTRA_DEPS.get(task_id, [])
     # The declared (never invented) per-task build adjustments.  ``groups`` /
     # ``extras`` name the project's OWN dependency groups and extras; they were

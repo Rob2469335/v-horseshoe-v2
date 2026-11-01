@@ -233,6 +233,7 @@ class HostBuildExecutor:
         collect_fn: Callable[[Any, Any, str], tuple[bool, str, str]] | None = None,
         task_timeout_seconds: float | None = None,
         verified_inputs: Any | None = None,
+        python_map: Mapping[str, str] | None = None,
     ) -> None:
         self._authorized = authorized_run
         self._inputs = pathlib.Path(inputs)
@@ -268,6 +269,14 @@ class HostBuildExecutor:
             float(task_timeout_seconds) if task_timeout_seconds else None
         )
         self._verified_inputs = verified_inputs
+        self._python_map: dict[str, str] = {}
+        for key, value in dict(python_map or {}).items():
+            path = pathlib.Path(str(value))
+            if not path.is_absolute() or not path.is_file():
+                raise ValueError(
+                    f"python map entry {key!r} must be an existing absolute path: {value!r}"
+                )
+            self._python_map[str(key)] = str(path)
         if collect_fn is None:
             # Collection runs pytest, which a task's own tests can slow down.
             # It must never outlive the task budget: cap it at the smaller of
@@ -341,6 +350,9 @@ class HostBuildExecutor:
                     reason_code="SOURCE_ACQUISITION_FAILURE",
                 )
             declared = self._declared_minor(task_id, self._inputs)
+            build_kwargs: dict[str, Any] = {}
+            if self._python_map:
+                build_kwargs["python_map"] = self._python_map
             result = self._build(
                 task_id,
                 url,
@@ -349,6 +361,7 @@ class HostBuildExecutor:
                 declared_python_minor=declared,
                 authorized_run=self._authorized,
                 root=str(self._workspace_root_value()),
+                **build_kwargs,
             )
         except AuthorizationError:
             # Expiration, revocation, invalid authorization, artifact drift,
@@ -432,6 +445,7 @@ def make_probe_live_builder(
     workspace_root: pathlib.Path | str,
     task_timeout_seconds: float | None = None,
     verify_inputs: bool = True,
+    python_map: Mapping[str, str] | None = None,
     **executor_kwargs: Any,
 ) -> LiveBuilder:
     """Compose the host build executor into a :class:`LiveBuilder`.
@@ -477,6 +491,7 @@ def make_probe_live_builder(
         workspace_root=workspace_root,
         task_timeout_seconds=task_timeout_seconds,
         verified_inputs=verified_inputs,
+        python_map=python_map,
         **executor_kwargs,
     )
     builder = LiveBuilder(

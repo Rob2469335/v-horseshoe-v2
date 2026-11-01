@@ -951,7 +951,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Task patch directory (required for --live)",
     )
+    ap.add_argument(
+        "--python-map",
+        action="append",
+        default=[],
+        metavar="MINOR=PATH",
+        help=(
+            "Owner-approved interpreter path for one minor (repeatable), e.g. "
+            "3.10=C:\\Python310\\python.exe. A mapped minor never falls back to "
+            "discovery; unmapped minors keep the existing search."
+        ),
+    )
     args = ap.parse_args(argv)
+
+    # Owner-supplied interpreter map (G26 mitigation). Parsed and validated
+    # before any grant read or budget reservation; a malformed map consumes
+    # nothing and never falls back to discovery.
+    from qwen_train.f2_s8_pilot_build import DeclaredInterpreterError, parse_python_map
+
+    try:
+        python_map = parse_python_map(args.python_map)
+    except DeclaredInterpreterError as exc:
+        print(
+            f"PROBE_PREREQUISITES_MISSING: invalid --python-map: {exc}. "
+            "No grant was consumed.",
+            file=sys.stderr,
+        )
+        return 1
 
     # Live execution requires the batch inputs/patches and every other gate.
     # This check runs BEFORE any grant read or budget reservation, so a blocked
@@ -1024,6 +1050,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 patches=args.patches,
                 workspace_root=args.workspace_root,
                 task_timeout_seconds=limits.per_task_time_seconds,
+                python_map=python_map or None,
             )
         except Exception as exc:
             print(
