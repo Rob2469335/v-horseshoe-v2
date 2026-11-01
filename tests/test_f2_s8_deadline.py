@@ -11,6 +11,7 @@ import time
 
 import pytest
 
+from qwen_train import f2_s8_acquisition as A
 from qwen_train import f2_s8_build_executor as X
 from qwen_train import f2_s8_pilot_build as PB
 from qwen_train import f2_s8_winjob as W
@@ -190,4 +191,41 @@ def test_a_deadline_during_discovery_is_not_cached_as_missing(monkeypatch):
     with pytest.raises(PB.TaskDeadlineExceeded):
         PB.available_interpreters(((3, 10),))
     assert ((3, 10),) not in PB._DISCOVERED_INTERPRETERS
+    PB._DISCOVERED_INTERPRETERS.clear()
+
+
+def test_discovery_layer_re_raises_a_timeout_and_still_skips_unrunnable(tmp_path):
+    from subprocess import TimeoutExpired
+
+    candidate = tmp_path / "cand"
+    candidate.mkdir()
+    (candidate / "python.exe").write_bytes(b"x")
+
+    def _timeout(path):
+        raise TimeoutExpired([path], 1)
+
+    with pytest.raises(TimeoutExpired):
+        A.discover_interpreters(version_of=_timeout, roots=[tmp_path])
+
+    def _unrunnable(path):
+        raise OSError("not an executable")
+
+    assert A.discover_interpreters(version_of=_unrunnable, roots=[tmp_path]) == []
+
+
+def test_discovery_is_retried_after_a_timeout(monkeypatch):
+    PB._DISCOVERED_INTERPRETERS.clear()
+    calls = {"n": 0}
+
+    def _flaky(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PB.TaskDeadlineExceeded("discovery", 0.0, stderr="expired")
+        return ["C:\\Python310\\python.exe"]
+
+    monkeypatch.setattr(PB, "discover_interpreters", _flaky)
+    with pytest.raises(PB.TaskDeadlineExceeded):
+        PB.available_interpreters(((3, 10),))
+    assert PB.available_interpreters(((3, 10),)) == ["C:\\Python310\\python.exe"]
+    assert calls["n"] == 2
     PB._DISCOVERED_INTERPRETERS.clear()
