@@ -617,7 +617,12 @@ def assert_installed_pytest(
 
 
 def run(cmd, *, cwd=None, timeout=3600, check=True):
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    # Every build subprocess goes through a kill-on-close Job Object on Windows,
+    # so a timeout terminates the whole tree (clone helpers, uv, pip, pytest)
+    # rather than only the immediate child.
+    from qwen_train.f2_s8_winjob import run_in_job
+
+    proc = run_in_job(cmd, cwd=cwd, timeout=timeout)
     if check and proc.returncode != 0:
         raise RuntimeError(
             f"command failed rc={proc.returncode}: {' '.join(map(str, cmd))}\n"
