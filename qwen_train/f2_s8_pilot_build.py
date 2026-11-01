@@ -1108,15 +1108,26 @@ def resolve_declared_interpreter(
             raise DeclaredInterpreterError(
                 f"python map key is malformed: {raw_key!r}"
             )
-        canonical_map[f"{int(match.group(1))}.{int(match.group(2))}"] = str(raw_path)
+        canonical = f"{int(match.group(1))}.{int(match.group(2))}"
+        if canonical in canonical_map:
+            raise DeclaredInterpreterError(
+                f"duplicate python map entry for {canonical}"
+            )
+        canonical_map[canonical] = str(raw_path)
     if key in canonical_map:
         mapped = Path(canonical_map[key])
+        if not mapped.is_absolute():
+            raise DeclaredInterpreterError(
+                f"mapped interpreter for {key} must be an absolute path: {mapped}"
+            )
         if not mapped.is_file():
             raise DeclaredInterpreterError(
                 f"mapped interpreter for {key} is missing: {mapped}"
             )
         try:
             actual = _version_of(str(mapped))
+        except TaskDeadlineExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 - unusable owner path fails closed
             raise DeclaredInterpreterError(
                 f"mapped interpreter for {key} could not be executed: {mapped}: {exc}"
@@ -1767,8 +1778,14 @@ def classify_build_failure(exc: BaseException) -> str:
     the declared-test-source message is checked before the generic pip signatures
     because it IS the "declared dependency could not be resolved" case.
     """
+    if isinstance(exc, TaskDeadlineExceeded):
+        return "BUILD_TIMEOUT"
     if isinstance(exc, subprocess.TimeoutExpired):
         return "BUILD_TIMEOUT"
+    if isinstance(exc, DeclaredInterpreterError):
+        # A missing/unusable/wrong-version interpreter is a deterministic
+        # configuration defect, not a candidate failure.
+        return "INTERPRETER_UNAVAILABLE"
     msg = str(exc)
     if "BUILD_NOT_AUTHORIZED" in msg:
         return "BUILD_NOT_AUTHORIZED"

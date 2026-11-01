@@ -192,3 +192,46 @@ def test_validate_refuses_duplicate_canonical_keys(tmp_path):
     b.write_bytes(b"b")
     with pytest.raises(PB.DeclaredInterpreterError, match="duplicate"):
         PB.validate_python_map({"3.10": str(a), "03.10": str(b)})
+
+
+def test_duplicate_canonical_keys_in_the_resolver_fail_closed(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    a = tmp_path / "a.exe"
+    b = tmp_path / "b.exe"
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    monkeypatch.setattr(PB, "_version_of", lambda path: (3, 10))
+    with pytest.raises(PB.DeclaredInterpreterError, match="duplicate"):
+        PB.resolve_declared_interpreter(
+            project, "3.10", python_map={"3.10": str(a), "03.10": str(b)}
+        )
+
+
+def test_direct_map_relative_path_is_refused(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    monkeypatch.setattr(PB, "_version_of", lambda path: (3, 10))
+    with pytest.raises(PB.DeclaredInterpreterError, match="absolute"):
+        PB.resolve_declared_interpreter(
+            project, "3.10", python_map={"3.10": "relative\\python.exe"}
+        )
+
+
+def test_task_deadline_during_the_probe_propagates_unwrapped(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    interpreter = tmp_path / "python.exe"
+    interpreter.write_bytes(b"stub")
+
+    def _expired(path):
+        raise PB.TaskDeadlineExceeded("probe", 0.0, stderr="expired")
+
+    monkeypatch.setattr(PB, "_version_of", _expired)
+    with pytest.raises(PB.TaskDeadlineExceeded):
+        PB.resolve_declared_interpreter(
+            project, "3.10", python_map={"3.10": str(interpreter)}
+        )
+
+
+def test_interpreter_failures_classify_as_interpreter_unavailable():
+    assert PB.classify_build_failure(
+        PB.DeclaredInterpreterError("mapped interpreter for 3.10 reports 3.12")
+    ) == "INTERPRETER_UNAVAILABLE"

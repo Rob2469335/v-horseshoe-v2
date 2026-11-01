@@ -166,3 +166,15 @@ def test_a_truncated_timeout_is_classified_as_a_task_deadline(monkeypatch):
     with PB.task_deadline(time.monotonic() + 0.01):
         with pytest.raises(PB.TaskDeadlineExceeded):
             PB.run(["slow"], timeout=3600)
+
+
+def test_a_plain_subprocess_timeout_stays_a_timeout(monkeypatch):
+    def _timeout(cmd, *, cwd=None, timeout=None, env=None):
+        raise __import__("subprocess").TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(W, "run_in_job", _timeout)
+    with PB.task_deadline(time.monotonic() + 3600):
+        with pytest.raises(Exception) as info:
+            PB.run(["slow"], timeout=5)
+    assert not isinstance(info.value, PB.TaskDeadlineExceeded)
+    assert isinstance(info.value, __import__("subprocess").TimeoutExpired)
