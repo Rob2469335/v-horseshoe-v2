@@ -16,6 +16,7 @@ import pytest
 from qwen_train import f2_s8_build_executor as be
 from qwen_train import f2_s8_pilot_build as pb
 from qwen_train import f2_s8_probe_driver as pd
+from qwen_train import f2_s8_winjob as _winjob  # noqa: F401  (import-order guard)
 from qwen_train.f2_authorization import AuthorizationError
 from qwen_train.f2_s8_acquisition import (
     PREFERRED_PYTHON_MINORS,

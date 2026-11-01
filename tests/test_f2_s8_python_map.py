@@ -274,6 +274,58 @@ def test_relative_and_empty_paths_are_not_absolute(bad):
     assert PB._interpreter_path_is_absolute(bad) is False
 
 
+# --- hostile review: exactly which forms pass, on which platform -------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        r"C:\Python310\python.exe",  # drive-absolute
+        "C:/Python310/python.exe",  # drive-absolute, forward slashes
+        r"\\server\share\python.exe",  # UNC
+        r"\\?\C:\Python310\python.exe",  # extended-length namespace
+        r"\\.\C:\Python310\python.exe",  # device namespace
+        r"\\?\UNC\server\share\python.exe",  # extended-length UNC
+    ],
+)
+def test_windows_absolute_forms_are_accepted_on_both_platforms(value):
+    """PINNED behaviour: every Win32 absolute form passes this predicate.
+
+    Windows uses ``Path.is_absolute``; POSIX additionally applies
+    ``PureWindowsPath`` semantics so an owner-supplied Windows map still
+    validates on CI. Consequence, stated rather than hidden: **UNC paths and the
+    ``\\\\?\\`` / ``\\\\.\\`` device namespaces are absolute and are accepted on
+    both platforms**. A device-namespace path (including
+    ``\\\\?\\GLOBALROOT\\Device\\...``) therefore bypasses this predicate and is
+    only stopped later, by the ``is_file()`` check at
+    ``qwen_train/f2_s8_pilot_build.py:1098``. Refusing UNC/device paths here
+    would change production behaviour and is left to the owner; this test pins
+    what the code does today so a change is visible.
+    """
+    assert PB._interpreter_path_is_absolute(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        r"\Python310\python.exe",  # rooted but drive-less: drive-relative
+        r"C:Python310\python.exe",  # drive-relative
+        r"..\Python310\python.exe",
+        r"...\python.exe",
+        r"Python310\python.exe",
+    ],
+)
+def test_windows_non_absolute_forms_are_refused_on_both_platforms(value):
+    assert PB._interpreter_path_is_absolute(value) is False
+
+
+def test_device_namespace_path_is_refused_only_by_the_file_check(tmp_path):
+    """Documents the two-layer answer for a device path: predicate yes, file no."""
+    device = r"\\?\C:\definitely-missing-f2\python.exe"
+    assert PB._interpreter_path_is_absolute(device) is True
+    assert pathlib.Path(device).is_file() is False
+
+
 @pytest.mark.parametrize(
     "bad",
     [

@@ -16,7 +16,21 @@ import pytest
 
 from qwen_train.f2_s8_winjob import IS_WINDOWS, run_in_job
 
+from tests import f2_winjob_support as support
+
 pytestmark = pytest.mark.skipif(not IS_WINDOWS, reason="Job Objects are Windows-only")
+
+
+def test_winjob_captured_the_genuine_popen():
+    """The module's contained-process capture must not be a Popen mock.
+
+    `f2_s8_winjob` runs `_REAL_POPEN = subprocess.Popen` at import; if its first
+    import happens under the suite's autouse `global_subprocess_mock` (via the
+    builder's lazy import) the capture is a MagicMock and every containment
+    test here silently exercises the mock. This test makes that a loud failure.
+    """
+    support.assert_capture_is_genuine()
+    assert support.WINJOB._REAL_POPEN is support.REAL_POPEN
 
 STILL_ACTIVE = 259
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
