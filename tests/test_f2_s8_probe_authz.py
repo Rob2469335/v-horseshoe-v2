@@ -663,11 +663,19 @@ def test_probe_cannot_mutate_admission_ledger(tmp_path):
 # T-16: test_probe_budget_isolated_from_production_scored_budget
 # ---------------------------------------------------------------------------
 def test_probe_budget_isolated_from_production_scored_budget(tmp_path):
+    from tests import f2_budget_root_guard as guard
+
     probe_root = B.budget_root(is_probe=True)
     scored_root = B.budget_root(is_probe=False)
     assert probe_root != scored_root
+    # Resolution follows the module constants (the autouse isolation fixture
+    # redirects them to tmp_path; the import-time snapshot is the production
+    # default, which must stay fixed at the owner's two distinct paths).
     assert probe_root == B.PRODUCTION_PROBE_BUDGET_ROOT
     assert scored_root == B.PRODUCTION_BUDGET_ROOT
+    assert guard.TRUE_PRODUCTION_PROBE_BUDGET_ROOT == guard.PRODUCTION_PROBE_LITERAL
+    assert guard.TRUE_PRODUCTION_BUDGET_ROOT == guard.PRODUCTION_BUDGET_LITERAL
+    assert guard.TRUE_PRODUCTION_PROBE_BUDGET_ROOT != guard.TRUE_PRODUCTION_BUDGET_ROOT
 
     # Test budget reservation in probe store
     test_probe_root = tmp_path / "probe_budget"

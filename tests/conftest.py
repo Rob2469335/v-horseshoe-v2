@@ -307,6 +307,67 @@ def isolate_f2_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def allow_production_budget_root():
+    """Opt out of `isolate_f2_budget_roots`' redirection AND guard.
+
+    ONLY for tests that must exercise the runner's production-path preflight.
+    Those tests assert the runner REFUSES (`SystemExit`) before any store
+    access, so nothing is written; every other test keeps the redirect.
+    """
+    return None
+
+
+@pytest.fixture(autouse=True)
+def isolate_f2_budget_roots(monkeypatch: pytest.MonkeyPatch, tmp_path_factory, request):
+    """Never let a test resolve - or write - the PRODUCTION F2 budget store.
+
+    `f2_authz_budget.budget_root()` resolves a caller's `ledger_root` argument,
+    and otherwise falls back to the module constants `PRODUCTION_BUDGET_ROOT` /
+    `PRODUCTION_PROBE_BUDGET_ROOT`. No environment variable and no config key
+    can select it, so a single test that forgets `ledger_root=` reserves into
+    the owner's real store. That already happened: the 23 directories in
+    `C:\\Users\\rober\\F2_AUTHZ\\probe_budget_v2` carry the testkit revision
+    `eeee...` and fixture task ids, written 2026-10-25 by a test revision that
+    took the default (`s8_drafts/ISOLATION_ANALYSIS_2026-11-01.md` §3.5).
+
+    Two layers, mirroring `isolate_prompt_repairer_store`:
+
+    1. redirect both constants to a per-test temporary root (so a forgotten
+       argument writes to `tmp_path`, not production);
+    2. wrap `budget_root()` with the guard predicate, so any resolution that
+       still reaches a production path fails the test that made it - including
+       a test that un-redirects the constant to probe the guard itself.
+
+    Tests that pin the production DEFAULT compare against
+    `tests.f2_budget_root_guard.TRUE_*` (captured at import, before this
+    fixture runs), never against the redirected module attribute.
+    """
+    from qwen_train import f2_authz_budget as _budget
+
+    from tests.f2_budget_root_guard import assert_isolated_from_production
+
+    if "allow_production_budget_root" in request.fixturenames:
+        yield
+        return
+
+    root = tmp_path_factory.mktemp("f2_budget_root")
+    monkeypatch.setattr(_budget, "PRODUCTION_BUDGET_ROOT", root / "budget_v2")
+    monkeypatch.setattr(
+        _budget, "PRODUCTION_PROBE_BUDGET_ROOT", root / "probe_budget_v2"
+    )
+
+    unguarded = _budget.budget_root
+
+    def _guarded_budget_root(explicit=None, *, is_probe: bool = False):
+        resolved = unguarded(explicit, is_probe=is_probe)
+        assert_isolated_from_production(resolved)
+        return resolved
+
+    monkeypatch.setattr(_budget, "budget_root", _guarded_budget_root)
+    yield
+
+
+@pytest.fixture
 def f2_test_repository_identity(monkeypatch: pytest.MonkeyPatch):
     """Pin ``f2_authorization.repository_identity`` to a fixed clean revision.
 

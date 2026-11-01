@@ -40,6 +40,7 @@ from tests.f2_authz_testkit import (
     write_record,
     write_trust_root,
 )
+from tests.f2_budget_root_guard import TRUE_PRODUCTION_BUDGET_ROOT
 
 CONTENT = "c" * 64
 TASK = "acme__widget-1"
@@ -241,7 +242,7 @@ class World:
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
-    assert BUDGET.PRODUCTION_BUDGET_ROOT == pathlib.Path(
+    assert TRUE_PRODUCTION_BUDGET_ROOT == pathlib.Path(
         r"C:\Users\rober\F2_AUTHZ\budget_v2"
     ), "the production v2 budget root is a fixed code constant"
     return World(tmp_path, monkeypatch)
@@ -358,7 +359,7 @@ def _assert_refused(world: World, argv, expected_code: str, order, recorder):
     assert _snapshot(world.budget_root) == budget_before, "the budget root changed"
     assert _snapshot(world.ledger_root) == ledger_before, "the ledger changed"
     assert _snapshot(world.tmp) == tmp_before, "the working tree of the run changed"
-    assert BUDGET.PRODUCTION_BUDGET_ROOT == pathlib.Path(
+    assert TRUE_PRODUCTION_BUDGET_ROOT == pathlib.Path(
         r"C:\Users\rober\F2_AUTHZ\budget_v2"
     )
 
@@ -739,8 +740,10 @@ def test_v2_gate_failure_never_falls_back_to_v1(world, order):
 def test_production_budget_root_is_fixed_code_constant(world):
     """The production root is provisioned in code, outside the ledger."""
     expected = pathlib.Path(r"C:\Users\rober\F2_AUTHZ\budget_v2")
-    assert BUDGET.PRODUCTION_BUDGET_ROOT == expected
-    assert BUDGET.budget_root(None) == expected
+    # The autouse budget isolation redirects the LIVE constant; the import-time
+    # snapshot is the production default this test pins.
+    assert TRUE_PRODUCTION_BUDGET_ROOT == expected
+    assert BUDGET.budget_root(None) == BUDGET.PRODUCTION_BUDGET_ROOT
     assert list(world.budget_root.iterdir()) == []
 
 
@@ -977,7 +980,7 @@ def test_stuck_claim_is_not_bypassed_by_a_new_run_id(world, order):
         lock.rmdir()
 
 
-def test_production_style_refuses_temp_trust_root(world, order):
+def test_production_style_refuses_temp_trust_root(world, order, allow_production_budget_root):
     recorder = Recorder(order)
     with pytest.raises(SystemExit) as caught:
         RUNNER.main(
@@ -1029,7 +1032,7 @@ def test_duplicate_gated_task_refused_through_main(world, order, monkeypatch):
     monkeypatch.setattr(RUNNER, "_gated_task_ids", lambda manifest: [TASK, TASK])
     _assert_refused(world, world.argv(), "DUPLICATE_TASK", order, Recorder(order))
 
-def test_production_style_without_seam_refuses_temp_trust_root(world, order):
+def test_production_style_without_seam_refuses_temp_trust_root(world, order, allow_production_budget_root):
     recorder = Recorder(order)
     with pytest.raises(SystemExit) as caught:
         RUNNER.main(

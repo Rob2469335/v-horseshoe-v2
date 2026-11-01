@@ -73,12 +73,18 @@ def test_bounds():
 def test_production_root_is_fixed_and_env_cannot_select(monkeypatch, tmp_path):
     from qwen_train.f2_authz_ledger import DEFAULT_LEDGER_ROOT
 
+    from tests.f2_budget_root_guard import TRUE_PRODUCTION_BUDGET_ROOT
+
     expected = pathlib.Path(r"C:\Users\rober\F2_AUTHZ\budget_v2")
-    assert B.PRODUCTION_BUDGET_ROOT == expected
+    # The autouse budget isolation redirects the LIVE constant; the import-time
+    # snapshot is the production default this test pins.
+    assert TRUE_PRODUCTION_BUDGET_ROOT == expected
     assert expected != DEFAULT_LEDGER_ROOT
     assert DEFAULT_LEDGER_ROOT not in expected.parents
     monkeypatch.setenv("F2_AUTHZ_BUDGET_ROOT", str(tmp_path))
-    assert B.budget_root(None) == expected
+    # No environment variable can select the root: resolution follows the
+    # module constant, which the test-isolation fixture has redirected.
+    assert B.budget_root(None) == B.PRODUCTION_BUDGET_ROOT
 
 
 # --- executions -------------------------------------------------------------
