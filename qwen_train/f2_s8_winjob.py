@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wintypes
+import dataclasses
 import subprocess
 import sys
 
@@ -31,6 +32,20 @@ _REAL_POPEN = subprocess.Popen
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JobObjectExtendedLimitInformation = 9
+
+#: Termination modes reported on a timeout. ``TERMINATION_FAILURE`` means the
+#: implementation could not establish that the tree exited.
+NORMAL_JOB_TERMINATION = "NORMAL_JOB_TERMINATION"
+TASKKILL_FALLBACK = "TASKKILL_FALLBACK"
+TERMINATION_FAILURE = "TERMINATION_FAILURE"
+
+
+@dataclasses.dataclass(frozen=True)
+class TerminationOutcome:
+    mode: str
+    confirmed: bool
+    detail: str = ""
+
 
 if IS_WINDOWS:  # pragma: no branch - import-time platform switch
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -113,22 +128,60 @@ def _assign(job: int, process_handle: int) -> None:
         )
 
 
-def run_in_job(cmd, *, cwd=None, timeout: float | None = None):
+def _wait_exit(proc: subprocess.Popen, seconds: float) -> bool:
+    """Wait a bounded time for the process to exit; report whether it did."""
+    try:
+        proc.wait(timeout=seconds)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def _terminate_tree(job: int, proc: subprocess.Popen) -> TerminationOutcome:
+    """Terminate the tree and report what was actually established.
+
+    A job is the normal path; ``taskkill /T`` is used only when the process was
+    never assigned. In both cases the outcome is confirmed only by observing the
+    process exit, never by the request alone.
+    """
+    if job:
+        _kernel32.TerminateJobObject(wintypes.HANDLE(job), 1)
+        mode = NORMAL_JOB_TERMINATION
+        detail = "TerminateJobObject issued"
+    else:
+        # Use the real Popen captured at import: the test suite patches
+        # subprocess.Popen globally, and a mocked taskkill would silently do
+        # nothing while the code believed it had tried the fallback.
+        kill = _REAL_POPEN(
+            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        kill.communicate(timeout=10)
+        mode = TASKKILL_FALLBACK
+        detail = "taskkill /T /F issued"
+    if _wait_exit(proc, 5.0):
+        return TerminationOutcome(mode=mode, confirmed=True, detail=detail)
+    message = f"{mode} could not confirm process exit for pid {proc.pid}"
+    print(f"TERMINATION_FAILURE: {message}", file=sys.stderr)
+    return TerminationOutcome(mode=TERMINATION_FAILURE, confirmed=False, detail=message)
+
+
+def run_in_job(cmd, *, cwd=None, timeout: float | None = None, env=None):
     """Run ``cmd`` in a kill-on-close job; terminate the tree on timeout.
 
     Returns ``subprocess.CompletedProcess``. Raises ``subprocess.TimeoutExpired``
-    after terminating the job, so callers see the same exception they would get
-    from ``subprocess.run(timeout=...)``.
+    (with a ``cleanup`` attribute carrying :class:`TerminationOutcome`) after
+    terminating the tree, so callers see the same exception they would get from
+    ``subprocess.run(timeout=...)``.
 
-    If the host blocks nested jobs (``AssignProcessToJobObject`` denied because
-    the current process is already in a job that forbids nesting), the fallback
-    terminates the tree with ``taskkill /T``. That is weaker than a job but still
-    tree-scoped, and it is recorded by the ``TASKKILL_FALLBACK`` message on the
-    timeout path only.
+    If the host blocks nested jobs, the fallback terminates the tree with
+    ``taskkill /T`` and the timeout exception's ``cleanup.mode`` is
+    ``TASKKILL_FALLBACK``. A ``TERMINATION_FAILURE`` outcome means cleanup could
+    not be established and must never be reported as success.
     """
     if not IS_WINDOWS:
         return subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
+            cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env
         )
 
     job = _make_job()
@@ -137,6 +190,7 @@ def run_in_job(cmd, *, cwd=None, timeout: float | None = None):
     try:
         proc = _REAL_POPEN(
             cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env,
         )
         try:
             _assign(job, int(proc._handle))
@@ -149,25 +203,13 @@ def run_in_job(cmd, *, cwd=None, timeout: float | None = None):
         try:
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
-            _terminate_tree(job if assigned else 0, proc)
+            cleanup = _terminate_tree(job if assigned else 0, proc)
             out, err = proc.communicate()
-            raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+            exc = subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+            exc.cleanup = cleanup
+            raise exc
         return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
     finally:
         if proc is not None and proc.poll() is None:
             _terminate_tree(job if assigned else 0, proc)
-            proc.wait()
         _close(job)
-
-
-def _terminate_tree(job: int, proc: subprocess.Popen) -> None:
-    """Kill the whole tree: job first, ``taskkill /T`` as the fallback."""
-    if job:
-        _kernel32.TerminateJobObject(wintypes.HANDLE(job), 1)
-        return
-    subprocess.run(
-        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )

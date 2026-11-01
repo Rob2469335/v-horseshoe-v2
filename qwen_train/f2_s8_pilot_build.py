@@ -19,6 +19,7 @@ the guest never needs git, a compiler or the network.
 from __future__ import annotations
 
 import argparse
+import contextvars
 import hashlib
 import json
 import ntpath
@@ -574,8 +575,7 @@ def installed_pytest_version(python: str | Path, *, timeout: int = 300) -> str:
         "    sys.exit(3)\n"
         "print(version)\n"
     )
-    proc = subprocess.run([str(python), "-c", code],
-                          capture_output=True, text=True, timeout=timeout)
+    proc = run([str(python), "-c", code], timeout=timeout, check=False)
     if proc.returncode == 3:
         raise RuntimeError(
             f"PYTEST_INSTALLED_UNVERIFIABLE: pytest is not installed in {python}")
@@ -620,6 +620,14 @@ def run(cmd, *, cwd=None, timeout=3600, check=True):
     # Every build subprocess goes through a kill-on-close Job Object on Windows,
     # so a timeout terminates the whole tree (clone helpers, uv, pip, pytest)
     # rather than only the immediate child.
+    remaining = deadline_remaining()
+    if remaining is not None:
+        if remaining <= 0:
+            raise TaskDeadlineExceeded(
+                cmd, 0.0, output="",
+                stderr="task deadline expired before subprocess start",
+            )
+        timeout = min(timeout, remaining)
     from qwen_train.f2_s8_winjob import run_in_job
 
     proc = run_in_job(cmd, cwd=cwd, timeout=timeout)
@@ -629,6 +637,55 @@ def run(cmd, *, cwd=None, timeout=3600, check=True):
             f"stdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
         )
     return proc
+
+
+#: Absolute monotonic deadline for the current task build (``None`` = none).
+#: Set once by the executor at the task boundary; every ``run()`` and stage
+#: check reads it. This is deadline propagation: stages share one deadline and
+#: never reset a fresh full timeout.
+_TASK_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "f2_s8_task_deadline", default=None
+)
+
+
+class TaskDeadlineExceeded(subprocess.TimeoutExpired):
+    """The task's absolute deadline expired before a stage or subprocess."""
+
+
+class _DeadlineScope:
+    def __init__(self, deadline: float | None) -> None:
+        self._deadline = deadline
+        self._token: contextvars.Token | None = None
+
+    def __enter__(self) -> "_DeadlineScope":
+        self._token = _TASK_DEADLINE.set(self._deadline)
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        if self._token is not None:
+            _TASK_DEADLINE.reset(self._token)
+        return False
+
+
+def task_deadline(deadline: float | None) -> _DeadlineScope:
+    """Bind an absolute monotonic deadline for the duration of a block."""
+    return _DeadlineScope(deadline)
+
+
+def deadline_remaining() -> float | None:
+    deadline = _TASK_DEADLINE.get()
+    if deadline is None:
+        return None
+    return deadline - time.monotonic()
+
+
+def _check_deadline(stage: str) -> None:
+    remaining = deadline_remaining()
+    if remaining is not None and remaining <= 0:
+        raise TaskDeadlineExceeded(
+            stage, 0.0, output="",
+            stderr=f"task deadline expired before {stage}",
+        )
 
 
 def _version_of(python: str) -> tuple[int, int]:
@@ -1282,6 +1339,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     ws.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
+    _check_deadline("clone")
     run(_git_command("clone", "--filter=blob:none", "--quiet", url, str(repo)))
     run(_git_command("checkout", "--quiet", base_commit), cwd=repo)
     run(_git_command("apply", str(Path(patches) / f"{task_id}.test_patch")), cwd=repo)
@@ -1374,6 +1432,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
     envs: dict[str, str | None] = {"base": None, "gold": None}
     install_plan: dict[str, Any] = {}
     if not uses_uv:
+        _check_deadline("environment-creation")
         for label, proj in (("base", project), ("gold", gold_project)):
             venv = ws / (".venv" if label == "base" else ".venv_gold")
             run([base_python, "-m", "venv", str(venv)])
@@ -1515,6 +1574,7 @@ def build(task_id: str, url: str, *, inputs: Path = INPUTS,
         # Sync in the RESOLVED project root, not blindly at the repo root: a
         # monorepo's lockfile belongs to the subproject.
         uv_enforcement: dict[str, Any] = {}
+        _check_deadline("dependency-sync")
         for label, tree in (("base", project), ("gold", gold_project)):
             # Pin uv to the SAME interpreter this builder selected. Without
             # --python, uv discovers its own (newest) interpreter and chose

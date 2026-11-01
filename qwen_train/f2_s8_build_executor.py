@@ -60,6 +60,7 @@ import json
 import os
 import pathlib
 import subprocess
+import time
 from typing import Any, Callable, Iterable, Mapping
 
 from qwen_train.f2_authorization import AuthorizationError
@@ -163,13 +164,25 @@ def check_declared_nodes_collect(
         "--collect-only", "-q", "-p", "no:cacheprovider",
         "-p", "_pytest_no_network", "--no-header",
     ]
+    from qwen_train.f2_s8_pilot_build import deadline_remaining
+    from qwen_train.f2_s8_winjob import run_in_job
+
+    effective = timeout
+    remaining = deadline_remaining()
+    if remaining is not None:
+        if remaining <= 0:
+            return False, "COLLECT_TIMEOUT", "task deadline expired before collection"
+        effective = min(timeout, remaining)
     try:
-        proc = subprocess.run(
-            cmd, cwd=str(project_root), capture_output=True, text=True,
-            timeout=timeout, env=env,
+        proc = run_in_job(
+            cmd, cwd=str(project_root), timeout=effective, env=env
         )
-    except subprocess.TimeoutExpired:
-        return False, "COLLECT_TIMEOUT", f"collection exceeded {timeout}s"
+    except subprocess.TimeoutExpired as exc:
+        cleanup = getattr(exc, "cleanup", None)
+        detail = f"collection exceeded {effective:.0f}s"
+        if cleanup is not None:
+            detail += f"; cleanup={cleanup.mode} confirmed={cleanup.confirmed}"
+        return False, "COLLECT_TIMEOUT", detail
     except OSError as exc:
         return False, "COLLECT_FAILED", f"collection could not start: {exc}"
 
@@ -280,6 +293,16 @@ class HostBuildExecutor:
         )
 
     def build_one(self, task_id: str) -> BuildCell:
+        """Task boundary: bind one absolute deadline for everything below."""
+        deadline = None
+        if self._task_timeout_seconds is not None:
+            deadline = time.monotonic() + self._task_timeout_seconds
+        from qwen_train.f2_s8_pilot_build import task_deadline
+
+        with task_deadline(deadline):
+            return self._build_one_impl(task_id)
+
+    def _build_one_impl(self, task_id: str) -> BuildCell:
         selected = tuple(getattr(self._authorized, "selected_task_ids", ()) or ())
         if selected and task_id not in set(selected):
             raise BuilderContractError(
@@ -333,11 +356,17 @@ class HostBuildExecutor:
             # per-task result. This is type-based (V2GateError/BudgetError are
             # AuthorizationError), not a substring search.
             raise
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            cleanup = getattr(exc, "cleanup", None)
+            detail = "build timed out"
+            if cleanup is not None:
+                detail += f"; cleanup={cleanup.mode} confirmed={cleanup.confirmed}"
+                if not cleanup.confirmed:
+                    detail += f" ({cleanup.detail})"
             return BuildCell(
                 task_id,
                 "BUILD_FAILURE",
-                failure="build timed out",
+                failure=detail,
                 reason_code="BUILD_TIMEOUT",
             )
         except Exception as exc:  # noqa: BLE001 - map to an explicit reason code

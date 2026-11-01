@@ -728,7 +728,7 @@ class TestInstalledVersionEnforcement:
             captured["args"] = args
             return _Proc()
 
-        monkeypatch.setattr(B.subprocess, "run", _fake_run)
+        monkeypatch.setattr(B, "run", _fake_run)
         installed = B.installed_pytest_version(sys.executable)
         assert installed == real
         # it asks the INSTALLED DISTRIBUTION database, in the target interpreter
@@ -756,7 +756,7 @@ class TestInstalledVersionEnforcement:
             stdout = ""
             stderr = ""
 
-        monkeypatch.setattr(B.subprocess, "run", lambda *a, **k: _Proc())
+        monkeypatch.setattr(B, "run", lambda *a, **k: _Proc())
         with pytest.raises(RuntimeError, match="PYTEST_INSTALLED_UNVERIFIABLE"):
             B.installed_pytest_version(sys.executable)
 
