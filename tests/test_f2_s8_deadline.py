@@ -1,0 +1,303 @@
+"""Absolute task deadline propagation (D0-C).
+
+One deadline is bound at the task boundary and read by every `run()` and stage
+check. Tests use short local children only; no candidate build, no network.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+
+import pytest
+
+from qwen_train import f2_s8_acquisition as A
+from qwen_train import f2_s8_build_executor as X
+from qwen_train import f2_s8_pilot_build as PB
+from qwen_train import f2_s8_winjob as W
+
+TASK = "owner__widget-1"
+
+
+def test_expired_deadline_refuses_before_spawn(monkeypatch):
+    calls = []
+    monkeypatch.setattr(W, "run_in_job", lambda *a, **k: calls.append(k))
+    with PB.task_deadline(time.monotonic() - 1):
+        with pytest.raises(PB.TaskDeadlineExceeded):
+            PB.run([sys.executable, "-c", "print(1)"])
+    assert calls == []
+
+
+def test_effective_timeout_is_capped_by_remaining(monkeypatch):
+    captured = {}
+
+    def fake(cmd, *, cwd=None, timeout=None, env=None):
+        captured["timeout"] = timeout
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(W, "run_in_job", fake)
+    with PB.task_deadline(time.monotonic() + 10):
+        PB.run([sys.executable, "-c", "pass"], timeout=3600)
+    assert 0 < captured["timeout"] <= 10
+
+
+def test_later_calls_do_not_reset_the_deadline(monkeypatch):
+    seen = []
+
+    def fake(cmd, *, cwd=None, timeout=None, env=None):
+        seen.append(timeout)
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(W, "run_in_job", fake)
+    with PB.task_deadline(time.monotonic() + 5):
+        PB.run(["a"], timeout=3600)
+        PB.run(["b"], timeout=3600)
+    assert len(seen) == 2
+    assert seen[1] <= seen[0] <= 5
+
+
+def test_stage_check_refuses_after_expiry():
+    with PB.task_deadline(time.monotonic() - 0.5):
+        with pytest.raises(PB.TaskDeadlineExceeded, match="stage"):
+            PB._check_deadline("stage")
+
+
+def test_deadline_is_cleared_after_the_scope():
+    with PB.task_deadline(time.monotonic() + 5):
+        assert PB.deadline_remaining() is not None
+    assert PB.deadline_remaining() is None
+
+
+def test_per_call_timeout_remains_upper_bound(monkeypatch):
+    captured = {}
+
+    def fake(cmd, *, cwd=None, timeout=None, env=None):
+        captured["timeout"] = timeout
+        from subprocess import CompletedProcess
+
+        return CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(W, "run_in_job", fake)
+    with PB.task_deadline(time.monotonic() + 3600):
+        PB.run(["a"], timeout=7)
+    assert captured["timeout"] == 7
+
+
+def _executor(tmp_path, *, collect_fn, build_fn, task_timeout=1):
+    class _Auth:
+        selected_task_ids = (TASK,)
+
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    (inputs / f"{TASK}.json").write_text("{}", encoding="utf-8")
+    return X.HostBuildExecutor(
+        _Auth(),
+        inputs=inputs,
+        patches=tmp_path,
+        workspace_root=tmp_path,
+        build_fn=build_fn,
+        classify_fn=lambda exc: "NOISE",
+        resolve_url_fn=lambda task, i: "https://example.com/r.git",
+        declared_minor_fn=lambda task, i: "3.10",
+        collect_fn=collect_fn,
+        task_timeout_seconds=task_timeout,
+    )
+
+
+def test_build_one_binds_and_propagates_the_deadline(tmp_path):
+    observed = {}
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(*a, **k):
+        observed["build"] = PB.deadline_remaining()
+        return {"task_id": TASK, "workspace": str(ws), "elapsed_s": 0.1}
+
+    def collect_fn(*a, **k):
+        observed["collect"] = PB.deadline_remaining()
+        return True, "", "ok"
+
+    ex = _executor(tmp_path, collect_fn=collect_fn, build_fn=build_fn, task_timeout=30)
+    cell = ex.build_one(TASK)
+    assert cell.classification == "OBSERVED_COMPATIBLE"
+    assert observed["build"] is not None and observed["build"] <= 30
+    assert observed["collect"] is not None and observed["collect"] <= 30
+    assert PB.deadline_remaining() is None  # scope closed
+
+
+def test_collection_refuses_when_deadline_already_expired(tmp_path):
+    ws = tmp_path / "ws"
+    (ws / "repo").mkdir(parents=True)
+    with PB.task_deadline(time.monotonic() - 1):
+        ok, code, detail = X.check_declared_nodes_collect(
+            ws, ["t"], "pytest", python=sys.executable, timeout=10
+        )
+    assert ok is False
+    assert code == "COLLECT_TIMEOUT"
+    assert "deadline expired" in detail
+
+
+def test_deadline_exhaustion_is_classified_distinctly(tmp_path):
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(*a, **k):
+        raise PB.TaskDeadlineExceeded("uv-sync", 0.0, stderr="task deadline expired")
+
+    def collect_fn(*a, **k):
+        return True, "", "ok"
+
+    ex = _executor(tmp_path, collect_fn=collect_fn, build_fn=build_fn, task_timeout=30)
+    cell = ex.build_one(TASK)
+    assert cell.classification == "BUILD_FAILURE"
+    assert cell.reason_code == "TASK_DEADLINE_EXCEEDED"
+    assert "deadline" in cell.failure
+
+
+def test_a_truncated_timeout_is_classified_as_a_task_deadline(monkeypatch):
+    def _late(cmd, *, cwd=None, timeout=None, env=None):
+        time.sleep(0.05)
+        raise __import__("subprocess").TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(W, "run_in_job", _late)
+    with PB.task_deadline(time.monotonic() + 0.01):
+        with pytest.raises(PB.TaskDeadlineExceeded):
+            PB.run(["slow"], timeout=3600)
+
+
+def test_a_plain_subprocess_timeout_stays_a_timeout(monkeypatch):
+    def _timeout(cmd, *, cwd=None, timeout=None, env=None):
+        raise __import__("subprocess").TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(W, "run_in_job", _timeout)
+    with PB.task_deadline(time.monotonic() + 3600):
+        with pytest.raises(Exception) as info:
+            PB.run(["slow"], timeout=5)
+    assert not isinstance(info.value, PB.TaskDeadlineExceeded)
+    assert isinstance(info.value, __import__("subprocess").TimeoutExpired)
+
+
+def test_a_deadline_during_discovery_is_not_cached_as_missing(monkeypatch):
+    PB._DISCOVERED_INTERPRETERS.clear()
+
+    def _expired(**_kwargs):
+        raise PB.TaskDeadlineExceeded("discovery", 0.0, stderr="expired")
+
+    monkeypatch.setattr(PB, "discover_interpreters", _expired)
+    with pytest.raises(PB.TaskDeadlineExceeded):
+        PB.available_interpreters(((3, 10),))
+    assert ((3, 10),) not in PB._DISCOVERED_INTERPRETERS
+    PB._DISCOVERED_INTERPRETERS.clear()
+
+
+def test_discovery_layer_re_raises_a_timeout_and_still_skips_unrunnable(tmp_path):
+    from subprocess import TimeoutExpired
+
+    candidate = tmp_path / "cand"
+    candidate.mkdir()
+    (candidate / "python.exe").write_bytes(b"x")
+
+    def _timeout(path):
+        raise TimeoutExpired([path], 1)
+
+    with pytest.raises(TimeoutExpired):
+        A.discover_interpreters(version_of=_timeout, roots=[tmp_path])
+
+    def _unrunnable(path):
+        raise OSError("not an executable")
+
+    assert A.discover_interpreters(version_of=_unrunnable, roots=[tmp_path]) == []
+
+
+def test_discovery_is_retried_after_a_timeout(monkeypatch):
+    PB._DISCOVERED_INTERPRETERS.clear()
+    calls = {"n": 0}
+
+    def _flaky(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PB.TaskDeadlineExceeded("discovery", 0.0, stderr="expired")
+        return ["C:\\Python310\\python.exe"]
+
+    monkeypatch.setattr(PB, "discover_interpreters", _flaky)
+    with pytest.raises(PB.TaskDeadlineExceeded):
+        PB.available_interpreters(((3, 10),))
+    assert PB.available_interpreters(((3, 10),)) == ["C:\\Python310\\python.exe"]
+    assert calls["n"] == 2
+    PB._DISCOVERED_INTERPRETERS.clear()
+
+
+def test_deadline_conversion_preserves_cleanup_metadata(monkeypatch):
+    from subprocess import TimeoutExpired
+
+    outcome = W.TerminationOutcome(
+        mode=W.TERMINATION_FAILURE, confirmed=False, detail="simulated failure"
+    )
+
+    def _late(cmd, *, cwd=None, timeout=None, env=None):
+        time.sleep(0.05)
+        exc = TimeoutExpired(cmd, timeout)
+        exc.cleanup = outcome
+        raise exc
+
+    monkeypatch.setattr(W, "run_in_job", _late)
+    with PB.task_deadline(time.monotonic() + 0.01):
+        with pytest.raises(PB.TaskDeadlineExceeded) as info:
+            PB.run(["slow"], timeout=3600)
+    assert info.value.cleanup is outcome
+    assert info.value.cleanup.mode == "TERMINATION_FAILURE"
+    assert info.value.cleanup.confirmed is False
+
+
+def test_task_deadline_cell_reports_unconfirmed_cleanup(tmp_path):
+    outcome = W.TerminationOutcome(
+        mode=W.TERMINATION_FAILURE, confirmed=False, detail="tree not confirmed"
+    )
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(*a, **k):
+        exc = PB.TaskDeadlineExceeded("uv-sync", 0.0, stderr="task deadline expired")
+        exc.cleanup = outcome
+        raise exc
+
+    ex = _executor(
+        tmp_path,
+        collect_fn=lambda *a, **k: (True, "", "ok"),
+        build_fn=build_fn,
+        task_timeout=30,
+    )
+    cell = ex.build_one(TASK)
+    assert cell.reason_code == "TASK_DEADLINE_EXCEEDED"
+    assert "cleanup=TERMINATION_FAILURE" in cell.failure
+    assert "confirmed=False" in cell.failure
+    assert "tree not confirmed" in cell.failure
+
+
+def test_plain_build_timeout_remains_build_timeout(tmp_path):
+    from subprocess import TimeoutExpired
+
+    outcome = W.TerminationOutcome(
+        mode=W.NORMAL_JOB_TERMINATION, confirmed=True, detail="job"
+    )
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(*a, **k):
+        exc = TimeoutExpired("uv", 10)
+        exc.cleanup = outcome
+        raise exc
+
+    ex = _executor(
+        tmp_path,
+        collect_fn=lambda *a, **k: (True, "", "ok"),
+        build_fn=build_fn,
+        task_timeout=30,
+    )
+    cell = ex.build_one(TASK)
+    assert cell.reason_code == "BUILD_TIMEOUT"
+    assert "cleanup=NORMAL_JOB_TERMINATION" in cell.failure

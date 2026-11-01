@@ -60,9 +60,9 @@ entries (a vendored twine test file).
 | `data/prompt_repairer_journal.jsonl` | 80,773 | **Experiment J / production governance input** | **PROVEN yes** (see §8) |
 | `data/prompt_repairer_candidates.json` | 2 | **Experiment J learning state** | **PROVEN yes** (see §8) |
 | `data/prompt_repairer_audit.jsonl` | 20,481,619 | **Experiment J audit trail** | **PROVEN yes** (see §8) |
-| `data/prompt_repairer_receipt.key` | 32 | signing key material, gitignored | UNKNOWN — no test references it |
+| `data/prompt_repairer_receipt.key` | 32 | signing key material, gitignored | **PROVEN NOT REACHABLE** — no code path reads it (2026-10-16, GRAY-3) |
 | `data/prompt_repairer_rollouts.jsonl` | 1,709 | runtime evidence | UNKNOWN |
-| `data/evolution/fitness.jsonl` | 4,525,791 | **production evolution store** | **PROVEN protected for `tests/`; GRAY for `swarm_os/tests/`** |
+| `data/evolution/fitness.jsonl` | 4,525,791 | **production evolution store** | **PROVEN protected for BOTH trees** (GRAY-1 remediated 2026-10-16) |
 | `data/events/events.jsonl` | 576,234 | production event log | **PROVEN conditional write** (§10) |
 | `data/analytics.duckdb` | 12,288 | analytics SQLite | UNKNOWN — no test reference found |
 | `data/trajectories/` | 557 files | trajectory records | UNKNOWN |
@@ -480,7 +480,7 @@ stop MCP, because the MCP SDK uses `anyio.create_subprocess_exec` — documented
 | Variable | Read at | Test interaction | Class |
 |---|---|---|---|
 | `SWARM_EVOLUTION` | runtime, `outcome_fitness.py:296` | forced `0` in `tests/`; not guarded in `swarm_os/tests/` | GREEN / GRAY |
-| `SWARM_RECEIPT_KEY` | runtime, `prompt_repairer.py:162` | set to `unit-test-receipt-key` by autouse `tests/conftest.py:11-15`; also set per-module in 3 test files | GREEN |
+| `SWARM_RECEIPT_KEY` | runtime, `prompt_repairer.py:181-193` | **NOT substituted by any conftest** — the previous claim in this row was false (§18.1). The operator's real key IS in the test process (`.env` loaded `override=True` at app import); set per-test in individual files only. GREEN because the key path has no persistent side effect reachable from a test (§18.1 GRAY-3) | GREEN |
 | `SWARM_WORKSPACE_ROOT` | runtime + import, `swarm_os/lib/paths.py:57` | `.env` does not define it; `tests/test_read_before_write_guard.py:45` skips if unset | GREEN |
 | `SWARM_WRITE_ROOT` | runtime | `test_sandbox_bounds.py:46` sets it to a production-relative dir | **YELLOW** |
 | `QDRANT_URL` | runtime | CI sets `http://127.0.0.1:6333`; unbound local imports would honor it | **YELLOW** |
@@ -529,8 +529,8 @@ behavior. No untracked file was added, deleted, modified, or staged.
 |---|---|---|---|
 | **GREEN** | 3 | 9 | PromptRepairer unit fixtures; PromptRepairer lifespan isolation (remediated `417d013c`); test_admin_status event-log isolation (remediated, §10); `SWARM_WRITE_ROOT` relative-root containment (GREEN by verification, §19 YELLOW-3); Qdrant `lesson_manager` (corrected — see §7.3); fitness store for `tests/`; `.env`-independent env fixtures |
 | **YELLOW** | 3 | **0** | none — both YELLOW items are now GREEN (one remediated, one proven contained) |
-| **RED** | 2 | 1 | **Qdrant general-constructor bypass** — ordinary pytest reached a real `AsyncQdrantClient` and could issue a real `upsert('decision_cache')` (§7.2). **Remediated** by the two-layer package+per-module patch (§7.4) |
-| **GRAY** | 6 | 3 | `swarm_os/tests/` fitness scope; memory/diary Qdrant path; receipt-key file reachability. (The other three — trajectories, checkpoints, run_snapshots — were proven **RED** and remediated; see §13.1.) |
+| **RED** | 2 | **0** | none — the Qdrant general-constructor bypass (§7.2) is **Remediated** by the two-layer package+per-module patch (§7.4), and RED-1/RED-2 are remediated at `417d013c` |
+| **GRAY** | 6 | **0** | none — all three closed 2026-10-16 (see §18.1): `swarm_os/tests/` fitness scope **REMEDIATED**; memory/diary Qdrant path **REMEDIATED**; receipt-key file reachability **GREEN by verification**. (The other three — trajectories, checkpoints, run_snapshots — were proven **RED** and remediated; see §13.1.) |
 
 **REMEDIATED, no longer counted:** RED-1/RED-2 (`TestClient(app)` lifespan writing
 production `candidates.json` + appending to `audit.jsonl`) — fixed in `417d013c`,
@@ -538,12 +538,42 @@ see `docs/PROMPTREPAIRER_LIFESPAN_ISOLATION_REMEDIATION.md`. The
 `candidates.json`-contamination claim that accompanied it was **rejected** and is
 recorded as such; it was never real.
 
-**Still open:** YELLOW x0 and GRAY x3 above, plus the `:8081`
-`EmbeddingService.embed` retry cost noted in §7.4.
+**Still open:** YELLOW x0 and GRAY x0 as of 2026-10-16, plus the `:8081`
+`EmbeddingService.embed` retry cost noted in §7.4 (a performance defect, not an
+isolation gap).
 
-**Final verdict on broad pytest:** **STILL NOT SAFE.** Qdrant is now contained, but
-YELLOW and GRAY items remain open and the full suite has not been run to confirm
-the rest of the posture.
+**Final verdict on broad pytest (updated 2026-10-16):** every RED, YELLOW and GRAY
+isolation item is now either remediated or proven contained, and a full suite run has
+been executed — at HEAD `15f6b48f`, **`5925 passed, 12 skipped, 1 xfailed,
+0 failed`** (exit 0, 40 min, re-verified 2026-10-16). The earlier figure of
+`5920` was correct for HEAD `2e024564` and rose by the 5 isolation-guard tests
+added at `28063091`. **That green
+result is not the evidence that isolation holds.** The evidence is the fixtures and
+sweeps recorded here; a passing suite says nothing about a store no test happened to
+touch. Re-audit this section if new `data/` writers or new import-time Qdrant bindings
+are added.
+
+### 18.1 GRAY closure (2026-10-16)
+
+| Finding | Risk | Current behaviour | Evidence | Status |
+|---|---|---|---|---|
+| **GRAY-1** — `swarm_os/tests/` fitness scope | A test in that tree driving `step_agent_stream` end-to-end could append to production `data/evolution/fitness.jsonl` | `swarmos_isolate_outcome_fitness` (autouse) forces `SWARM_EVOLUTION=0`; `_fitness_env_enabled()` returns False | `swarm_os/tests/test_isolation_guards.py::test_the_outcome_fitness_gate_is_closed_in_this_tree` + `::test_the_swarmos_conftest_declares_the_fitness_guard` | **PROVEN REMEDIATED** |
+| **GRAY-2** — memory/diary Qdrant path | A module binding a Qdrant client at IMPORT time keeps a reference the package-level patch cannot reach | Both residual import-time globals (`organism_console.skills.skill_repository`, `swarm_os.upwork.learning_engine_qdrant`) are per-module patched in **both** conftests; call-time imports were already covered by the package-level patch | `test_the_residual_import_time_qdrant_bindings_are_in_memory`; `test_every_import_time_qdrant_binding_is_patched` (sweep over all tracked modules) | **PROVEN REMEDIATED** |
+| **GRAY-3** — receipt-key file reachability | A test could read or use production key material | `data/prompt_repairer_receipt.key` is read by **no code path**; `_receipt_key()` reads only `SWARM_RECEIPT_KEY`; the signed receipt is an **in-memory HMAC** never persisted; all PromptRepairer stores are redirected and Qdrant is `:memory:` | source inspection (`prompt_repairer.py:181-193`, `:1299-1314`); `git grep` finds the filename only in docs and two tests that assert it does **not** exist in a temp dir | **PROVEN NOT REACHABLE** |
+
+**Correction to §15 and §23.** Those rows claimed the receipt key is "set to
+`unit-test-receipt-key` by autouse `tests/conftest.py:11-15`". **That was never true**:
+`git log -S 'SWARM_RECEIPT_KEY' -- conftest.py tests/conftest.py swarm_os/tests/conftest.py`
+returns nothing, and that line range is now the `ssl`/`truststore` block. The operator's
+real key IS present in the test process (`.env` is loaded with `override=True` at app
+import — PROVEN: present after `from swarm_os.app.main import app`). No conftest
+substitutes it. GRAY-3 is closed not by a key guard but because the key has **no
+persistent side effect reachable from a test**: the only stores it gates are redirected,
+and the receipt it signs is never written to disk. Fabricating a test-only key was
+deliberately **not** done — placing a credential value into the environment is an owner
+decision, not an agent one, and it would additionally have switched the signing path
+from fail-closed to enabled on hosts without `.env`. **REQUIRES AUTHORIZATION** if the
+operator wants a key-substitution guard; it is not needed for containment today.
 
 
 ## 19. RED / YELLOW detail
@@ -651,10 +681,14 @@ nothing was created. Mutation-checked: it fails if the workspace root is the rep
    redirecting `prompt_repairer._DATA_DIR` + the three sibling path globals.
 2. ~~**RED-3 / YELLOW-1**~~ — **DONE** (this task): package-level + per-module
    Qdrant patch in both conftests.
-3. **YELLOW-2** — redirect `test_admin_status.py`'s events path to `tmp_path`.
+3. ~~**YELLOW-2**~~ — **DONE**: `test_admin_status.py` now uses
+   `monkeypatch.chdir(tmp_path)`, so both the fixture and the route's CWD-relative
+   path are redirected (§19).
 4. ~~**YELLOW-3**~~ - **CLOSED as GREEN**: containment traced and proved (`paths.py:106-109`); regression test added; no code change needed.
-5. **GRAY closure** — trace trajectory / checkpoint / run-snapshot path
-   resolution under test, then classify.
+5. ~~**GRAY closure**~~ — **DONE (2026-10-16)**: trajectory / checkpoint /
+   run-snapshot were traced and proved **RED**, then remediated (§13.1); the
+   remaining three GRAY items are closed in §18.1 (two remediated, one proven not
+   reachable).
 6. **Embedding retry cost** (`:8081`, §7.4) — separate defect, not yet scheduled.
 7. **Pre-existing 142 pending journal rows** — leave in place. They are known
    fixture evidence; deleting them is a destructive change to a governance input
@@ -671,6 +705,11 @@ execution; creating or promoting an ACTIVE lesson; `N`, thresholds, `k`, treatme
 promotion rules, or authorization.
 
 ## 22. Final recommendation
+
+**Superseded 2026-10-16 — see §18 and §18.1 for the current verdict.** The two RED
+findings named below were remediated at `417d013c` (root-`conftest.py` autouse
+fixture), and the remaining YELLOW/GRAY items are now closed. The historical text is
+retained below for the audit trail.
 
 **Broad pytest is NOT safe yet.** Two RED findings are proven: running the suite
 appends governed Experiment J audit records and rewrites the production candidate
@@ -700,6 +739,6 @@ fitness tests, and `swarm_os/tests` genetics.
 | Fitness guard | `tests/conftest.py:169-181` |
 | Conditional event write | `tests/test_admin_status.py` — REMEDIATED via `monkeypatch.chdir` |
 | `SWARM_WRITE_ROOT` | `tests/test_sandbox_bounds.py:46` |
-| Test-only receipt key | `tests/conftest.py:11-15` |
+| Receipt-key containment (no conftest key guard — see §18.1 GRAY-3) | `swarm_os/services/prompt_repairer.py:181-193`, `:1299-1314` |
 | dotenv override | `swarm_os/app/main.py:20` |
 | Prior audit scope | `docs/EXPERIMENT_J_F2_TEST_ISOLATION_AUDIT.md` |

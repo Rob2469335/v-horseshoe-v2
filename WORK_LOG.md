@@ -1574,3 +1574,620 @@ resource limits, wheelhouse limits, evidence transport, and the five-task
 Python-only pilot (`openai__openai-agents-python-1636`, `…-1633`,
 `HypothesisWorks__hypothesis-4532`, `python__mypy-19767`,
 `stanfordnlp__dspy-8739`). **PROPOSED — NOT EXECUTED — REQUIRES AUTHORIZATION.**
+
+## 2026-10-10 (S8 session 3) — D1–D7 governance reconciliation (durable ledger entry)
+
+**Authority.** Operator mission prompt of 2026-10-10 (S8 governance
+reconciliation, guest recovery, connectivity validation) explicitly authorizes
+this documentation-only ledger entry. No commit or push was made; the edit sits
+uncommitted in the worktree by instruction. No VM, ACL, switch, NAT, route,
+firewall, account, secret, or scientific count was touched by the
+reconciliation itself.
+
+**Gap being closed.** The S8 progress checkpoint
+(`C:\Users\rober\F2_EVIDENCE\s8_progress.md`, outside the repo) recorded the
+seven operator decisions D1–D7 with the note "recorded in this prompt; ledger
+entry pending — see STOP-1". `STOP-1` is a prior-session stop marker, not a
+repository document (searched: `WORK_LOG.md`, `docs/LEARNING_EXPERIMENT_STATE.md`,
+`docs/F2_S8_EXECUTION_AND_PILOT_PACKAGE.md`, the progress file itself — no
+designated STOP-1 location exists). No durable repo-side record of D1–D7
+existed. This entry is that record. It reconciles; it does not invent.
+
+**Per-decision reconciliation (evidence re-derived this session, not recalled):**
+
+| ID | Decision (operator, 2026-10-10 prompts) | Durable evidence | Status |
+|---|---|---|---|
+| D1 | Ratify `2024-01-01` as a **freshness proxy** (`is_proxy` true); NOT a training cutoff; reports must say "proxy-based, not verified uncontaminated"; admitted counts by `created_at` quarter; classification code unchanged | `qwen_train/f2_population.py:804` `"is_proxy": True`; `qwen_train/f2_population_build.py:52` `DEFAULT_CUTOFF = "2024-01-01"` (committed) | **APPROVED** — decision table already marked complete; code evidence matches |
+| D2 | Promote order "evaluator-compatible AND Python-confirmed, `created_at` desc, `instance_id` asc" to the operative registration; tracked hash-only manifest at `qwen_train/curriculum/f2_registration/` | Manifest committed at `38641846`: `operative: True`, `ordering_rule: created_at_desc_instance_id_asc_v1`, `registered: 3828`, `registration_content_sha256 = 5f3c9f47…` | **APPROVED** — the table's residual "promotion authority to be checked" is resolved: Rob's prompt supplied the promotion instruction; prior session promoted and committed |
+| D3 | Evaluator `f2_pytest_junit_evaluator`, protocol `f2_experiment_j_v1`, artifact root `C:\Users\rober\F2_EVIDENCE\Experiment_J_F2`, retention 365 d, `SWARM_F2_*` process-scoped only | `qwen_train/f2_evaluator.py:87,90` (`EVALUATOR_ID`, `PROTOCOL_VERSION`); `qwen_train/f2_protocol.py:96`; artifact root directory exists on host | **APPROVED** — runtime env binding (`SWARM_F2_ARTIFACT_RETENTION_DAYS`, store root) remains an execution-time operator action per `f2_preflight.py`; a pending env binding is not a contradiction of the decision |
+| D4 | Create `F2-S8-NAT` + `F2-S8-VM1` (differencing over a COPY of the installed guest OS disk; source untouched; VM Off; 2–4 vCPU; 4–8 GB RAM; no host shares; never on F2-Internal-Switch) with a budget of `<H>` hours and `<G>` GB | **Contradiction preserved:** the decision table row says "NO — `<H>` and `<G>` are blank", while STEP 3 of the same file (written later, same day) records "**D4 APPROVED by Rob on 2026-10-10**: subnet `10.73.0.0/24`, storage cap **40 GB** under `C:\Users\rober\F2_EVIDENCE\`, time cap **8 hours** for the first session; guest RAM must be **4 GB** (measured free RAM 6.67 GB)". Live host state proves creation (switch, NAT `10.73.0.0/24`, Gen2 VM with 2 vCPU/4 GB, golden + differencing seed, 22.77 GB used < 40 GB) | **APPROVED per STEP 3** with concrete values H = 8 h, G = 40 GB, RAM 4 GB. The stale table row is retained as history, not rewritten |
+| D5 | PowerShell Direct + Guest Service Interface on `F2-S8-VM1` only; credential at `C:\Users\rober\F2_EVIDENCE\s8_cred.xml` (operator-created) | Table row "credential file absent" is **stale**: the file now exists (existence check only; contents never touched); GSI enabled on `F2-S8-VM1` (verified prior session); guest-side WinRM is NOT yet enabled (prior session's PSDirect transport failure) | **APPROVED** — host-side complete; guest-side `Enable-PSRemoting` is the pending operator action of the current run |
+| D6 | `conan-io__conan-18153` stays excluded (both copies); no tie-break | Absent from the operative registration's ordered metadata, `first_30.json`, and the full set; `excluded.json` = `[]` (it never entered the evaluator-compatible + Python-confirmed pool, so no tie-break was needed) | **APPROVED** — satisfied by absence, **PROVEN** |
+| D7 | Pace: 5 → gate → 30 → gate → batches of 25 until 300 admitted / list exhausted / budget spent | Factory machinery committed at `8365f06e` (append-only hash-chained ledger, capped retry, batch/concurrency caps; 38 focused tests) | **APPROVED** — pace policy itself is prompt-recorded; machinery exists |
+
+**New operator authorization recorded by this run (does not by itself close any
+other gate):** static guest IPv4 on `F2-S8-VM1` **only** — address
+`10.73.0.2`, prefix `/24`, default gateway `10.73.0.1`, DNS `1.1.1.1` — to be
+applied **by the operator personally through the VMConnect console**. The agent
+is prohibited from interactive guest login, credential extraction, DHCP
+service, topology changes, or ACL changes to make tests pass.
+
+**Result:** all seven decisions are established by existing operator
+authorizations plus re-derived repo/host evidence; none invented; the D4 and D5
+table staleness preserved transparently above. The "ledger entry pending"
+gap for D1-D7 is **closed by this entry**. Scientific counts remain
+registered 3,828 / attempted 0 / completed 0 / admitted 0 / analyzable 0.
+
+**Same-run guest-recovery outcome (21:51-22:06 local): BLOCKED, no tests
+run.** `F2-S8-VM1` booted cleanly (events 18500/18601); the operator ran the
+guest commands via VMConnect. `Enable-PSRemoting -Force` failed with error
+`2150859113` ("WinRM firewall exception will not work since one of the
+network connection types on this machine is set to Public...") - standard
+Windows behavior for an unidentified network on a Hyper-V internal switch
+(SUPPORTED; not Avast, not credentials, not Hyper-V). The guest adapter was
+confirmed as `Ethernet 2` ifIndex 4, MAC `00-15-5D-56-D6-03`, matching the
+host-side vNIC. Static IP was not attempted; T01-T15 were NOT RUN. The
+operator declined both remediations (Private-profile change and
+`-SkipNetworkProfileCheck`) for this run and ordered shutdown. The VM was
+shut down gracefully via the Shutdown Integration Component (events
+18506/18504, Force=false). Post-run read-back: both VMs Off; target ACL
+still exactly 11 and source exactly 3, both byte-identical to baseline;
+golden image read-only and unchanged (mtime 2026-10-09 16:56:35); seed
+differencing chain intact; switches/NAT/vEthernet/forwarding/routes
+unchanged; zero leftover sessions/jobs/processes. Full evidence in
+`C:\Users\rober\F2_EVIDENCE\s8_progress.md` (Session 3 outcome section).
+Remaining human action: one console session (Private profile ->
+Enable-PSRemoting -> static 10.73.0.2/24 gw 10.73.0.1 DNS 1.1.1.1) then
+resume. No commit or push was made.
+
+## 2026-10-10/11 (S8 session 4) — S8 infrastructure/isolation validation: PASS
+
+S8 infrastructure/isolation verification is **PASS**. Root cause of the permitted-TCP
+failure was **Avast Antivirus firewall** (the registered/governing firewall): Avast's
+own packet log (C:\ProgramData\Avast Software\Avast\Fw.db) recorded rule
+"Public Tcp/Udp In Block" dropping the S8 segment TCP (10.73.0.1 <-> 10.73.0.2, proto 6);
+the S8 network (vEthernet (F2-S8-NAT) / 10.73.0.0/24) was classified Public. Ruled out
+by reversible tests: Hyper-V extended ACL, guest NIC offloads, host vNIC offloads, WinNAT.
+Remediation (owner, scoped): Avast network trust for the S8 network Public -> Friends only;
+no packet rule, no Wi-Fi change, no ACL/topology change.
+
+Post-fix evidence: TCP CONNECTED (1.1.1.1:443, 8.8.8.8:443, 10.73.0.1:135); HTTPS
+https://www.example.com/ -> HTTP 200 / 577 bytes; packet-level inbound TCP confirmed
+(4.150.223.111:443 -> 10.73.0.2, [FP.] data + [R.] teardown); UDP DNS RESOLVED
+(1.1.1.1). Prohibited paths still TIMEOUT (10.72.0.1:8099, 192.168.86.1:443).
+IPv6: guest has only link-local fe80 (no global/ULA/temporary), no ::/0 route, no RA,
+no IPv6 DNS, no tunnel adapters; host IPv6 link-local only, forwarding/advertising
+Disabled, NAT IPv4-only, and the ACL ANY deny rules cover IPv4+IPv6 -> no usable IPv6
+path. IPv6 isolation PROVEN absent. Target/source ACL counts 11/3 unchanged; both VMs
+Off; VMConnect closed; pktmon cleared; 0 sessions. No scientific execution occurred.
+Evidence: C:\Users\rober\F2_EVIDENCE\s8_progress.md (Session 3 correction + this run).
+
+## 2026-10-11 (F2 completion attempt) — 300-pair objective: BLOCKED (REQUIRES AUTHORIZATION)
+
+Attempted the autonomous 300-analyzable-pair objective. Live authority check:
+- EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md:139-142 lists "Any confirmatory F2 or
+  Q13 execution" under REQUIRES AUTHORIZATION.
+- EXPERIMENT_J_F2_OP_INFRA_004_AUTHORIZATION.md:151 - NOT AUTHORIZED for F2 scientific
+  execution/evaluation.
+- EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md:73 - population acquisition REQUIRES
+  AUTHORIZATION.
+- EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md:14,36 + EXPERIMENT_J_F2_ISOLATION_POPULATION_AUDIT.md
+  - the frozen confirmatory design cannot be validly powered; confirmatory n/alpha/test
+  NOT PROVEN (never frozen) -> GOVERNANCE GAP.
+
+Therefore confirmatory execution and the 300-pair target are out of the granted
+authority. S8 PASS does not make F2 scientifically ready. Scientific counts unchanged
+(registered 3,828; attempted 0; completed 0; admitted 0; analyzable 0). No execution,
+no commit, no push.
+
+## 2026-10-11 (F2 authorization-package implementation)
+
+Resolved D1 in documentation only (no approval fabricated): SAP
+(EXPERIMENT_J_F2_READINESS_AND_STATISTICAL_PLAN.md) §2 is PROPOSED/NONBINDING as
+scientific design; the n=max(300,required_pairs(...)) floor is a CODE-ENFORCED
+implementation invariant (pinned by tests), not a scientific authorization; added
+a D1 clarification at §2 and corrected the "frozen rule" wording at §2.4.
+Added docs/EXPERIMENT_J_F2_AUTHORIZATION_PROPOSAL.md with separately-scoped
+POP-001 (acquisition), EXPL-001 (exploratory T/X), CONF-001 (confirmatory F2),
+all PENDING, plus the delta/pi_d options (A exploratory screening / B prespecified
+evidence) and the owner decision log. D2 (delta/pi_d) remains the blocker: a
+confirmatory N cannot be computed. No execution, no acquisition, no admission, no
+commit/push. Git HEAD unchanged; S8 PASS preserved.
+
+## 2026-10-11 (F2 authorization enforcement — integration increment)
+
+- Hardened qwen_train/f2_authorization.py: strict JSON loader rejects duplicate
+  keys (record + trust root); trust root remains owner-controlled and absent by
+  default -> every stage denied (fail-closed).
+- Wired the central guard into protected entry points: f2_population_acquire.acquire
+  (POP-001/acquire) and f2_registration.build_manifest (POP-001/register). Guard
+  fires before any side effect.
+- Tests: tests/test_f2_authorization.py 24 passed (adds direct-entrypoint denial,
+  POP->CONF scope separation, duplicate-key rejection); tests/test_f2_registration.py
+  26 passed; tests/test_f2_population.py 43 passed. ruff E9,F clean on changed modules.
+- Added an isolated test-authorization fixture (ephemeral ed25519 key + temp trust
+  root) to test_f2_registration.py so build_manifest logic stays testable; it is NOT
+  a production trust root and cannot authorise real operations.
+- NOT yet wired: the execution adapter / orchestrator (CONF-001) entry points;
+  TOCTOU snapshot binding; GitHub ruleset (proposed, not active). POP-001/EXPL-001/
+  CONF-001 remain PENDING. No authorization activated; no scientific execution.
+
+## 2026-10-11 (F2 governance closure — documentation only)
+Appended Appendix G to docs/EXPERIMENT_J_F2_AUTHORIZATION_PROPOSAL.md: Q10
+authorization-model decision (A keep CalibrationAuthorization / B unify under the
+signed verifier) as PROPOSED-OWNER-DECISION-REQUIRED; trust-root ceremony
+(REQUIRES OWNER INPUT); GitHub governance boundary (PROPOSED; live: master
+unprotected, no rulesets, secret scanning on); count separation + the 300-pair
+dependency chain; AUTH-013/024/028 reconciliation with the two conflicts flagged
+(pi_d fixed vs NOT ESTABLISHED; AUTH-028 acquisition vs AUTH-013 non-grant).
+No runtime/authorization/test behavior changed; no scientific execution; no keys/
+roots; no GitHub changes; no commit/push.
+
+## 2026-10-11 (F2 authority-conflict decision record — documentation only)
+Appended Appendix H to docs/EXPERIMENT_J_F2_AUTHORIZATION_PROPOSAL.md: Conflict A
+(AUTH-013 planning pi_d=0.50 vs AUTH-024 empirical NOT ESTABLISHED) = GOVERNANCE
+GAP (labelling), owner decision to label 0.50 as planning-only; Conflict B
+(AUTH-028 acquisition 2026-10-07 vs AUTH-013 non-grant) = PROVEN reconciled by
+recency/scope; pi_d trace (planning-only; production takes discordance as an
+empirical input; the 0.5 literals are the McNemar null); GitHub acceptance package
+(PROPOSED, live: master unprotected/no rulesets); trust-root acceptance criteria
+(REQUIRES OWNER INPUT). No execution; no keys; no GitHub/host changes; no commit.
+
+## 2026-10-11 (F2 readiness recognition — verification correction)
+Verified in live source that qwen_train/f2_readiness.py:35-45 already recognizes
+AUTH-028 (protected_population vs ADMITTED count) and AUTH-013 (n=300 ANALYZABLE),
+plus a q10_q12_q13_authorization item. Supersedes the earlier "readiness
+recognition NOT ESTABLISHED". No code change required; documentation corrected.
+
+## 2026-10-11 (π_d clarification + owner-action package — documentation only)
+Added a π_d planning-vs-empirical clarification note to the readiness/statistical
+plan (AUTH-013 0.50 = planning assumption; empirical π_d NOT ESTABLISHED; code
+evidence f2_statistics requires discordance; formalising inside AUTH-013 = owner
+decision). Added Appendix I (minimum owner-action package: trust root, GitHub
+governance, POP-001 under AUTH-028, EXPL-001/CONF-001/Q10). No scientific
+assumption, runtime, or authorization changed; no execution; no keys/roots; no
+GitHub/host changes; no commit/push.
+
+## 2026-10-11 (single-maintainer governance model — documentation only)
+Owner decision recorded (Appendix K): single-maintainer project; independent human
+review unavailable; required-approval count stays 0; automation/signed evidence is
+NOT independent human review; CODEOWNERS not active until on master; no fabricated
+reviewer/approval. Live ruleset verified (protect-master active; 7 required checks;
+review=0, code-owner-review=false). No execution; no keys/roots; no GitHub change
+this task; no commit/push.
+
+## 2026-10-11 (SOTA supply-chain fix — CI action SHA pinning)
+Per GitHub "Secure use reference" (docs.github.com/en/actions/reference/secure-use-reference:
+"Pin actions to a full-length commit SHA ... the only way to use an action as an
+immutable release"), pinned all 11 `uses:` references in .github/workflows/ci.yml
+from mutable major tags to full commit SHAs (with `# vN` comments):
+checkout@v7 -> 3d3c42e5aac5ba805825da76410c181273ba90b1; setup-python@v7 ->
+5fda3b95a4ea91299a34e894583c3862153e4b97; cache@v6 ->
+55cc8345863c7cc4c66a329aec7e433d2d1c52a9; setup-node@v6 ->
+249970729cb0ef3589644e2896645e5dc5ba9c38 (SHAs resolved via gh api, authoritative).
+No unpinned action refs remain. CI permissions were already least-privilege
+(contents: read; no pull_request_target). No protected operation; no keys/roots;
+no GitHub settings change; no commit/push.
+
+## 2026-10-11 (F2 authorization hardening - implementation increment)
+
+Mission: operator prompt "EXPERIMENT J / F2 - COMPLETE AUTHORIZATION HARDENING"
+(authorizes code+tests+one authority-doc entry+branch push+one PR; NOT execution,
+keys, roots, GitHub settings, or merge). Branch `agent/authz-hardening` off
+origin/master (256100e7); the user's uncommitted work (ci.yml SHA-pinning,
+conftest F2-env isolation, WORK_LOG/SAP edits, untracked scratch) was preserved
+and never staged.
+
+Revalidated the four-reviewer defect list A-H against live code before acting.
+Implemented: (1) `qwen_train/f2_authz_ledger.py` - durable single-use
+consumption (atomic O_EXCL create per record+binding key; no delete API;
+corruption/unavailability fail closed; multi-process race proven one-winner);
+(2) `f2_authorization.py` - strict binding contract
+(OPERATION_REQUIRED_BINDINGS; repository revision derived from git, never
+caller-supplied; dirty-tree denial for protected ops), trust-root identity
+validation (32-byte key check, key epochs, revoked_key_ids, digest pin
+documented as process-controlled, describe_trust_root), verify_and_consume,
+NUL/whitespace path hardening; (3) orchestrator requires an explicit stage (no
+silent CONF-001 default), consumes before spawn, propagates the binding +
+consumption receipt via SWARM_F2_AUTHZ_* env; worker fails closed without the
+parent receipt, cross-checks args<->env<->verified manifest, refuses EXPL-001
+before any side effect; production P2 adapter (lowest boundary) independently
+re-verifies record+binding from the verified manifest and requires the durable
+consumption; registration binds the recomputed union-report digest.
+Tests: new tests/test_f2_authz_binding_and_replay.py (46 tests: 12 replay/
+crash/concurrency/corruption scenarios, real-git identity semantics, trust-root
+replacement/revocation/epochs, binding negatives, worker/parent tampering,
+fixture-scope meta-tests incl. admin-deletion honesty test); updated
+test_f2_authorization.py + the four guard-fixture modules to a lazy
+test-owner signing oracle (real verification unchanged).
+Authority: appended F2-IMPL-AUTH-033 to
+docs/EXPERIMENT_J_F2_ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md with
+per-control source/test citations and explicit non-claims (no custody, no
+tamper-resistance, no ceremony, no execution authorization).
+
+security-audit (not a live required check): failed on nltk 3.10.3 /
+PYSEC-2026-3740; rerun without suppression reproduced it. Root cause PROVEN as
+an upstream advisory conflict, not stale data and not a repo defect: OSV's
+PyPA-sourced record PYSEC-2026-3740 says fixed:3.10.3, while the GitHub-sourced
+GHSA-8mgp-746c-j5xp says last_affected:3.10.3 with NO fixed event, and OSV's
+version-query endpoint (what pip-audit uses) returns the GHSA. nltk 3.10.3 is
+the latest PyPI release, so no repository-resolvable upgrade exists; suppressing
+the finding is prohibited. The red check does not block merges because the live
+protect-master ruleset does not list security-audit among required checks
+(GOVERNANCE GAP, owner-operated; the ci.yml comment claiming it is "required"
+is stale versus the live ruleset - ci.yml left untouched, it is the operator's
+uncommitted file). POP-001/EXPL-001/CONF-001 remain PENDING; counts unchanged
+(registered 3,828; admitted 0; analyzable 0). No execution, no keys/roots, no
+GitHub settings change, no merge.
+
+## 2026-10-11 (PR #32 targeted security remediation - hostile-review findings)
+
+Mission: operator prompt "EXPERIMENT J / F2 - PR #32 TARGETED SECURITY
+REMEDIATION" (one-grant-one-execution, record-level revocation, boundary
+accuracy, NLTK disposition, PR governance; not execution, keys, GitHub
+settings, or merge). Commit 9cabbf41 pushed on agent/authz-hardening (fast-
+forward; no published history rewritten).
+
+Confirmed defects and fixes: (1) the ledger keyed single-use on
+sha256(record|binding), so a consumed grant could be REPLAYED with a
+different rollout/arm to authorize a second execution - now keyed on the
+GRANT (canonical record digest): one grant, one execution, whatever the
+mutable binding says; the entry still records the binding and the worker/
+adapter corroboration requires the identical binding. (2) Execution grants
+now REQUIRE the record to bind arm; the lowest boundary's expected arm is
+the verified manifest's arm, so no unsigned caller parameter can substitute
+it. (3) Record-level revocation now has an authoritative in-model source:
+the owner-controlled trust root's revoked_record_ids (denied even with a
+valid signature, without mutating the record); the caller-supplied
+revoked_ids argument is documented as supplementary only. (4) The "refused
+forever from any process" overclaim was removed; the ledger docstring
+states software replay resistance while the entry exists and names the
+ledger-writable-administrator gap (honesty test retained). (5) NLTK:
+PROVEN that crawl4ai>=0.9.0 (lazy import in swarm_os/lib/mcp/web_search.py)
+requires nltk>=3.9.1; GHSA-8mgp-746c-j5xp still marks 3.10.3 (the latest
+release) as last_affected with no fix while PYSEC-2026-3740 claims
+fixed:3.10.3 - no safe repository-level remediation exists, nothing
+suppressed, owner disposition required. (6) PR body corrected: 0 reviews /
+0 review requests on record; earlier "reviewer" items are briefs only.
+Tests: 93 (adversarial+authorization) + 208 (affected suites) + full suite
+5335 passed/12 skipped/1 xfailed; SOTA footer validated with the repo's own
+parser before push. F2-IMPL-AUTH-033's ledger-key description is superseded
+by 9cabbf41; appending an authority-log follow-up REQUIRES AUTHORIZATION
+(not done). Counts unchanged (registered 3,828; admitted 0; analyzable 0).
+
+## 2026-10-11 (PR #32 authorization integrity hardening - TOCTOU, acquired-input binding, mandatory pin, env-free ledger)
+
+Mission: operator prompt "PR #32 - Authorization Integrity Hardening".
+Commit be062649 pushed on agent/authz-hardening (fast-forward; no history
+rewritten; hooks ran). (1) Registration TOCTOU fixed: every pinned input
+(union report, acquired JSONLs, PROVENANCE.json files) is read exactly once
+into immutable bytes; the authorized digest, parsed JSON, declarations, and
+manifest-recorded digests all run over those same bytes
+(qwen_train/f2_registration.py; load_eligible_created_at gains preloaded
+buffers in f2_task_plan.py). (2) Acquired-input binding: the complete
+consumed set is canonicalized to acquired_inputs_digest and REQUIRED in the
+owner-signed POP-001/register record - colocated provenance alone was only a
+consistency check; the signature is the anchor now. Duplicate paths and
+source-dir name collisions rejected. (3) Trust-root pin fail-closed: protected
+verification REQUIRES F2_AUTHORIZATION_TRUST_ROOT_SHA256 to be set and
+matching; missing/wrong pin denies; only describe_trust_root (authorizes
+nothing) loads unpinned, and still refutes an explicitly wrong pin.
+(4) Ledger path integrity: production ledger location is now the code
+constant data/f2_authz_ledger; the F2_AUTHZ_LEDGER_DIR env redirect is gone
+from production code (tests use constructor DI / constant monkeypatching).
+(5) S8 finding: NOT ESTABLISHED that any signed stage covers S8 base/gold
+production/execution (no require_authorized in any f2_s8_* module); the S8
+screen RESULT consumed under POP-001/register is covered; the runner is
+non-executing by default (RunnerNotConfigured); wiring a transport REQUIRES
+a separate owner decision. Tests: new tests/test_f2_registration_integrity.py
+(production-path swap/substitution/binding suite) + adversarial additions;
+targeted 458 passed. NLTK: unchanged, not suppressed; a PROPOSED owner-
+decision paragraph is in the PR body (not applied). PR body updated with
+accuracy; review count remains 0. Counts unchanged (registered 3,828;
+admitted 0; analyzable 0).
+
+## 2026-10-11 (Remove unused Crawl4AI dependency - owner-authorized NLTK remediation)
+
+Rationale: the owner explicitly authorized removing Crawl4AI (option A of the
+NLTK advisory disposition): crawl4ai>=0.9.0 was the ONLY declared dependency
+introducing nltk (nltk>=3.9.1 core requirement - verified across all 88 pins'
+published metadata), the repo never imports nltk, and the web-fetch contract
+has a plain-HTTP implementation that stands alone. Implementation:
+requirements.txt drops crawl4ai; swarm_os/lib/mcp/web_search.py's
+web_fetch_handler loses the optional Crawl4AI browser block and now uses the
+plain-HTTP pooled-client engine only (same {ok,url,title,content} shape,
+per-hop SSRF redirect checks, truncation marker, fail-closed HTTP/transport
+errors; _extract_title_from_url removed as obsolete). Misleading Crawl4AI
+claims updated in api_features.py, rv_finder/parsers.py comments/docstrings,
+and test_rv_finder.py's fixture docstring. Regression tests:
+tests/test_web_fetch_fallback.py (7 tests: no-crawl4ai import surface, plain-
+HTTP contract, truncation, HTTP/transport failure, SSRF pre-flight, missing
+url). Tests: 116 web-search/rv/deep-research tests passed (7 new + 105
+focused + 4 surrounding). Capability change (documented, accepted by the
+owner's removal authorization): the RV finder's Craigslist discovery no
+longer gets browser-rendered JS grids or crawl4ai-quality markdown, so it
+may return fewer/empty listings; the parser itself is unchanged and its
+fixture-based tests still pass. NLTK: expected to leave the RESOLVED
+environment once CI installs from the new requirements.txt (authoritative
+evidence = the CI pip-audit job on the pushed commit); the local venv was
+not mutated. No suppression, ignore rule, or audit weakening was added.
+Follow-up (same mission, CI evidence): the fresh CI environment lost two
+undeclared dependencies that had been supplied transitively by crawl4ai's
+tree. networkx is imported by five production modules (memory_core,
+graph_repo, knowledge_graph, legal/case_graph, legal/citator) and its
+absence broke the test and sota-enforcement jobs at collection; it is now
+DECLARED in requirements.txt (networkx>=3.0). Verified non-blockers left
+undeclared and documented rather than broadly changing the dependency
+surface: playwright/markdownify (lazy imports; browser tests mock the
+seams; the standalone browser MCP capability in fresh envs is now an
+explicit owner-install) and torch (qwen_train scripts only; CI never
+installed it). Local pip-audit of the new requirements.txt: "No known
+vulnerabilities found"; CI security-audit on 95cb3daa: PASS (first green
+security-audit on this PR).
+
+## 2026-10-12 (F2 population reconciliation - durable progress record)
+
+Independent reconciliation completed (qwen_train/f2_reconcile.py, 7 regression
+tests, ruff clean; NOT committed - no commit authorization on master this run).
+Machine-readable artifacts: data/f2_population/reconciliation/{reconciliation,
+capacity}_json. Reconciled PROVEN from the 2 authorized sources (SWE-bench-Live
+b51a8642 + SWE-rebench-V2 10483de0): 33,967 raw rows -> 33,770 authorized union
+(1 within-source CONFLICTING duplicate conan-io__conan-18153 removed, 195
+cross-source overlaps; independent naive union 33,771, +1 = conan, reconciled).
+9,268 metadata-eligible (S8-only fail) -> 3,870 evaluator-compatible -> 3,828
+registered; independent recomputation matches committed manifest exactly.
+Gap decomposition PROVEN: 5,398 metadata->evaluator = non-pytest frameworks
+(go/npm/cargo/jvm/julia/php/dotnet/etc) + 16 pytest-cmd-nonnode; 42
+evaluator->registered = non-.py node paths. F2 estimand (SAP 2.1) is a
+BEHAVIORAL first-relevant-edit, so the pytest-only gate governs S8 ADMISSION
+screening, not the endpoint. Pool is SUFFICIENT (9,268 >> 300; 3,828 > 300).
+Admitted=0, analyzable=0: S8 base/gold evidence absent for all; generating it
+needs the Q9-attested guest. Binding constraint = owner-controlled infra, NOT
+candidate supply. Live re-verified: F2-Isolation-VM Off, :8080/:6333 down,
+trust root absent, preflight BLOCKED (17: 11 operator-env, 1 privileged-host
+egress, 4 external-evidence S8/active-lesson/Q9/conversion, 1 authz, 2 not-
+executed Q10/Q13). No repository defect remains; machinery complete (preflight
+16 IMPLEMENTED). 300 analyzable pairs NOT achieved - blocked on owner gates.
+
+## 2026-10-12 (Q9 isolation qualification - bounded operation, owner-authorized)
+
+Owner authorized the bounded Q9 operation (apply scoped enforcement, start the
+existing VM, produce genuine attestation; no trust root, no CONF-001, no Q10-Q13).
+Executed host-side work; STOPPED before the in-guest attestation per condition 4
+(cannot fabricate it). Actual evidence (this session):
+
+1. Firewall baseline SAVED before change: netsh advfirewall export ->
+   C:\Users\rober\F2_EVIDENCE\q9\firewall_baseline_20261012_002521.wfw
+   (385,024 B, sha256 67DBCA810FE790E8EBED511CCD473A73A79833372249B59BDE073E1DA77499F7).
+   Rollback: netsh advfirewall import that .wfw (or Remove-NetFirewallRule F2-Q9-GW-ALLOW).
+2. Applied ONE narrowly-scoped inbound ALLOW: Name=F2-Q9-GW-ALLOW,
+   RemoteAddress=10.72.0.2, LocalPort=8099/TCP, InterfaceAlias=vEthernet
+   (F2-Internal-Switch). Verified exact scoping via address/port/interface
+   filters. Relying on profile default-inbound=Block for all other guest->host
+   (no catch-all deny added: Windows block-beats-allow would override the allow).
+3. Host UNAFFECTED (condition 2 PROVEN): internet 1.1.1.1:443 + 8.8.8.8:53 up,
+   loopback 127.0.0.1:445 up, only 1 F2-* rule exists, no outbound/account change.
+4. Topology GENUINELY enforces no-internet/LAN egress (condition 1, not rules):
+   F2-Internal-Switch=Internal + no bound physical adapter + Get-NetNat shows
+   NO NAT for 10.72.x (only F2-S8-NAT for 10.73.x) + IPv4 Forwarding=Disabled on
+   both F2 vEthernet adapters.
+5. Started F2-Isolation-VM (existing only): State=Running, Heartbeat=Ok,
+   ARP-reachable at 10.72.0.2 (MAC 00-15-5D-56-D6-01, State=Reachable). Host
+   cannot read guest IP via KVP (KVP disabled by design).
+6. BLOCKER (genuine, condition 4 stop): the genuine Q9 attestation
+   (f2_isolation run_egress_probes) must run INSIDE the guest to measure
+   external->denied / loopback+gateway+negative-control->permitted. No autonomous
+   host->guest probe channel exists: PowerShell Direct requires an owner-held
+   guest Credential; Guest Service Interface / KVP / TimeSync / VSS all disabled
+   by design. Will NOT run the probe host-side (host egress is permitted -> would
+   produce a misleading/failed attestation) and will NOT open an injection channel.
+7. Stopped VM cleanly (State=Off; must not leave agent-started services running).
+   F2-Q9-GW-ALLOW rule persists; host internet confirmed still up.
+
+Remaining owner decision: supply the guest probe path for Q9 attestation - either
+(A) run qwen_train/f2_guest_probe.ps1 + python -m qwen_train.f2_isolation in-guest
+via VMConnect console with owner-held guest credentials, or (B) authorize a
+one-time in-guest tooling/credential provision. Neither is autonomously resolvable.
+After genuine attestation: re-run preflight, then S8 base/gold in the attested
+guest. No trust root created; no CONF-001; no Q10/Q12/Q13.
+
+## 2026-10-12 (Q9 option A - attempted; STOPPED on genuine prerequisite blocker)
+
+Owner authorized option A only (existing F2-Isolation-VM + VMConnect console +
+owner-held guest credentials; no option B, no new credential/injection mechanism).
+Live recheck: HEAD=2aad3d1d, VM=Off, F2-Q9-GW-ALLOW rule present, baseline
+firewall_baseline_20261012_002521.wfw present, operator work preserved.
+
+Attempted end-to-end; STOPPED at the guest-session step (condition 3 / stop rule).
+Actual evidence (this session):
+1. Started F2-Isolation-VM (existing only): State=Running, Heartbeat=Ok.
+2. Opened vmconnect.exe localhost F2-Isolation-VM; observed a "Connect to
+   F2-Isolation-VM" connection dialog via screen_info.
+3. BLOCKER 1 - HUMAN-CONTROL MODE: the swarm is barred from mouse/keyboard input
+   (computer_screen_input -> "HUMAN-CONTROL MODE: the swarm may NOT move the
+   mouse or send input"; approval denied). I cannot click Connect, type guest
+   credentials, or run any command in the guest console. Screenshot/read only.
+4. BLOCKER 2 - owner-held guest credential: the guest session requires the
+   owner's password; I do not have it and must not handle secrets. Option A is
+   explicitly "owner-authenticated" - the owner must type it.
+5. BLOCKER 3 - gateway prerequisite: qwen_train/f2_guest_probe.ps1 requires the
+   host model gateway (10.72.0.1:8099 GET /v1/models) for its clock reference +
+   authorized_flow positive control. Confirmed NOT running (0 listeners on :8099).
+6. BLOCKER 4 (INFERRED) - guest tooling: a fresh OOBE-complete Windows guest
+   almost certainly lacks Python + the v-horseshoe-v2 repo (f2_guest_probe.ps1,
+   f2_isolation.py). Cannot be inspected (KVP/GSI disabled) and condition 3
+   forbids downloading arbitrary tooling or enabling integration services.
+7. Did NOT bypass HUMAN-CONTROL MODE (did not set SWARM_SCREEN_AUTONOMOUS) -
+   that is a safety control the owner did not authorize me to raise, and it
+   would not supply the missing credential or tooling anyway.
+8. Cleanup: closed vmconnect (0 procs), Stop-VM -> State=Off (no agent-started
+   service left running). F2-Q9-GW-ALLOW rule persists; host internet unaffected.
+
+Net: option A requires the OWNER at the VMConnect console (authenticate + run the
+probe) AND the host gateway running AND Python+repo present in-guest. None are
+autonomously resolvable within option A's constraints. No trust root, no
+CONF-001, no Q10/Q12/Q13. Q9 remains NOT ESTABLISHED (host-side enforcement
+prepared + verified last session; in-guest attestation still pending).
+
+
+---
+
+## 2026-10-14 - Experiment J / F2: owner T/X authorization recorded; isolation gate SATISFIED; governance boundaries confirmed
+
+**Owner authorization (recorded).** On 2026-10-14 the operator/experiment authority explicitly
+authorized pursuit of **300 valid, analyzable T/X pairs**, including VM operation, isolation work,
+conversion-provenance resolution, the S8 feasibility pilot, and **exploratory T/X execution** -
+conditioned on the governing protocol permitting that phase and its controls being satisfied. This
+entry records that authorization. It does not alter F0, F1, T/X/C0 semantics, k, alpha, the endpoint,
+or the frozen statistical design.
+
+**Isolation gate - NOW SATISFIED (was UNPROVEN: ['ipv6']).** Session 12 established the IPv6 gate via
+the authorized *enforcement* route (not a waiver): Hyper-V extended ACLs were shown to enforce IPv6;
+an explicit `Outbound Deny ::/0 w=340` plus narrowly scoped ND allowances were added (ACL now 19
+rules); the guest was given a non-link-local IPv6 (ULA + default route) so the probe actually attempts
+IPv6 egress; the fresh in-guest attestation verified host-side returns `satisfied=true` with
+`enforcement_backed=('http','https','ipv6','tcp','udp')` and `negative_control=permitted`. Evidence:
+`C:\Users\rober\F2_EVIDENCE\s8\isolation_run_2026-10-14\` (capture digest `737d7723...`). This
+satisfies handoff steps 5 and 6 - the two steps the agent could complete.
+
+**Governance boundary confirmed.** `docs/EXPERIMENT_J_F2_EXPLORATORY_AUTHORIZATION.md`
+(`F2-IMPL-AUTH-024`) **§7** states *"This entry authorises **no** execution"* until the external
+prerequisites are met, and `docs/EXPERIMENT_J_F2_OPERATOR_HANDOFF.md` **§1.1** states the 11
+execution variables *"may not be provisioned by the implementation agent."* A prior session's
+append of the 10 `SWARM_F2_*`/`SWARM_DISTILLER_*` vars to `.env` violated §1.1 and was **reverted**.
+The served GGUF's own metadata records only `general.name=Robs4B_Merged_Hf` - no adapter hash and no
+base revision - so conversion provenance remains underdetermined pending an owner decision.
+
+**No execution.** No pilot task, no base/gold run, no T/X run, no Q10/Q12/Q13. Admitted = analyzable
+= completed = 0 (unchanged). PR #33 open/unmerged.
+
+---
+
+## 2026-10-15 - Experiment J / F2 S8: owner released the follow-up phase; admission crediting rule set; three pipeline defects fixed; phase-2 inputs prepared
+
+**Owner decisions (recorded).** The owner reviewed the five-task feasibility report and **released
+the thirty-task follow-up phase**: up to the 25 runnable tasks of the prepared candidate manifest
+(sha256 `A7A51B51…`), **8 hours from launch**, stopping at 300 admitted / list exhausted / budget
+spent / any safety-isolation-evidence-governance stop condition, gate `pilot_authorized` re-attested
+**for this phase only** and only once every gate and operator prerequisite is freshly verified.
+Explicitly not authorized: manufacturing candidates, relaxing eligibility, bypassing missing operator
+variables/credentials/elevation, frozen-criteria changes, Q10/Q12/Q13, T/X arms, model inference,
+confirmatory F2. The owner also chose **option B** for admission crediting: a task counts toward the
+300 target iff it holds at least one admitted scientific record in ANY registered chain, each task
+exactly once. Full wording and gate basis: `C:\Users\rober\F2_EVIDENCE\s8\OWNER_DECISION_RECORD_2026-10-15.md`.
+
+**Admission accounting under that rule.** Operative chain 1 holds 3 admitted pairs
+(openai-agents-1633, openai-agents-1636, mypy-19767); the owner-sanctioned corrective chain holds 1
+(hypothesis-4532); the union is **4 with no overlap**, so the distance to 300 is **296** (297 under a
+chain-1-only reading). Both chains remain byte-identical (`5FB0AA8E…`, `E030C05A…`) and verify intact;
+nothing was appended, rewritten or re-chained. The rule is now computed, not hand-counted, by a new
+read-only helper `f2_s8_batch.reconcile_admissions_across_chains` that verifies every chain first and
+fails closed rather than reporting a number over a chain that does not verify.
+
+**Three pipeline defects found while preparing launch, all fixed in the uncommitted working tree.**
+(1) `f2_s8_pilot_live.build_specs` took each spec's `test_cmd` from the raw `test_cmds[0]` instead of
+the canonical `&&`-joined command the frozen registration actually binds (`test_cmd_sha256`); every
+previously executed task had a single-entry command so no existing evidence is affected, but **4 of the
+25 phase-2 candidates** were affected — one would have executed `cat tasks.py` rather than pytest at
+all. Specs are now built through the same source adapter the registration used. (2) `f2_s8_pilot_build`
+could only address its hand-maintained five-task `REPOS` map and fixed input/patch directories, so the
+25 candidates would all have been skipped and the run would have refused; it now derives the clone URL
+from the task's own pinned record, derives `uv`-ownership from the declared command (the pilot table
+remains an override, equivalence pinned by test), and accepts `--inputs`/`--patches` with the pilot
+defaults preserved. (3) the crediting helper above. Regression tests added for each; the S8 slice now
+reports **665 passed** with `ruff check --select E9,F` clean.
+
+**Preparation completed (outside the repository).** All 25 candidate input records (raw pinned-corpus
+shape) and their 50 digest-verified patch files are materialised under
+`C:\Users\rober\F2_EVIDENCE\s8\pilot_inputs_phase2\` and `…\pilot_build_phase2\patches\`, with per-task
+provenance manifests (`A9CACC5E…`, `A60FB5D3…`) and corpus digest `9F22AA07…` matching the session-42
+record. Phase-2 gates file `pilot_gates_phase2.json` records the fresh attestation; the phase-1 gates
+file is untouched. Launch status, exact commands and the post-phase reconciliation steps:
+`PHASE2_LAUNCH_STATUS_2026-10-15.md` (`2F4F88E7…`).
+
+**Still blocked, and why no execution happened.** The nine governance variables
+(`SWARM_S8_ENVIRONMENT_IDENTITY`, `SWARM_S8_BASE_STATE_DIGEST`, `SWARM_S8_GOLD_STATE_DIGEST` and the
+six evaluator/artifact names) are absent from the session scope; the operator handoff §1.1 forbids the
+agent from provisioning them. This session's shell **is** elevated and `F2-S8-VM1` is running with all
+integration services enabled; credential file present; 136.09 GB free. No pilot task, no base/gold run,
+no T/X run, no Q10/Q12/Q13; no commit or push; PR #33 open/unmerged.
+
+---
+
+## 2026-10-16 — Documentation reconciliation and Linux-CI portability repair
+
+**Scope.** Independent re-verification of the admission counts, readiness state and
+isolation posture against primary evidence, correction of stale documents, and repair
+of the three defects that keep Linux CI red on the published PR head. Commits
+`8107b213` (CI portability) and `0c47ecc4` (document reconciliation). No push, no PR
+change, no pilot execution, no inference, no Q10/Q12/Q13, no T/X.
+
+**Admission counts recomputed independently — PROVEN, not copied.** Parsed both ledgers
+directly and re-derived the canonical digest chain without using the reconciliation
+helper: chain 1 holds 9 records, 9/9 self-digests valid and 8/8 non-genesis prev-links
+valid; chain 2 holds 1. Operative admissions **3** (`openai-agents-1633`,
+`openai-agents-1636`, `mypy-19767`), credited union **4** (+ `hypothesis-4532`),
+remaining to 300 **296**, refused terminal overrides **none**, verified corrections
+**1**. The repository helper agrees. The correction's `correction_of_record_digest`
+resolves to the exact chain-1 record and its declared `prior_outcome` /
+`prior_outcome_class` match it field-for-field. Both ledgers byte-identical
+(`5FB0AA8E…`, `E030C05A…`) before and after every command.
+
+**One apparent integrity question resolved rather than assumed.** The correction pins
+chain 1's hash as `07CB4545…` while the live chain-1 file is `5FB0AA8E…`. That is not a
+mismatch: the pinned digest matches a **prefix of exactly 7 lines**, and the two later
+records (`django-guardian-899`, `-896`) carry timestamps after the correction's. Chain 1
+simply grew, which is why credit binds by record digest and not by file hash.
+
+**Preflight re-run — BLOCKED, 20 blockers, exit 1.** `python -m qwen_train.f2_preflight
+--json` reproduces exactly, and the handoff's §1 summary table matches the live report
+in every category (14 operator / 5 external evidence / 1 privileged host / 0
+authorization / 2 not-executed / 16 implemented). Note for future readers: the
+`NOT EXECUTED` pair (Q10, Q13) is counted but is **not** part of the 20 — 14+5+1.
+
+**The "0 admitted" vs "4 credited" tension is NOT a contradiction** — it is two
+different questions, and the counting rule §5 already separates them (credited union 4;
+population-census admissions 0; 296 required). The handoff likewise labels the 0 as the
+CENSUS figure at its own §1.4. No change was warranted, and a hasty "fix" here would
+have damaged correct documentation.
+
+**Linux CI, all three reported defects CONFIRMED PRESENT and now fixed.** CI run
+`38834896497` on published head `0890a729` fails with 14 failed + 6 errors, all from:
+(1) the literal `C:\Program Files\Git\cmd\git.exe` in `f2_s8_pilot_build.py` (11
+failures; Windows keeps that exact binary, only non-Windows resolves from PATH);
+(2) `test_f2_reconcile.py` reading gitignored `acquired.jsonl` (6 errors + 1 failure;
+now a skip guard that still runs in full where the data exists); (3) a `Path.name`
+assertion on a Windows path constant, which pathlib returns whole under POSIX (2
+failures; now separator-normalised, plus a skip guard on the sibling MISMATCH test that
+needs the served artifact's bytes). 80 passed across the affected files; the guarded
+tests still PASS locally rather than skip; full suite **5925 passed, 12 skipped, 1
+xfailed, 0 failed**, exit 0, 40 min.
+
+**Two stale figures resolved with evidence.** The disputed `5350 passed` total is a
+**2026-10-11** machine-local scratch run (`full_suite_out.txt`, untracked) at a much
+older commit that also shows an unrelated chess failure; it is not a failure to
+reproduce 5925, which I ran twice at current HEAD. The audit's `5920` was correct for
+HEAD `2e024564` and is now recorded alongside 5925 with both commits, rather than one
+silently overwriting the other.
+
+**`docs/KNOWN_FAILURES.md` was materially misleading and is now marked superseded.** It
+declared an authoritative 7-entry known-failure set and a gate that passes *only* when
+the failure set equals those 7. All seven now pass, so that gate returns a **false FAIL
+on a healthy tree**. The baseline is retained unchanged as 2026-09-20 history; its
+`full_suite_output.txt` pointer no longer exists and was never tracked.
+
+**Checked and deliberately left alone.** The 9,198 vs 9,268 metadata-eligible conflict is
+already correctly superseded in-repo (`..._ORCHESTRATOR_IMPLEMENTATION_AUTHORIZATION.md`
+records the +70). The audit §18 "RED | 2 | 1" cell contradicted its own prose and was
+corrected to 0. The isolation plan's `52fdecc0` row is a dated 2026-10-13 observation in
+a document that says its sections are retained unchanged, so it was tied to its date
+rather than rewritten.
+
+**Still open (not remediated, reported).** Preflight remains BLOCKED on 20 external and
+operator items; the 300-admission target's reachability is **NOT ESTABLISHED**; CI for
+the 23 unpushed local commits is **NOT ESTABLISHED** (no run exists for them); the
+`:8081` embedding retry cost remains an open performance defect; and there is no
+recorded reference hash for `EXPERIMENT_J_F1_AUTHORIZATION.md` or
+`LEARNING_EXPERIMENT_STATE.md`, a **GOVERNANCE GAP** given AGENTS.md §6.10 asks for
+hash verification without supplying values. PR #33 remains **open and unmerged**;
+nothing was pushed.

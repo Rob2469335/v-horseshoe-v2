@@ -352,7 +352,11 @@ def load_eligible_created_at(
             source_key = str(json.loads(prov.read_text(encoding="utf-8")).get("source_key") or source_key)
         data = (acquired_bytes or {}).get(path)
         if data is not None:
-            lines = data.decode("utf-8").splitlines()
+            # NOT str.splitlines(): it splits on U+2028/U+2029/NEL and tears
+            # any record whose text contains one. See f2_population_build.jsonl_lines.
+            from qwen_train.f2_population_build import jsonl_lines
+
+            lines = jsonl_lines(data.decode("utf-8"))
         else:
             with path.open("r", encoding="utf-8") as fh:
                 lines = fh.readlines()

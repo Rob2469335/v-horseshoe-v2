@@ -65,16 +65,19 @@ from pathlib import Path
 EXPECTED_MODEL_ALIAS = "robs4b"
 
 #: Repo-relative GGUF identity of the authorized local model.
-EXPECTED_GGUF_RELATIVE_PATH = "qwen_train/robs4b_q4km.gguf"
+EXPECTED_GGUF_RELATIVE_PATH = "qwen_train/robs4b_q4km_reconverted.gguf"
 
-#: Expected SHA-256 of that GGUF. Preregistered in RUNPOD_RUNBOOK.md:20 and
-#: AGENTS_LEGACY.md:6193; independently recomputed and matched.
+#: Expected SHA-256 of that GGUF. ADOPTED 2026-10-14 (Option B, owner-authorized):
+#: the witnessed reconversion of ``robs4b_final_adapter`` + ``Qwen3.5-4B-Base-HF``
+#: (llama.cpp b11624, ``--no-mtp``, Q4_K_M). Deliberately NOT the previously
+#: served digest ``65202f37...`` (2_708_803_840 B); the two are distinct
+#: artifacts and the original is preserved unchanged.
 EXPECTED_GGUF_SHA256 = (
-    "65202f372110dde854b40ce15dcd1b6ab56a1fe9ea542b84b6a9cc745b242d41"
+    "3e5ba031f0b50e98450d1575aa19780bc5b4b13f48bf3eca38f3c915a442a337"
 )
 
-#: Byte size recorded alongside the hash in AGENTS_LEGACY.md:6193.
-EXPECTED_GGUF_SIZE_BYTES = 2708803840
+#: Byte size of the adopted reconverted GGUF.
+EXPECTED_GGUF_SIZE_BYTES = 2708804032
 
 #: Secondary endpoint CONFIGURATION fingerprint for the local topology, recorded
 #: by the authorized operator on 2026-09-30 from the live endpoint. This is NOT

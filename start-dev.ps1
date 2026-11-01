@@ -143,7 +143,10 @@ if ($env:SWARM_SPEC_DECODE -ne "0") {
 # Local generation model (DEFAULT): Rob's trained 4B persona model
 # (qwen_train\robs4b_q4km.gguf) on the iGPU (-ngl 99) under the alias "robs4b".
 # Override with $env:SWARM_LOCAL_MODEL:
-#   - "robs4b"     : trained persona 4B (same as default)
+#   - "robs4b"              : trained persona 4B (same as default; the ORIGINAL artifact)
+#   - "robs4b-reconverted"  : the witnessed reconversion (Option A, owner-authorized
+#                             2026-10-14); same "robs4b" alias, distinct digest
+#                             (3e5ba031... vs 65202f37...). The original stays untouched.
 #   - "qwen3.5-4b-mtp" : base MTP 4B under alias "qwen3.5-4b"
 $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
 $genAlias = "robs4b"
@@ -153,8 +156,11 @@ if ($env:SWARM_LOCAL_MODEL -eq "robs4b") {
     $genAlias = "robs4b"
     $genNgl = "99"
 }
-if ($env:SWARM_LOCAL_MODEL -eq "robs4b") {
-    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km.gguf"
+# Option A (owner-authorized 2026-10-14): serve the WITNESSED RECONVERSION. Selected ONLY
+# when SWARM_LOCAL_MODEL is explicitly "robs4b-reconverted"; the default and the plain
+# "robs4b" route are unchanged. The original qwen_train\robs4b_q4km.gguf is not moved.
+if ($env:SWARM_LOCAL_MODEL -eq "robs4b-reconverted") {
+    $genModel = "C:\Users\rober\Projects\v-horseshoe-v2\qwen_train\robs4b_q4km_reconverted.gguf"
     $genAlias = "robs4b"
     $genNgl = "99"
 }
@@ -169,6 +175,15 @@ if ($env:SWARM_LOCAL_MODEL -eq "qwen3.5-9b") {
     $genModel = "C:\Users\rober\models\Qwen3.5-9B-Q4_K_M.gguf"
     $genAlias = "qwen3.5-9b"
     $genNgl = "99"
+}
+# FAIL CLOSED: an unrecognized SWARM_LOCAL_MODEL must NOT silently fall through to the
+# default (the ORIGINAL artifact). Refuse to start rather than serve an unintended model.
+$knownSelectors = @("robs4b", "robs4b-reconverted", "qwen3.8-4b", "qwen3.5-9b")
+if ($env:SWARM_LOCAL_MODEL -and ($env:SWARM_LOCAL_MODEL -notin $knownSelectors)) {
+    Write-Host "FATAL: SWARM_LOCAL_MODEL='$env:SWARM_LOCAL_MODEL' is not a recognised selector." -ForegroundColor Red
+    Write-Host "       Known selectors: $($knownSelectors -join ', ')." -ForegroundColor Red
+    Write-Host "       Refusing to start rather than silently serving the default model." -ForegroundColor Red
+    exit 1
 }
 # BUG FIX: cache-reuse is not supported by MTP GGUFs (kv_unified=false).
 # Passing it generates a warning on every boot and the flag is silently dropped.

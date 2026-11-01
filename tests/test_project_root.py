@@ -28,7 +28,9 @@ def test_project_root_resolves_to_repo_root():
     r = project_root()
     assert r.is_absolute()
     assert (r / "AGENTS.md").exists()
-    assert str(r).replace("\\", "/").endswith("v-horseshoe-v2")
+    # The repo root is derived from this file, so it must equal that derivation
+    # regardless of what the checkout directory happens to be named.
+    assert r == pathlib.Path(PROJECT_ROOT).resolve()
 
 
 def test_project_root_deterministic_under_chdir(monkeypatch, tmp_path):

@@ -43,6 +43,15 @@ class _RecordingHandler(http.server.BaseHTTPRequestHandler):
     """A tiny loopback endpoint that records requests and can redirect."""
 
     def do_POST(self):  # noqa: N802 - stdlib hook name
+        # Drain the request body BEFORE responding. Closing a socket that still
+        # has unread received data makes Windows send a TCP RST; the client then
+        # sees ConnectionAbortedError [WinError 10053] on its response read
+        # instead of the reply. With a small body the whole payload usually sits
+        # in the socket buffer before the close, so the race is invisible -- under
+        # full-suite load it is not. Reading Content-Length bytes removes it.
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
         srv = self.server
         srv.requests.append(self.path)
         if srv.redirect_to:
@@ -257,6 +266,22 @@ class TestTransportContainment:
                 assert d("prompt") == "LOCAL_RULE"
             assert target.requests == ["/v1/chat/completions"]
             assert proxy.requests == []
+
+    def test_a_large_request_body_still_receives_the_response(self):
+        """Regression: the loopback endpoint must DRAIN the request body.
+
+        A handler that answers without reading the body leaves unread data on the
+        socket; closing it then makes Windows send a TCP RST, so the client's
+        response read raises ConnectionAbortedError [WinError 10053] rather than
+        returning the reply. A realistically sized prompt must still round-trip.
+        This is deterministic at this body size (it failed before the fixture
+        drained ``Content-Length`` bytes) and is the mechanism behind the rare
+        full-suite failure of the proxy-env test above.
+        """
+        with _server() as (target, target_url):
+            d = self._distiller(target_url)
+            assert d("x" * 2_000_000) == "LOCAL_RULE"
+            assert target.requests == ["/v1/chat/completions"]
 
     def test_redirect_makes_exactly_one_request(self):
         with _server() as (other, other_url):

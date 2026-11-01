@@ -396,6 +396,22 @@ def run_session(
     if expected_registration_sha256 and spec.registration_sha256 != expected_registration_sha256:
         raise SessionError("task spec does not belong to the pinned operative registration")
 
+    # The lifetime cap is checked BEFORE the adapter is touched.  It used to be
+    # bypassed here: ``run_once`` was called with
+    # ``max_attempts=max(policy.max_attempts, used + 1)``, which allowed one more
+    # attempt EVERY time, so a task with three recorded attempts silently became
+    # a fourth.  A retry is never cheaper because the previous failure had a
+    # different class, and a session must not consume a VM for a task that can
+    # never be recorded.
+    used = len(ledger.attempts(spec.task_id))
+    if used >= policy.max_attempts:
+        return SessionResult(
+            state="retry_exhausted", task_id=spec.task_id, outcome="",
+            record=None,
+            detail=(f"lifetime attempt cap reached ({used}/"
+                    f"{policy.max_attempts}); a new attempt would bypass it"),
+        )
+
     unresolved: tuple[str, ...] = ()
     try:
         adapter.inspect_environment()
@@ -491,9 +507,9 @@ def run_session(
         registration_id=str(spec.payload["registration_id"]),
         registration_sha256=spec.registration_sha256,
         evaluator=dict(spec.payload["evaluator"]),
-        policy=RetryPolicy(max_attempts=max(policy.max_attempts, len(ledger.attempts(spec.task_id)) + 1),
-                           max_tasks_per_run=policy.max_tasks_per_run,
-                           max_concurrency=policy.max_concurrency),
+        # The SAME policy, never a widened copy: widening it here was the
+        # bypass that let a task exceed the lifetime cap (see the check above).
+        policy=policy,
         ts=ts,
     )
 

@@ -56,6 +56,26 @@ CUTOFF_BASIS = (
 )
 
 
+def jsonl_lines(text: str) -> list[str]:
+    """Split decoded JSONL text on ``\\n`` ONLY, dropping blank lines.
+
+    ``str.splitlines()`` splits on Unicode line boundaries (U+2028 LINE
+    SEPARATOR, U+2029 PARAGRAPH SEPARATOR, NEL, form feed, ...). Those occur
+    inside JSON *string* values in real task metadata -- the SWE-rebench-V2
+    acquisition carries two U+2029 characters inside description fields -- and
+    splitting there tears a record in half, surfacing as
+    ``JSONDecodeError: Unterminated string``.
+
+    This is the single correct splitter for the whole F2 registration path.
+    Every JSONL reader must use it: ``_read_jsonl`` was fixed with it on
+    2026-10-09, but the in-memory ``acquired_bytes`` path added by the 2026-10-11
+    TOCTOU fix called ``splitlines()`` again and silently reintroduced the
+    defect, which is why the operative registration could no longer be
+    reproduced from its own pinned bytes.
+    """
+    return [line for line in text.split("\n") if line.strip()]
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Read a JSONL file without ``str.splitlines()``.
 
@@ -65,7 +85,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     SWE-rebench-V2 acquisition. JSONL records are separated by ``\\n`` ONLY.
     """
     text = Path(path).read_text(encoding="utf-8")
-    return [json.loads(line) for line in text.split("\n") if line.strip()]
+    return [json.loads(line) for line in jsonl_lines(text)]
 
 
 def _as_test_cmd(value: Any) -> str:
@@ -286,10 +306,23 @@ def build_union(
 
     * the canonical identity is ``instance_id`` (exact match);
     * an IDENTICAL payload supplied by more than one source -> keep the
-      highest-priority source (:data:`SOURCE_PRIORITY`) and record the exclusion;
-    * a CONFLICTING payload for one identity (within or across sources) -> exclude
-      EVERY copy and record it; equivalence cannot be established safely, so the
-      task is not treated as an independent experimental unit.
+      highest-priority source (:data:`SOURCE_PRIORITY`) and record the exclusion
+      (``duplicate_identical_cross_source``);
+    * a CONFLICTING payload for one identity supplied by ONE source -> exclude
+      EVERY copy and record it (``conflicting_duplicate_removed``); equivalence
+      cannot be established within a single pipeline, so no copy is trusted;
+    * a CONFLICTING payload for one identity supplied by MORE THAN ONE source ->
+      keep the highest-priority source's record, deterministically, and record
+      the other as excluded (``conflicting_cross_source_priority_selected``);
+      the two records are never field-merged and the task is never treated as
+      two independent experimental units.
+
+    The priority-keep branch is what makes a cross-source disagreement RESOLVED
+    rather than open: the operative row for such an ``instance_id`` is the
+    highest-priority source's row, and the disagreement stays visible in the
+    exclusions. (This docstring previously said a conflict "within or across
+    sources" removed every copy, which did not describe the cross-source branch
+    the code actually runs.)
 
     Records the per-source identity of every accepted candidate.
     """

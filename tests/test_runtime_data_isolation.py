@@ -61,3 +61,22 @@ def test_writing_a_trajectory_lands_in_tmp(isolate_runtime_data_dirs, tmp_path):
     assert dest.is_relative_to(isolate_runtime_data_dirs)
     assert not probe.is_relative_to(PROD_DATA)
     assert not (PROD_DATA / "trajectories" / "isolation-probe.jsonl").exists()
+
+
+def test_residual_import_time_qdrant_bindings_are_in_memory():
+    """GRAY-2: `tests/conftest.py` also patches the two import-time globals.
+
+    A module that binds a Qdrant client at IMPORT time keeps its own reference,
+    so the package-level patch cannot reach it; each such module needs a
+    per-module entry. Both of these bound the REAL sync client before the fix.
+    """
+    from organism_console.skills import skill_repository
+    from swarm_os.upwork import learning_engine_qdrant
+
+    for module in (skill_repository, learning_engine_qdrant):
+        client = module.QdrantClient("http://127.0.0.1:6333")
+        inner = client._client
+        # An UNPATCHED call builds a QdrantRemote against the URL above; the
+        # patch must make it a local in-memory store instead.
+        assert type(inner).__name__ == "QdrantLocal", module.__name__
+        assert inner.location == ":memory:", module.__name__

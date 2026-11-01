@@ -46,17 +46,26 @@ the documents above and are referenced, not duplicated.
 
 > **What exactly must I provide or do before we are allowed to run the experiment?**
 
-Eighteen items are outstanding. Preflight reports them as **18 blocking findings**,
+Twenty items are outstanding. Preflight reports them as **20 blocking findings**,
 exit code non-zero. Current categories:
 
 | Category | Count | Who |
 |---|---|---|
-| `OPERATOR ACTION REQUIRED` | 12 | operator |
-| `EXTERNAL EVIDENCE REQUIRED` | 4 | external evidence source / operator |
+| `OPERATOR ACTION REQUIRED` | 14 | operator |
+| `EXTERNAL EVIDENCE REQUIRED` | 5 | external evidence source / operator |
 | `PRIVILEGED HOST ACTION REQUIRED` | 1 | privileged administrator |
-| `AUTHORIZATION REQUIRED` | 1 | experiment authority |
+| `AUTHORIZATION REQUIRED` | 0 | experiment authority |
 | `NOT EXECUTED` | 2 | operator (authorize) |
 | `IMPLEMENTED` | 16 | done |
+
+> **Refreshed 2026-10-15 from `python -m qwen_train.f2_preflight`.** The count is
+> now 20, not 18: preflight also reports the **three S8-only governed inputs**
+> (`env.s8_environment_identity`, `env.s8_base_state_digest`,
+> `env.s8_gold_state_digest`) whose names come from `qwen_train/f2_s8_compose.py`
+> — see `docs/EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md` §1–§2.
+> `AUTHORIZATION REQUIRED` is now 0 because population acquisition is recorded
+> (F2-IMPL-AUTH-028/029/031); §1.4 records that. A green environment check is
+> still never authorization to execute.
 
 Run this yourself — it is read-only and safe:
 
@@ -67,9 +76,10 @@ python -m qwen_train.f2_preflight --json       # machine-readable (schema f2_pre
 
 Exit code is `0` **only** when the result is `READY`. Today it is `BLOCKED`.
 
-### 1.1 Execution variables you must set (11)
+### 1.1 Execution variables you must set (10 F2 settings + 3 S8-only governed inputs)
 
-None of these is a secret. Set them in the process environment for the run only.
+The ten **F2 settings** below are not secrets (the receipt key is handled
+separately in §1.2). Set every value in the process environment for the run only.
 
 | Variable | Meaning | Owner | Secret? |
 |---|---|---|---|
@@ -83,10 +93,28 @@ None of these is a secret. Set them in the process environment for the run only.
 | `SWARM_F2_ARTIFACT_RETENTION_DAYS` | retention, whole days | operator | no |
 | `SWARM_F2_EMIT_BUNDLE` | must be enabled or no evidence chain is emitted | operator | no |
 | `SWARM_F2_TASK_OUTCOME_REPORT` | destination the evaluator writes its report to | operator | no |
-| `SWARM_RECEIPT_KEY` | receipt signing key (**Q11**) | operator | **YES — never print** |
+
+**Three S8-ONLY governed inputs (no F2 fallback).** The S8 composition root
+(`qwen_train/f2_s8_compose.py`) additionally requires these; none may be omitted
+or defaulted. Preflight reports them as `env.s8_environment_identity`,
+`env.s8_base_state_digest` and `env.s8_gold_state_digest` (`OPERATOR ACTION
+REQUIRED` when absent or malformed).
+
+| Variable | Meaning | Owner | Secret? |
+|---|---|---|---|
+| `SWARM_S8_ENVIRONMENT_IDENTITY` | execution-environment identity (non-empty) | operator | no |
+| `SWARM_S8_BASE_STATE_DIGEST` | base execution-state digest (64-char lowercase SHA-256 hex) | operator | no |
+| `SWARM_S8_GOLD_STATE_DIGEST` | gold execution-state digest (64-char lowercase SHA-256 hex, **distinct from the base**) | operator | no |
 
 `protocol_version` is **not** operator-supplied: it is the repository constant
 `f2_protocol.F2_PROTOCOL_ID = "f2_experiment_j_v1"`. Do not set it.
+
+**All thirteen are process/session-only provisioned.** The `.env` file is not an
+authorized source for any of them (owner decision 2026-10-15; see
+`docs/EXPERIMENT_J_F2_OPERATIONAL_ENV_SPECIFICATION.md` §3.4): the preflight CLI
+imports only the receipt key and the seven child controls from `.env`, so a
+`.env`-only governed value cannot produce a misleading READY finding while the
+separately launched execution process would not receive it.
 
 **None of these may be provisioned by the implementation agent.** The
 authorization ledger states this repeatedly — *"no provisioning of
@@ -108,7 +136,7 @@ digest is a well-formed SHA-256 and explicitly does not print it.
 | Property | Value |
 |---|---|
 | Variable | `SWARM_RECEIPT_KEY` |
-| Status | **NOT PROVISIONED** — absent from `.env` and from Process/User/Machine scopes |
+| Status | **Presence is machine-checked only.** The gate observes whether the variable is present; this document neither asserts a state nor infers that a present entry is valid, trusted, or sufficient. The authoritative presence state is the machine report (`python -m qwen_train.f2_preflight`, finding `env.receipt_key`). |
 | Provision location | the operator's **`.env` only**, per the authorization ledger. Never the arm workspace, a task file, a log, the bundle payload, or a model prompt |
 | Presence check | preflight tests **presence only** and never prints the value |
 | Scope | **for the run only** - not persisted into tracked files |
@@ -132,7 +160,12 @@ Prohibited: `echo $env:SWARM_RECEIPT_KEY`, `Get-ChildItem Env:SWARM_RECEIPT_KEY`
 Until it is present, receipt authority **fails closed** and no promotion can occur.
 That is correct behaviour, not an error to work around. No agent may provision it.
 
-### 1.3 Evidence you must obtain from outside this repository (4)
+**Presence is not validity.** A receipt-key entry being present establishes only
+that the name is set; it does **not** establish that the key is the correct one,
+that it is trusted, or that it is sufficient for promotion. Only the receipt
+verification path (fail-closed on a wrong or tampered receipt) can establish that.
+
+### 1.3 Evidence you must obtain from outside this repository (5)
 
 | Item | What it is |
 |---|---|
@@ -140,8 +173,15 @@ That is correct behaviour, not an error to work around. No agent may provision i
 | **Q9 attestation** | produced by `python -m qwen_train.f2_isolation` **while enforcement is actually in force** |
 | **Genuine ACTIVE lesson** | produced by a real clean-room learning event; rehearsal does not count |
 | **Conversion record** | see §3 |
+| **Admitted population** | **zero** of the ≥ 300 admitted-pair target are admitted; admission is blocked on the S8 base/gold evidence (preflight `population.admission`, `EXTERNAL EVIDENCE REQUIRED`) |
 
-### 1.4 Authorization you must obtain (1)
+The count is five, matching the `EXTERNAL EVIDENCE REQUIRED` row of the §1
+summary table (`evidence.s8_base_gold`, `evidence.active_lesson`,
+`population.admission`, `evidence.q9_attestation`, `provenance.conversion`).
+Q9 and the conversion record are supplied as retained artifacts when they exist;
+the three others are produced by real execution.
+
+### 1.4 Authorization (0 outstanding — the acquisition authorization is RECORDED)
 
 **RECORDED 2026-10-07 as `F2-IMPL-AUTH-028`** (Rob, experiment authority). It
 authorizes acquisition and admission **screening** of the F2 task population from
@@ -152,22 +192,70 @@ retroactively authorized). Target: **≥ 300 admitted pairs**; **UNKNOWN contami
 is NOT CLEAN**. It does not authorize lowering the target, inventing criteria,
 executing tasks, running models, the VM, Q9, Q10, Q12, Q13, or declaring F2 READY.
 
-**Screening is authorized; admission is NOT satisfied.** The screening pass (read-only,
-no execution) found 1888 source rows / 223 repositories and **0 admitted**: S6 (R8
-relevant file set), S7 and S8 (base/gold execution evidence) fail for every row, one
-`instance_id` is duplicated (`conan-io__conan-18153`, so `PopulationManifest.verify()`
-fails closed), and **no model training cutoff is declared anywhere**, so all 1888 rows
-are `UNKNOWN` contamination. The admitted population therefore stays **zero**.
+**Screening is authorized; admission is NOT satisfied.** The current union (read-only,
+no execution) is **33,967 raw rows → 33,770 accepted → 9,268 metadata-eligible →
+3,828 registered**, and **0 admitted**: S8 (base/gold execution evidence) fails for every
+row, and no model training cutoff is declared, so no task is `CLEAN`. The within-source
+duplicate `conan-io__conan-18153` is removed by the union's conflict rule (all copies
+excluded), so it is not in the registration. The admitted population therefore stays
+**zero**.
 
-**Note on preflight:** `authz.population_acquisition` is hard-coded
-(`qwen_train/f2_preflight.py:391`) and does not read the ledger, so it still reports
-`not_authorized`; making it recognize `F2-IMPL-AUTH-028` is a code change that
-**REQUIRES AUTHORIZATION**. The checklist count above is unchanged because it mirrors
-preflight.
+**Census zero vs ledger admissions — two different questions.** This **0** is the
+POPULATION CENSUS figure: no row of the 3,828-task registration carries attached S8
+base/gold execution evidence, so nothing is ADMITTED at the census tier. Separately,
+the governed S8 ledger holds admitted records: **3 distinct tasks** in the operative
+chain (`openai__openai-agents-python-1633`, `-1636`, `python__mypy-19767`), or **4**
+if the corrective chain's `HypothesisWorks__hypothesis-4532` record is credited
+across chains. The cross-chain counting rule is now recorded in-repository
+(`docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md`, owner-adopted 2026-10-16); the
+operative-chain figure of 3 remains the code-bound canonical count and both figures
+are always reported separately. Neither figure satisfies the **≥ 300 admitted pairs**
+target, and no count of candidates, attempts, or compatible classifications is an
+admission.
+
+**Shape is not authenticity.** Preflight validates the *syntax* of the governed
+values it is given (a 64-character lowercase SHA-256 for each state digest, base ≠
+gold). It cannot and does not establish that a digest is the *true* execution-state
+digest for a run — the correct state digests are produced by the run itself and are
+not referenceable in advance. A well-formed but wrong digest therefore passes
+preflight and is only caught by the governed evidence verification.
+
+**Note on the authorization count.** Preflight reports `AUTHORIZATION REQUIRED = 0` for
+population acquisition: the acquisition authorization is recorded
+(F2-IMPL-AUTH-028/029/031) and `authz.population_acquisition` is **no longer emitted**
+(`qwen_train/f2_preflight.py`; pinned by `tests/test_f2_preflight.py`). The §1 summary
+table mirrors the machine report. A recorded authorization is not a readiness claim, and
+no pilot or task execution is authorized by it.
 
 ### 1.5 Host control you must obtain (1)
 
 Default-deny outbound egress for the arm's identity. See §4.
+
+### 1.6 Signed execution authorization and the evidence-capture contract (Phase 2 onward)
+
+**Signed authorization is required before any guest work.** The eight gate booleans
+are caller-supplied **preconditions, not authority**: the entry point additionally
+requires an owner-signed record for stage **`S8-001`**, operation
+**`base_gold_production`**, bound to the **candidate-manifest digest**, the
+**registration digest**, and the **repository revision** (`f2_authorization.py`;
+enforced once at entry in `f2_s8_pilot_live`). With no trust root, or with an
+invalid, expired, revoked, mismatched or already-consumed record, the run is
+**refused** — `pilot_authorized: true` alone is not authority.
+
+**Every future admitted pair must retain a canonically verifiable bundle:** per side
+the full governed `EvidenceRecord`, a **real run log** with its digest and size, real
+ISO-8601 UTC `started_at`/`finished_at`, `environment_identity`, the base/gold
+`execution_state_digest`, the report digest and size, the evaluator identity and
+implementation digest, and the repository revision plus registration digest — all
+bound into the ledger record. **Placeholder logs** (e.g. a 12-byte `"base run log"`)
+and **placeholder timestamps** (`t0`/`t1`) are refused
+(`f2_s8_compose.require_authentic_evidence`); the pilot emits real logs and
+timestamps.
+
+**Counting rule:** see `docs/EXPERIMENT_J_F2_ADMISSION_COUNTING_RULE.md` — the target
+is the union of admitted pairs across *registered* chains, each task counted once,
+with the four historical pilot pairs grandfathered under a documented legacy
+evidence contract.
 
 ---
 
@@ -209,7 +297,9 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 > (no extension filter). Contamination is a **declared temporal proxy**
 > (`2024-01-01`, `is_proxy: true`); tasks created before it are POTENTIALLY
 > CONTAMINATED, not silently clean. Funnel: **33,967 raw  ->  197 pre-screen
-> exclusions  ->  33,770 accepted  ->  9,198 metadata-eligible  ->  0 ADMITTED**.
+> exclusions  ->  33,770 accepted  ->  9,268 metadata-eligible  ->  0 ADMITTED**.
+> (Corrected 2026-10-16: this note previously said 9,198 metadata-eligible; the
+> current union reconciles to 9,268, matching section 1.)
 > S4 rejects 6,102 (empty `PASS_TO_PASS`) and S10 rejects 22,784 (2014-2023 tasks);
 > both verified genuine, not mapping errors. The >= 300 target is unchanged and
 > **not** met at the admitted tier: S8 base/gold execution evidence is still
@@ -319,6 +409,25 @@ Status vocabulary is preflight's, so a step's status and the machine report cann
 - **Fail-closed if:** result is anything but `READY`. **A non-zero exit blocks everything downstream.**
 - **Meaning of READY:** the required evidence and environmental prerequisites have **actually been established**. It never means "the code that checks readiness exists."
 - **Next:** L
+
+#### K.1 Post-batch evidence audit (D4) — **IMPLEMENTED 2026-10-18; a hard gate from Phase 2**
+
+- **Command:** `python -m qwen_train.f2_s8_post_batch_audit --batch-results <pilot_results.json> --staging-root <dir> --manifest <build_manifest.json> --inputs <inputs dir> --out <audit.json>`
+- **Live path:** `qwen_train.f2_s8_pilot_live.main` binds the manifest path+digest, staging root, inputs, repository revision and a run id into `pilot_results.json`, writes `post_batch_audit.json`, and returns nonzero when the audit is not `PASS`.
+- **Preflight gate:** `python -m qwen_train.f2_preflight --batch-audit <audit.json>`. Finding `population.batch_audit` is `BLOCKED` when the artifact is absent, unverifiable, `FAIL` or `INCONCLUSIVE`; `population.admission` does **not** call the reconciler (credit is blocked) when the supplied audit is not `PASS`.
+- **What it establishes:** for every declared JUnit hash, the file exists in the bound staging root, hashes to the declared digest, parses, and re-derives the declared `collection_errors` (**all** entries), `collection_error_cause` (from the gold patch's changed modules) and verdict under the task's declared FAIL_TO_PASS/PASS_TO_PASS. Missing declared values, swapped/missing/malformed/duplicate/foreign evidence, and manifest/run/registration mismatches are failures. A no-evidence row is valid only for an infrastructure outcome with a registered F0 §12 reason (or a designed ledger refusal).
+- **What it does not establish:** that the JUnit bytes are authentic, or that evidence was not deleted and the report rewritten. It is detection, not an independent evidence anchor. Chain-binding infrastructure-row evidence is an owner decision: `docs/EXPERIMENT_J_F2_S8_EVIDENCE_BINDING_DECISION.md`.
+- **Historical Phase 3 report:** audited read-only on 2026-10-18 → `FAIL` (it predates the binding and per-side declarations), with recounts such as `conan-io__conan-18832` base=**345**. No historical row, credit figure or trust-root file was changed.
+
+#### K.2 Stage-1 collection-only pre-check — **IMPLEMENTED 2026-10-18**
+
+- **Command:** `python -m qwen_train.f2_s8_precheck --build-manifest <manifest> --registration <registered_tasks.json> --registration-id <id> --registration-sha256 <digest> --ledger <chain1> --ledger <chain2> --inputs <full inputs dir> --out-dir <isolated dir> [--task <id> ...] [--timeout 300]`
+- **What it runs:** `pytest --collect-only -q -p no:cacheprovider --no-header` through the built task's own base and gold venv, in the base/gold trees. It records the exact collected node ids, collection error text, cause (D1 gold-patch rule), missing declared targets, and per-side stdout/stderr artifacts.
+- **What it binds:** real `git rev-parse HEAD`, the build-manifest path+digest, registration id+digest, the exact candidate task-list digest, the policy digest, the pre-check code SHA-256 and a deterministic run id. A stale revision/manifest/registration/task list/policy is refused. Output must be an isolated folder (never the repo root, either ledger, the staging root, or a `pilot_results*` directory).
+- **Outcomes:** `PASS` (both sides collect every declared target; a base-side PROJECT-owned collection error is the expected SWE-bench shape), `FAIL` (environment collection error, gold-side project collection error, no tests, unsupported command, stale binding), `INCONCLUSIVE` (missing venv/workspace/input, timeout, unparsed output, target absent without an error). Unsuitable tasks are **parked with reason codes**.
+- **Not admission:** collection-only compatibility is not scientific admission; no grant is consumed, no ledger row is written and no credit is awarded.
+- **Real smoke (read-only, 2026-10-18):** `QuantEcon__QuantEcon.py-797` (the one built, unrecorded task) → **FAIL**, `ENVIRONMENT_COLLECTION_ERROR`: both sides collected 484 nodes but 4 collection errors named `pandas`, and all 70 declared target nodes were missing. This is exactly the missing-dependency class the gate exists to catch.
+- **Phase planner:** `python -m qwen_train.f2_s8_phase_ops pre --build-manifest ... --registration ... --registration-id ... --registration-sha256 ... --ledger <chain1> --ledger <chain2> --out <phase.json> [--size 10]`. It uses the real HEAD and real manifest SHA-256, consults **both** chains, passes only the **built** set to the scheduler (so `dspy-8739` cannot be selected), and caps the batch at 10. `post` recomputes the credited union read-only.
 
 ---
 

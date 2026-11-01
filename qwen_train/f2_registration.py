@@ -29,6 +29,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from qwen_train.f2_population_build import jsonl_lines
 from qwen_train.f2_task_plan import (
     ORDERING_RULE_ID,
     PlanError,
@@ -359,7 +360,9 @@ def _load_declarations(
             raise RegistrationError(
                 f"acquired input is not valid UTF-8: {path} ({exc})"
             ) from exc
-        for line in text.splitlines():
+        # NOT str.splitlines(): it splits on U+2028/U+2029/NEL and tears any
+        # record whose text contains one. See f2_population_build.jsonl_lines.
+        for line in jsonl_lines(text):
             line = line.strip()
             if not line:
                 continue

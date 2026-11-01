@@ -1580,3 +1580,49 @@ provisions no credential; changes no code (the preflight `authz.population_acqui
 finding remains hard-coded at `qwen_train/f2_preflight.py:391` and still reports
 `not_authorized` — recognizing the ledger entry there **REQUIRES AUTHORIZATION**); and
 does not declare F2 READY.
+
+---
+
+## D4 and CI Repair (2026-10-18, Phase 1E)
+
+This entry records the repair of the controls an independent audit found broken. It
+grants no authorization, executes no scored task, and changes no historical row.
+
+### D-23. What is now true
+
+| Item | State | Evidence class |
+|---|---|---|
+| **D1 cause-sensitive classification** | Implemented and published at `00a3bbf5`; the `__init__` edge case is repaired (a patched `pkg/__init__.py` denotes package `pkg`). Re-derived over all 23 retained phase-3 side rows, **no outcome changed**; the 8 historical collection-failure rows stay `error`, the two admitted controls stay base=`fail`/gold=`pass`, `networkx__networkx-8207` stays base=`fail`/gold=`fail`. The recount is 6 `environment` / 2 `unknown` (an earlier 5/3 note was not re-verified). | `PROVEN IN CURRENT REVISION` |
+| **D4 post-batch audit** | Implemented **inside the repository** as `qwen_train/f2_s8_post_batch_audit.py`, with 35 adversarial tests that call `audit_batch()`. It recounts **all** collection errors (the `conan-io__conan-18832` base fixture yields 345, not 1), compares the JUnit SHA-256 with the declared hash, re-derives cause and verdict with the authoritative evaluator, and fails closed on missing/undeclared/malformed/swapped/duplicate/foreign evidence and on manifest/run/registration mismatches. | `PROVEN IN CURRENT REVISION` |
+| **D4 is a hard stop** | The live batch path writes `pilot_results.json` with manifest path+digest, staging root, inputs, revision and run id, then runs the audit, writes `post_batch_audit.json`, and returns nonzero on non-PASS. Preflight exposes `population.batch_audit` and refuses to call the reconciler (credit) unless the supplied audit verifies as PASS. | `PROVEN IN CURRENT REVISION` |
+| **Historical Phase 3 audit** | Read-only re-run → **FAIL** (the report predates the binding and per-side declarations), with recounted evidence such as `conan-18832` base=345. No historical row, credit figure or trust-root file was touched. | `PROVEN IN CURRENT REVISION` |
+| **CI** | The four failures on `00a3bbf5` are repaired: the shared ledger root is absolute on every OS (fixed Windows path on Windows, fixed POSIX path elsewhere), the staging guest-root canonicalisation is Windows-only so POSIX staging remains usable, and the manifest digest is separator-invariant with existing Windows digests unchanged. | `SUPPORTED` until the GitHub Actions conclusion for the final HEAD is recorded |
+| **Phase 2 execution** | **NOT AUTHORIZED.** No grant was signed/consumed/revoked; no scored task ran; `master` and PR #33 are unchanged. | `PROVEN IN CURRENT REVISION` |
+| **Infrastructure-row chain binding** | **GOVERNANCE GAP / decision required.** Ledger rows for infrastructure outcomes carry no evidence hash, so D4's finding is not anchored to the chain. Options and their contract impact: `docs/EXPERIMENT_J_F2_S8_EVIDENCE_BINDING_DECISION.md`. | `PROVEN IN CURRENT REVISION` (code read) |
+
+### D-24. What this entry does not decide
+
+It does not implement the Stage-1 collection-only pre-check (next session), sign or
+consume a grant, admit a task, change the admission predicate, alter the eight
+historical rows, add JUnit as a required trusted artifact role, or declare F2 READY.
+A green software suite is still not experimental readiness.
+
+### D-25. Owner decisions E1/E2 (2026-10-18)
+
+| Decision | Recorded outcome |
+|---|---|
+| **E1 — evidence binding** | **Option B adopted; Option A declined.** The ledger row contract is unchanged. A content-addressed sidecar index (`qwen_train/f2_s8_evidence_index.py`) binds each row's `record_digest` to the retained JUnit hashes; infrastructure rows are included with `null` for a crashed side. The index SHA-256 is written into every `post_batch_audit` artifact and preflight refuses an audit that does not bind one. The index is **not** chain-anchored; that residual risk is accepted and documented in `docs/EXPERIMENT_J_F2_S8_EVIDENCE_BINDING_DECISION.md`. |
+| **E2 — first Phase 2 batch** | The first batch will be **exactly 10 tasks**; one infrastructure failure is exactly 10% and does not stop. The stop rule remains **> 10%**, with the denominator = every task attempted in the batch (unknown/missing evidence counts in the numerator and is never excluded). |
+
+This entry grants no execution authorization and changes no historical row.
+
+### D-26. Stage-1 pre-check, sidecar, and the credit-evidence audit (2026-10-18)
+
+| Item | Recorded outcome |
+|---|---|
+| **Stage-1 collection-only pre-check** | Implemented as `qwen_train/f2_s8_precheck.py` with 28 tests. It binds the real `git rev-parse HEAD`, actual manifest SHA-256, registration digest, candidate-list digest, policy digest, code SHA-256 and a deterministic run id; runs `pytest --collect-only` in the built base/gold venvs; classifies collection errors with the D1 gold-patch rule; parks unsuitable tasks; writes only to an isolated folder; never writes a ledger, consumes a grant or awards credit. First real run (read-only) on `QuantEcon__QuantEcon.py-797` returned **FAIL / ENVIRONMENT_COLLECTION_ERROR**: 484 nodes collected on each side, 4 collection errors naming `pandas`, 70 declared targets missing. |
+| **Phase planner port** | `qwen_train/f2_s8_phase_ops.py` fixes the six external defects: real HEAD (not a commit timestamp), real manifest SHA-256 (not a placeholder), **both** ledger chains consulted, no hardcoded phase-2 paths, `Any` imported, and only the **built** set passed to the scheduler (so `dspy-8739` cannot be selected). Batch cap 10. |
+| **Credit-evidence audit** | `openai-1633`, `openai-1636`, `mypy-19767`: ledger gold-report SHA-256 matches the retained `pilot_build/dryrun` file; retained JUnit re-derives base=fail/gold=pass. `Hypothesis-4532`: the credited 316,547-byte gold report is present in `F2_EVIDENCE\Experiment_J_F2` with the exact ledger hash; JUnit re-derives base=fail/gold=pass. `networkx-8211`, `openai-1601`: the JUnit re-derives base=fail/gold=pass, but the ledger's bound report/run-log/evidence-record hashes are **not present anywhere** under `F2_EVIDENCE` or `f2_exec`; that is a real retention/provenance gap (`NOT ESTABLISHED`), not a reason to alter credit. |
+| **Credit** | Unchanged at **6**; remaining **294**. No ledger row was written or altered by the audit. |
+
+

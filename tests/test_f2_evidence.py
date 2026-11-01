@@ -47,6 +47,7 @@ from qwen_train.f2_evidence import (
     r5_from_evidence,
     verify_evidence_record,
     verify_task_evidence,
+    per_task_digest_problems,
 )
 from qwen_train.f2_population import screen_entry
 
@@ -744,3 +745,81 @@ class TestManifestSummary:
         assert s["evidence_verified"] == 1
         assert s["evidence_scientifically_sufficient"] == 1
         assert s["evidence_states"][STATE_VERIFIED] == 1
+    def test_12e_expected_base_state_digest_enforced(self, tmp_path):
+        """Owner-authorized additive amendment: per-task BASE binding, symmetric
+        with the existing gold one. A mismatch is a hard failure."""
+        base, gold = _pair(tmp_path)
+        v = _vp(base, gold, tmp_path, expected_base_state_digest=_sha("other"))
+        assert v.state == STATE_IDENTITY_MISMATCH
+
+    def test_12f_matching_per_task_digests_pass(self, tmp_path):
+        base, gold = _pair(tmp_path)
+        v = _vp(base, gold, tmp_path,
+                expected_base_state_digest=base.execution_state_digest,
+                expected_gold_state_digest=gold.execution_state_digest)
+        assert v.ok
+
+    def test_12g_omitting_per_task_bindings_preserves_prior_behaviour(self, tmp_path):
+        """Historical records carry no per-task binding and must keep working."""
+        base, gold = _pair(tmp_path)
+        assert _vp(base, gold, tmp_path).ok
+
+    def test_12h_base_and_gold_bindings_are_independent(self, tmp_path):
+        """A correct base binding must not excuse a wrong gold binding."""
+        base, gold = _pair(tmp_path)
+        v = _vp(base, gold, tmp_path,
+                expected_base_state_digest=base.execution_state_digest,
+                expected_gold_state_digest=_sha("other"))
+        assert v.state == STATE_IDENTITY_MISMATCH
+
+class TestPerTaskDigestPolicy:
+    """Owner-authorized policy (2026-10-19): a NEW manifest must bind BOTH the
+    per-task base and gold state digests, and validation fails closed."""
+
+    @staticmethod
+    def _manifest(**over):
+        entry = {"status": "built", "expected_base_state_digest": "a" * 64,
+                 "expected_gold_state_digest": "b" * 64}
+        entry.update(over)
+        return {"digest_policy": "per-task-required", "t1": entry}
+
+    def test_a_compliant_manifest_has_no_problems(self):
+        assert per_task_digest_problems(self._manifest()) == []
+
+    def test_a_missing_base_binding_fails_closed(self):
+        m = self._manifest()
+        m["t1"].pop("expected_base_state_digest")
+        assert any("missing required expected_base_state_digest" in p
+                   for p in per_task_digest_problems(m))
+
+    def test_a_missing_gold_binding_fails_closed(self):
+        m = self._manifest()
+        m["t1"].pop("expected_gold_state_digest")
+        assert any("missing required expected_gold_state_digest" in p
+                   for p in per_task_digest_problems(m))
+
+    def test_a_malformed_digest_fails_closed(self):
+        assert any("malformed" in p for p in per_task_digest_problems(
+            self._manifest(expected_base_state_digest="not-a-digest")))
+
+    def test_identical_base_and_gold_fails_closed(self):
+        same = "c" * 64
+        assert any("identical" in p for p in per_task_digest_problems(
+            self._manifest(expected_base_state_digest=same,
+                           expected_gold_state_digest=same)))
+
+    def test_an_undeclared_manifest_keeps_historical_behaviour(self):
+        m = {"t1": {"status": "built"}}
+        assert per_task_digest_problems(m) == []
+
+    def test_non_built_entries_are_not_bound(self):
+        m = self._manifest()
+        m["t2"] = {"status": "build_failure"}
+        assert per_task_digest_problems(m) == []
+
+    def test_cross_task_values_are_independent(self):
+        """Two tasks must each carry their own pair; one cannot satisfy both."""
+        m = self._manifest()
+        m["t2"] = {"status": "built", "expected_base_state_digest": "a" * 64}
+        assert any(p.startswith("t2: missing required") for p in
+                   per_task_digest_problems(m))
