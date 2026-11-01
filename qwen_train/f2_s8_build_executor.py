@@ -219,6 +219,7 @@ class HostBuildExecutor:
         deterministic_incompatibility_codes: Iterable[str] = DEFAULT_DETERMINISTIC_INCOMPATIBILITY_CODES,
         collect_fn: Callable[[Any, Any, str], tuple[bool, str, str]] | None = None,
         task_timeout_seconds: float | None = None,
+        verified_inputs: Any | None = None,
     ) -> None:
         self._authorized = authorized_run
         self._inputs = pathlib.Path(inputs)
@@ -253,6 +254,7 @@ class HostBuildExecutor:
         self._task_timeout_seconds = (
             float(task_timeout_seconds) if task_timeout_seconds else None
         )
+        self._verified_inputs = verified_inputs
         if collect_fn is None:
             # Collection runs pytest, which a task's own tests can slow down.
             # It must never outlive the task budget: cap it at the smaller of
@@ -283,6 +285,20 @@ class HostBuildExecutor:
             raise BuilderContractError(
                 f"task {task_id!r} is not in the authorized probe selection"
             )
+        if self._verified_inputs is not None:
+            from qwen_train.f2_s8_verified_inputs import (
+                InputIntegrityError,
+                verify_snapshot_unchanged,
+            )
+
+            try:
+                verify_snapshot_unchanged(self._verified_inputs)
+            except InputIntegrityError as exc:
+                # A snapshot that no longer matches its manifest means the run
+                # is compromised or corrupted. Abort, never build from it.
+                raise BuilderContractError(
+                    f"SNAPSHOT_INTEGRITY for {task_id!r}: {exc}"
+                ) from exc
         if not (self._inputs / f"{task_id}.json").is_file():
             # No acquisition record: a pure prerequisite failure, never a success
             # and never a task incompatibility.
@@ -431,6 +447,7 @@ def make_probe_live_builder(
         patches=patches,
         workspace_root=workspace_root,
         task_timeout_seconds=task_timeout_seconds,
+        verified_inputs=verified_inputs,
         **executor_kwargs,
     )
     builder = LiveBuilder(

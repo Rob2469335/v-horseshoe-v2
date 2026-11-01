@@ -150,6 +150,63 @@ def snapshot_verified_inputs(
     )
 
 
+def verify_snapshot_unchanged(verified: VerifiedInputs) -> None:
+    """Fail if the snapshot the build consumes no longer matches its manifest.
+
+    This checks the **snapshot** directories (``verified.inputs_dir`` /
+    ``patches_dir``), not the original sources. It detects a changed, replaced,
+    missing or unexpected file and a manifest digest that no longer describes
+    the observed set. It cannot prevent a task from modifying its own snapshot
+    while that task is building.
+    """
+    observed: list[dict[str, object]] = []
+    for kind, base in (
+        ("inputs", verified.inputs_dir),
+        ("patches", verified.patches_dir),
+    ):
+        expected = {
+            str(row["name"]): row
+            for row in verified.manifest
+            if row["kind"] == kind
+        }
+        if not base.is_dir():
+            raise InputIntegrityError(f"snapshot {kind} directory missing: {base}")
+        for path in sorted(base.iterdir()):
+            if not path.is_file():
+                raise InputIntegrityError(
+                    f"unexpected non-file entry in snapshot {kind}: {path.name}"
+                )
+            row = expected.pop(path.name, None)
+            if row is None:
+                raise InputIntegrityError(
+                    f"unexpected file in snapshot {kind}: {path.name}"
+                )
+            data = path.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != row["sha256"]:
+                raise InputIntegrityError(
+                    f"snapshot file changed or replaced: {kind}/{path.name}"
+                )
+            observed.append(
+                {
+                    "task_id": row["task_id"],
+                    "kind": kind,
+                    "name": row["name"],
+                    "bytes": len(data),
+                    "sha256": digest,
+                }
+            )
+        if expected:
+            missing = sorted(expected)[0]
+            raise InputIntegrityError(f"snapshot file missing: {kind}/{missing}")
+
+    observed.sort(
+        key=lambda row: (str(row["task_id"]), str(row["kind"]), str(row["name"]))
+    )
+    if hashlib.sha256(_canonical(observed)).hexdigest() != verified.manifest_digest:
+        raise InputIntegrityError("snapshot manifest digest does not describe the observed set")
+
+
 def verify_sources_unchanged(
     verified: VerifiedInputs,
     inputs: pathlib.Path | str,
