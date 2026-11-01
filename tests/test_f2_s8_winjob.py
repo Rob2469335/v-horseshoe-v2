@@ -142,3 +142,121 @@ def test_collection_timeout_reports_cleanup_outcome(monkeypatch, tmp_path):
     assert ok is False
     assert code == "COLLECT_TIMEOUT"
     assert "cleanup=NORMAL_JOB_TERMINATION confirmed=True" in detail
+
+
+# --- F-B1: post-timeout pipe handling is bounded ----------------------------
+
+
+def test_bounded_communicate_gives_up_on_a_descendant_holding_pipes(tmp_path):
+    from qwen_train import f2_s8_winjob as W
+
+    pid_file = tmp_path / "holder.pid"
+    script = tmp_path / "holder.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        f"open(r'{pid_file}', 'w').write(str(p.pid))\n",
+        encoding="utf-8",
+    )
+    proc = W._REAL_POPEN(
+        [sys.executable, str(script)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        proc.wait(timeout=30)  # parent exits; the grandchild keeps the pipes open
+        start = time.monotonic()
+        out, err, drained = W._bounded_communicate(proc, 1.0)
+        elapsed = time.monotonic() - start
+        assert out is None and err is None
+        assert drained is True  # the parent exited; no pipe drain is attempted
+        assert elapsed < 8
+        assert proc.stdout is None and proc.stderr is None
+        assert proc.stdout is None and proc.stderr is None
+    finally:
+        try:
+            if pid_file.exists():
+                holder = int(pid_file.read_text(encoding="utf-8").strip())
+                kill = W._REAL_POPEN(
+                    ["taskkill", "/PID", str(holder), "/F"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                kill.communicate(timeout=10)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=10)
+
+
+def test_terminate_job_failure_is_not_reported_as_normal(monkeypatch, capsys):
+    import types
+    from qwen_train import f2_s8_winjob as W
+
+    monkeypatch.setattr(W, "_terminate_job", lambda job: False)
+    fake = types.SimpleNamespace(pid=4242, wait=lambda timeout=None: 0)
+    outcome = W._terminate_tree(123, fake)
+    assert outcome.mode == "TERMINATION_FAILURE"
+    assert outcome.confirmed is False
+    assert "TERMINATION_FAILURE" in capsys.readouterr().err
+
+
+def test_taskkill_failure_is_not_reported_as_success(monkeypatch, capsys):
+    import types
+    from qwen_train import f2_s8_winjob as W
+
+    monkeypatch.setattr(W, "_run_taskkill", lambda pid: (False, "taskkill failed rc=5"))
+    fake = types.SimpleNamespace(pid=4242, wait=lambda timeout=None: 0)
+    outcome = W._terminate_tree(0, fake)
+    assert outcome.mode == "TERMINATION_FAILURE"
+    assert outcome.confirmed is False
+    assert "TERMINATION_FAILURE" in capsys.readouterr().err
+
+
+def test_taskkill_success_remains_distinguishable_from_job_termination(monkeypatch):
+    import types
+    from qwen_train import f2_s8_winjob as W
+
+    monkeypatch.setattr(W, "_run_taskkill", lambda pid: (True, "taskkill /T /F issued"))
+    fake = types.SimpleNamespace(pid=4242, wait=lambda timeout=None: 0)
+    outcome = W._terminate_tree(0, fake)
+    assert outcome.mode == "TASKKILL_FALLBACK"
+    assert outcome.confirmed is True
+
+
+def test_job_success_remains_normal_job_termination(monkeypatch):
+    import types
+    from qwen_train import f2_s8_winjob as W
+
+    monkeypatch.setattr(W, "_terminate_job", lambda job: True)
+    fake = types.SimpleNamespace(pid=4242, wait=lambda timeout=None: 0)
+    outcome = W._terminate_tree(123, fake)
+    assert outcome.mode == "NORMAL_JOB_TERMINATION"
+    assert outcome.confirmed is True
+
+
+def test_timeout_does_not_wait_for_a_pipe_holding_descendant(tmp_path):
+    """F-B1: the old second communicate() blocked until the descendant exited."""
+    from qwen_train import f2_s8_winjob as W
+
+    pid_file = tmp_path / "holder.pid"
+    script = tmp_path / "holder.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        f"open(r'{pid_file}', 'w').write(str(p.pid))\n",
+        encoding="utf-8",
+    )
+    start = time.monotonic()
+    try:
+        with pytest.raises(subprocess.TimeoutExpired) as info:
+            run_in_job([sys.executable, str(script)], timeout=2)
+        elapsed = time.monotonic() - start
+        assert elapsed < 20, "post-timeout handling waited for the descendant"
+        assert info.value.cleanup is not None
+    finally:
+        if pid_file.exists():
+            holder = int(pid_file.read_text(encoding="utf-8").strip())
+            kill = W._REAL_POPEN(
+                ["taskkill", "/PID", str(holder), "/F"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            kill.communicate(timeout=10)

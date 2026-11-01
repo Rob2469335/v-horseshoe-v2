@@ -137,28 +137,117 @@ def _wait_exit(proc: subprocess.Popen, seconds: float) -> bool:
         return False
 
 
-def _terminate_tree(job: int, proc: subprocess.Popen) -> TerminationOutcome:
-    """Terminate the tree and report what was actually established.
+TASKKILL_TIMEOUT_SECONDS = 10.0
+POST_TERMINATION_READ_SECONDS = 5.0
 
-    A job is the normal path; ``taskkill /T`` is used only when the process was
-    never assigned. In both cases the outcome is confirmed only by observing the
-    process exit, never by the request alone.
-    """
-    if job:
-        _kernel32.TerminateJobObject(wintypes.HANDLE(job), 1)
-        mode = NORMAL_JOB_TERMINATION
-        detail = "TerminateJobObject issued"
-    else:
+
+def _terminate_job(job: int) -> bool:
+    """Request job termination; return the Win32 result, never assume it."""
+    return bool(_kernel32.TerminateJobObject(wintypes.HANDLE(job), 1))
+
+
+def _run_taskkill(pid: int) -> tuple[bool, str]:
+    """Run taskkill with a bounded wait; return (ok, detail)."""
+    try:
         # Use the real Popen captured at import: the test suite patches
         # subprocess.Popen globally, and a mocked taskkill would silently do
         # nothing while the code believed it had tried the fallback.
         kill = _REAL_POPEN(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        kill.communicate(timeout=10)
+    except OSError as exc:
+        return False, f"taskkill could not start: {exc}"
+    try:
+        kill.communicate(timeout=TASKKILL_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        kill.kill()
+        try:
+            kill.communicate(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+        return False, "taskkill timed out"
+    if kill.returncode == 0:
+        return True, "taskkill /T /F issued"
+    return False, f"taskkill failed rc={kill.returncode}"
+
+
+def _dispose_pipes(proc: subprocess.Popen) -> None:
+    """Close pipe handles a surviving descendant may still hold open."""
+    for name in ("stdin", "stdout", "stderr"):
+        stream = getattr(proc, name, None)
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pass
+        finally:
+            try:
+                setattr(proc, name, None)
+            except (AttributeError, OSError):
+                pass
+
+
+def _bounded_communicate(
+    proc: subprocess.Popen, seconds: float
+) -> tuple[object, object, bool]:
+    """Post-termination handling with a hard bound; never waits for EOF.
+
+    Returns ``(stdout, stderr, drained)``. ``drained`` is False when the process
+    had not exited within ``seconds`` or pipes could not be drained. Draining is
+    deliberately abandoned rather than attempted with ``communicate`` again: the
+    first ``communicate(timeout=...)`` leaves reader threads holding the pipe
+    buffer locks, so a second read (or a close) can block until a surviving
+    descendant exits. A daemon thread disposes the handles best-effort and the
+    caller's references are dropped immediately.
+    """
+    import threading
+
+    drained = True
+    try:
+        proc.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        drained = False
+    threading.Thread(
+        target=_dispose_pipes, args=(proc,), daemon=True, name="f2-s8-pipe-dispose"
+    ).start()
+    for name in ("stdin", "stdout", "stderr"):
+        try:
+            setattr(proc, name, None)
+        except (AttributeError, OSError):
+            pass
+    return None, None, drained
+
+
+def _terminate_tree(job: int, proc: subprocess.Popen) -> TerminationOutcome:
+    """Terminate the tree and report what was actually established.
+
+    A job is the normal path; ``taskkill /T`` is used only when the process was
+    never assigned. A failed termination request, a failed/overrun taskkill, or
+    an unobserved exit all yield ``TERMINATION_FAILURE`` — never success.
+    """
+    if job:
+        if not _terminate_job(job):
+            message = (
+                "TerminateJobObject failed "
+                f"(winerror {ctypes.get_last_error()}) for pid {proc.pid}"
+            )
+            print(f"TERMINATION_FAILURE: {message}", file=sys.stderr)
+            return TerminationOutcome(
+                mode=TERMINATION_FAILURE, confirmed=False, detail=message
+            )
+        mode = NORMAL_JOB_TERMINATION
+        detail = "TerminateJobObject issued"
+    else:
+        ok, detail = _run_taskkill(proc.pid)
+        if not ok:
+            message = f"{detail} for pid {proc.pid}"
+            print(f"TERMINATION_FAILURE: {message}", file=sys.stderr)
+            return TerminationOutcome(
+                mode=TERMINATION_FAILURE, confirmed=False, detail=message
+            )
         mode = TASKKILL_FALLBACK
-        detail = "taskkill /T /F issued"
     if _wait_exit(proc, 5.0):
         return TerminationOutcome(mode=mode, confirmed=True, detail=detail)
     message = f"{mode} could not confirm process exit for pid {proc.pid}"
@@ -177,7 +266,9 @@ def run_in_job(cmd, *, cwd=None, timeout: float | None = None, env=None):
     If the host blocks nested jobs, the fallback terminates the tree with
     ``taskkill /T`` and the timeout exception's ``cleanup.mode`` is
     ``TASKKILL_FALLBACK``. A ``TERMINATION_FAILURE`` outcome means cleanup could
-    not be established and must never be reported as success.
+    not be established and must never be reported as success. Post-termination
+    pipe handling is bounded: the timeout path never waits for EOF, because a
+    surviving descendant can hold the inherited write ends open.
     """
     if not IS_WINDOWS:
         return subprocess.run(
@@ -187,6 +278,7 @@ def run_in_job(cmd, *, cwd=None, timeout: float | None = None, env=None):
     job = _make_job()
     proc = None
     assigned = False
+    terminated = False
     try:
         proc = _REAL_POPEN(
             cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -204,12 +296,22 @@ def run_in_job(cmd, *, cwd=None, timeout: float | None = None, env=None):
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             cleanup = _terminate_tree(job if assigned else 0, proc)
-            out, err = proc.communicate()
+            out, err, drained = _bounded_communicate(
+                proc, POST_TERMINATION_READ_SECONDS
+            )
+            detail = cleanup.detail
+            if not drained:
+                detail += (
+                    "; output not drained after a bounded wait - a descendant may "
+                    "hold the inherited handles"
+                )
+            cleanup = dataclasses.replace(cleanup, detail=detail)
+            terminated = True
             exc = subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
             exc.cleanup = cleanup
             raise exc
         return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
     finally:
-        if proc is not None and proc.poll() is None:
+        if proc is not None and proc.poll() is None and not terminated:
             _terminate_tree(job if assigned else 0, proc)
         _close(job)
