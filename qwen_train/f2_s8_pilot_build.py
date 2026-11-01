@@ -635,11 +635,15 @@ def run(cmd, *, cwd=None, timeout=3600, check=True):
     except subprocess.TimeoutExpired as exc:
         deadline = _TASK_DEADLINE.get()
         if deadline is not None and time.monotonic() >= deadline:
-            raise TaskDeadlineExceeded(
+            converted = TaskDeadlineExceeded(
                 cmd, timeout,
                 output=getattr(exc, "output", None),
                 stderr="task deadline expired during subprocess",
-            ) from exc
+            )
+            # Preserve the tree-termination evidence produced by run_in_job:
+            # a deadline must not hide an unconfirmed cleanup.
+            converted.cleanup = getattr(exc, "cleanup", None)
+            raise converted from exc
         raise
     if check and proc.returncode != 0:
         raise RuntimeError(

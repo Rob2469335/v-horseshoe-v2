@@ -374,10 +374,18 @@ class HostBuildExecutor:
             from qwen_train.f2_s8_pilot_build import TaskDeadlineExceeded
 
             if isinstance(exc, TaskDeadlineExceeded):
+                cleanup = getattr(exc, "cleanup", None)
+                detail = f"task deadline exceeded: {exc.stderr or 'expired'}"
+                if cleanup is not None:
+                    detail += (
+                        f"; cleanup={cleanup.mode} confirmed={cleanup.confirmed}"
+                    )
+                    if not cleanup.confirmed:
+                        detail += f" ({cleanup.detail})"
                 return BuildCell(
                     task_id,
                     "BUILD_FAILURE",
-                    failure=f"task deadline exceeded: {exc.stderr or 'expired'}",
+                    failure=detail,
                     reason_code="TASK_DEADLINE_EXCEEDED",
                 )
             cleanup = getattr(exc, "cleanup", None)

@@ -229,3 +229,75 @@ def test_discovery_is_retried_after_a_timeout(monkeypatch):
     assert PB.available_interpreters(((3, 10),)) == ["C:\\Python310\\python.exe"]
     assert calls["n"] == 2
     PB._DISCOVERED_INTERPRETERS.clear()
+
+
+def test_deadline_conversion_preserves_cleanup_metadata(monkeypatch):
+    from subprocess import TimeoutExpired
+
+    outcome = W.TerminationOutcome(
+        mode=W.TERMINATION_FAILURE, confirmed=False, detail="simulated failure"
+    )
+
+    def _late(cmd, *, cwd=None, timeout=None, env=None):
+        time.sleep(0.05)
+        exc = TimeoutExpired(cmd, timeout)
+        exc.cleanup = outcome
+        raise exc
+
+    monkeypatch.setattr(W, "run_in_job", _late)
+    with PB.task_deadline(time.monotonic() + 0.01):
+        with pytest.raises(PB.TaskDeadlineExceeded) as info:
+            PB.run(["slow"], timeout=3600)
+    assert info.value.cleanup is outcome
+    assert info.value.cleanup.mode == "TERMINATION_FAILURE"
+    assert info.value.cleanup.confirmed is False
+
+
+def test_task_deadline_cell_reports_unconfirmed_cleanup(tmp_path):
+    outcome = W.TerminationOutcome(
+        mode=W.TERMINATION_FAILURE, confirmed=False, detail="tree not confirmed"
+    )
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(*a, **k):
+        exc = PB.TaskDeadlineExceeded("uv-sync", 0.0, stderr="task deadline expired")
+        exc.cleanup = outcome
+        raise exc
+
+    ex = _executor(
+        tmp_path,
+        collect_fn=lambda *a, **k: (True, "", "ok"),
+        build_fn=build_fn,
+        task_timeout=30,
+    )
+    cell = ex.build_one(TASK)
+    assert cell.reason_code == "TASK_DEADLINE_EXCEEDED"
+    assert "cleanup=TERMINATION_FAILURE" in cell.failure
+    assert "confirmed=False" in cell.failure
+    assert "tree not confirmed" in cell.failure
+
+
+def test_plain_build_timeout_remains_build_timeout(tmp_path):
+    from subprocess import TimeoutExpired
+
+    outcome = W.TerminationOutcome(
+        mode=W.NORMAL_JOB_TERMINATION, confirmed=True, detail="job"
+    )
+    ws = tmp_path / TASK
+    ws.mkdir()
+
+    def build_fn(*a, **k):
+        exc = TimeoutExpired("uv", 10)
+        exc.cleanup = outcome
+        raise exc
+
+    ex = _executor(
+        tmp_path,
+        collect_fn=lambda *a, **k: (True, "", "ok"),
+        build_fn=build_fn,
+        task_timeout=30,
+    )
+    cell = ex.build_one(TASK)
+    assert cell.reason_code == "BUILD_TIMEOUT"
+    assert "cleanup=NORMAL_JOB_TERMINATION" in cell.failure
